@@ -1,0 +1,441 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/adx-agentic-payment/adx/connector/internal/discovery"
+	"github.com/adx-agentic-payment/adx/connector/internal/driver"
+	"github.com/adx-agentic-payment/adx/connector/internal/enrollment"
+	"github.com/adx-agentic-payment/adx/connector/internal/store"
+	"github.com/adx-agentic-payment/adx/connector/internal/supervisor"
+	"github.com/adx-agentic-payment/adx/connector/internal/transport"
+)
+
+const connectorVersion = "0.1.0"
+
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "adx-connector:", err)
+		os.Exit(1)
+	}
+}
+
+func run(arguments []string) error {
+	if len(arguments) == 0 {
+		printUsage()
+		return errors.New("a subcommand is required")
+	}
+	switch arguments[0] {
+	case "scan":
+		return runScan(arguments[1:])
+	case "doctor":
+		return runDoctor(arguments[1:])
+	case "pair":
+		return runPair(arguments[1:])
+	case "run":
+		return runConnector(arguments[1:])
+	case "version", "--version", "-version":
+		fmt.Println(connectorVersion)
+		return nil
+	case "help", "--help", "-h":
+		printUsage()
+		return nil
+	default:
+		printUsage()
+		return fmt.Errorf("unknown subcommand %q", arguments[0])
+	}
+}
+
+func runScan(arguments []string) error {
+	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
+	timeout := flags.Duration("timeout", 3*time.Second, "per-runtime version probe timeout")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	scanner := newScanner(*timeout)
+	return writeJSON(os.Stdout, scanner.Scan(context.Background()))
+}
+
+func runDoctor(arguments []string) error {
+	defaultState, err := store.DefaultPath()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	statePath := flags.String("state", defaultState, "connector state file")
+	timeout := flags.Duration("timeout", 3*time.Second, "per-runtime version probe timeout")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+
+	type check struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	report := struct {
+		OK     bool    `json:"ok"`
+		Checks []check `json:"checks"`
+	}{OK: true, Checks: []check{}}
+
+	fileStore := store.NewFileStore(*statePath)
+	credentials, credentialErr := fileStore.LoadCredentials()
+	switch {
+	case credentialErr == nil:
+		report.Checks = append(report.Checks, check{
+			Name:   "device_credentials",
+			Status: "ok",
+			Detail: "paired device " + credentials.DeviceID + "; token is stored but not displayed",
+		})
+	case errors.Is(credentialErr, store.ErrNotInitialized):
+		report.Checks = append(report.Checks, check{
+			Name:   "device_credentials",
+			Status: "warning",
+			Detail: "not paired; run `adx-connector pair` or `adx-connector run`",
+		})
+	default:
+		report.OK = false
+		report.Checks = append(report.Checks, check{
+			Name:   "device_credentials",
+			Status: "error",
+			Detail: credentialErr.Error(),
+		})
+	}
+
+	inventory := newScanner(*timeout).Scan(context.Background())
+	if len(inventory.Runtimes) == 0 {
+		report.OK = false
+		report.Checks = append(report.Checks, check{
+			Name:   "runtime_discovery",
+			Status: "error",
+			Detail: "neither Claude Code nor Codex was found on PATH or common install paths",
+		})
+	} else {
+		report.Checks = append(report.Checks, check{
+			Name:   "runtime_discovery",
+			Status: "ok",
+			Detail: fmt.Sprintf("detected %d supported runtime(s)", len(inventory.Runtimes)),
+		})
+		for _, runtimeInfo := range inventory.Runtimes {
+			status := runtimeInfo.Status
+			if status == "degraded" {
+				report.OK = false
+			}
+			report.Checks = append(report.Checks, check{
+				Name:   "runtime_" + runtimeInfo.Kind,
+				Status: status,
+				Detail: runtimeInfo.ExecutablePath + " " + runtimeInfo.Version,
+			})
+		}
+	}
+	return writeJSON(os.Stdout, report)
+}
+
+func runPair(arguments []string) error {
+	defaultState, err := store.DefaultPath()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("pair", flag.ContinueOnError)
+	apiBase := flags.String("api-base", envOr("ADX_API_BASE", "http://localhost:8000"), "ADX platform HTTP API base")
+	statePath := flags.String("state", defaultState, "connector state file")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	stateLock, err := store.AcquireStateLock(*statePath)
+	if err != nil {
+		return fmt.Errorf("acquire connector state lock: %w", err)
+	}
+	defer stateLock.Close()
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	credentials, err := pair(ctx, *apiBase)
+	if err != nil {
+		return err
+	}
+	if err := store.NewFileStore(*statePath).SaveCredentials(credentials); err != nil {
+		return err
+	}
+	fmt.Printf("Paired device %s. Credentials saved to %s\n", credentials.DeviceID, *statePath)
+	return nil
+}
+
+func runConnector(arguments []string) error {
+	defaultState, err := store.DefaultPath()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	apiBase := flags.String("api-base", envOr("ADX_API_BASE", "http://localhost:8000"), "ADX platform HTTP API base used for first-run pairing")
+	statePath := flags.String("state", defaultState, "connector state file")
+	gatewayOverride := flags.String("gateway", envOr("ADX_CONNECTOR_GATEWAY_URL", ""), "override the paired websocket gateway URL")
+	autoPair := flags.Bool("auto-pair", true, "start device pairing when credentials are missing")
+	heartbeat := flags.Duration("heartbeat", 15*time.Second, "heartbeat interval")
+	inventoryInterval := flags.Duration("inventory-interval", time.Minute, "automatic runtime rescan interval")
+	discoveryTimeout := flags.Duration("discovery-timeout", 3*time.Second, "per-runtime version probe timeout")
+	enableCodexTasks := flags.Bool(
+		"enable-codex-tasks",
+		envEnabled("ADX_CONNECTOR_ENABLE_CODEX_TASKS"),
+		"allow this Connector to start Codex tasks inside allow-root workspaces",
+	)
+	enableClaudeTasks := flags.Bool(
+		"unsafe-enable-claude-tasks",
+		envEnabled("ADX_CONNECTOR_UNSAFE_ENABLE_CLAUDE_TASKS"),
+		"development only: allow Claude Code tasks using unverified local authentication",
+	)
+	var roots stringList
+	var allowedEnvironment stringList
+	flags.Var(&roots, "allow-root", "working directory root allowed for managed sessions; may be repeated")
+	flags.Var(
+		&allowedEnvironment,
+		"allow-env",
+		"local environment variable name that an environment_refs payload may expose; may be repeated",
+	)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	stateLock, err := store.AcquireStateLock(*statePath)
+	if err != nil {
+		return fmt.Errorf("acquire connector state lock: %w", err)
+	}
+	defer stateLock.Close()
+
+	if len(roots) == 0 {
+		current, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		roots = append(roots, current)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	fileStore := store.NewFileStore(*statePath)
+	credentials, err := loadCredentials(ctx, fileStore, *apiBase, *gatewayOverride, *autoPair)
+	if err != nil {
+		return err
+	}
+
+	runtimeScanner := newScanner(*discoveryTimeout)
+	enabledDrivers := make([]driver.Driver, 0, 2)
+	enabledKinds := make([]string, 0, 2)
+	if *enableCodexTasks {
+		enabledKinds = append(enabledKinds, "codex")
+		enabledDrivers = append(enabledDrivers, driver.CodexDriver{})
+	}
+	if *enableClaudeTasks {
+		enabledKinds = append(enabledKinds, "claude_code")
+		enabledDrivers = append(enabledDrivers, driver.ClaudeDriver{})
+	}
+	runtimeScanner.EnableTaskExecution(enabledKinds...)
+	inventory := runtimeScanner.Scan(ctx)
+	processSupervisor, err := supervisor.New(
+		runtimeScanner,
+		fileStore,
+		driver.NewRegistry(enabledDrivers...),
+		roots,
+		allowedEnvironment,
+		inventory,
+	)
+	if err != nil {
+		return err
+	}
+	defer processSupervisor.Shutdown()
+
+	logger := log.New(os.Stderr, "adx-connector: ", log.LstdFlags|log.LUTC)
+	if *enableClaudeTasks {
+		logger.Print(
+			"WARNING: Claude Code task execution is enabled with unverified local authentication; " +
+				"use only in an isolated development account after vendor approval",
+		)
+	}
+	client, err := transport.NewClient(
+		transport.Config{
+			Credentials:       credentials,
+			ConnectorVersion:  connectorVersion,
+			HeartbeatInterval: *heartbeat,
+			InventoryInterval: *inventoryInterval,
+		},
+		fileStore,
+		store.NewFileOutbox(*statePath),
+		processSupervisor,
+		logger,
+	)
+	if err != nil {
+		return err
+	}
+	fmt.Printf(
+		"Connector %s starting for device %s with %d detected runtime(s); task-enabled runtimes: %s; allowed roots: %s\n",
+		connectorVersion,
+		credentials.DeviceID,
+		len(inventory.Runtimes),
+		enabledRuntimeSummary(*enableCodexTasks, *enableClaudeTasks),
+		strings.Join(roots, ", "),
+	)
+	err = client.Run(ctx)
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+func loadCredentials(
+	ctx context.Context,
+	fileStore *store.FileStore,
+	apiBase string,
+	gatewayOverride string,
+	autoPair bool,
+) (store.Credentials, error) {
+	credentials, err := credentialsFromEnvironment()
+	if err != nil {
+		return store.Credentials{}, err
+	}
+	if credentials.DeviceID == "" {
+		credentials, err = fileStore.LoadCredentials()
+	}
+	if errors.Is(err, store.ErrNotInitialized) {
+		if !autoPair {
+			return store.Credentials{}, errors.New("connector is not paired and --auto-pair=false")
+		}
+		credentials, err = pair(ctx, apiBase)
+	}
+	if err != nil {
+		return store.Credentials{}, err
+	}
+	if gatewayOverride != "" {
+		credentials.GatewayURL = gatewayOverride
+	}
+	if err := credentials.Validate(); err != nil {
+		return store.Credentials{}, err
+	}
+	if err := fileStore.SaveCredentials(credentials); err != nil {
+		return store.Credentials{}, err
+	}
+	return credentials, nil
+}
+
+func credentialsFromEnvironment() (store.Credentials, error) {
+	deviceID := strings.TrimSpace(os.Getenv("ADX_CONNECTOR_DEVICE_ID"))
+	token := strings.TrimSpace(os.Getenv("ADX_CONNECTOR_TOKEN"))
+	gatewayURL := strings.TrimSpace(os.Getenv("ADX_CONNECTOR_GATEWAY_URL"))
+	if deviceID == "" && token == "" {
+		return store.Credentials{}, nil
+	}
+	if deviceID == "" || token == "" || gatewayURL == "" {
+		return store.Credentials{}, errors.New(
+			"ADX_CONNECTOR_DEVICE_ID, ADX_CONNECTOR_TOKEN, and ADX_CONNECTOR_GATEWAY_URL must be set together",
+		)
+	}
+	return store.Credentials{DeviceID: deviceID, Token: token, GatewayURL: gatewayURL}, nil
+}
+
+func pair(ctx context.Context, apiBase string) (store.Credentials, error) {
+	client := &enrollment.Client{
+		BaseURL:          apiBase,
+		ConnectorVersion: connectorVersion,
+		Output:           os.Stdout,
+	}
+	return client.Pair(ctx)
+}
+
+func newScanner(timeout time.Duration) *discovery.Scanner {
+	scanner := discovery.NewScanner(connectorVersion, timeout)
+	scanner.AdditionalPaths = defaultAdditionalPaths()
+	return scanner
+}
+
+func defaultAdditionalPaths() []string {
+	paths := []string{}
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		paths = append(paths, filepath.Join(home, ".local", "bin"))
+	}
+	if runtime.GOOS == "windows" {
+		for _, variable := range []string{"APPDATA", "LOCALAPPDATA"} {
+			if value := os.Getenv(variable); value != "" {
+				paths = append(paths, filepath.Join(value, "npm"))
+			}
+		}
+	}
+	return paths
+}
+
+func writeJSON(output *os.File, value any) error {
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
+
+func envOr(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func enabledRuntimeSummary(codex, claude bool) string {
+	enabled := make([]string, 0, 2)
+	if codex {
+		enabled = append(enabled, "codex")
+	}
+	if claude {
+		enabled = append(enabled, "claude_code (unsafe development mode)")
+	}
+	if len(enabled) == 0 {
+		return "none (detection-only)"
+	}
+	return strings.Join(enabled, ", ")
+}
+
+type stringList []string
+
+func (values *stringList) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *stringList) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("allow-root cannot be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
+
+func printUsage() {
+	fmt.Print(`ADX local Connector
+
+Usage:
+  adx-connector scan [flags]    Detect supported local agent runtimes
+  adx-connector doctor [flags]  Check pairing and runtime readiness
+  adx-connector pair [flags]    Enroll this device with the ADX platform
+  adx-connector run [flags]     Connect, report inventory, and run managed sessions
+  adx-connector version         Print the connector version
+
+The connector starts in detection-only mode. Task execution requires a local
+runtime-specific opt-in flag. It accepts only typed runtime/session/task commands
+and never accepts an executable path, process arguments, or arbitrary shell text
+from the cloud. Agent prompts can still cause the enabled runtime to use its own
+tools, so enable task execution only for a trusted platform and workspace.
+`)
+}
