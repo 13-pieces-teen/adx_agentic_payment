@@ -29,9 +29,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a href="/listings" className="rounded-lg px-4 py-2 text-gray-400 transition-colors hover:bg-white/5 hover:text-white">
                 Market
               </a>
-              <button className="ml-4 rounded-lg bg-arena-accent/10 px-4 py-2 text-sm font-medium text-arena-accent transition-all hover:bg-arena-accent/20">
+              <a
+                href="/agents#connect"
+                className="ml-4 rounded-lg bg-arena-accent/10 px-4 py-2 text-sm font-medium text-arena-accent transition-all hover:bg-arena-accent/20"
+              >
                 Connect
-              </button>
+              </a>
             </div>
           </div>
         </nav>

@@ -8,6 +8,8 @@ Endpoints for the web frontend:
 - Negotiation lifecycle
 """
 
+import ipaddress
+import os
 import uuid
 import time
 from typing import Optional
@@ -15,6 +17,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from matching.agent import AgentRegistry, AgentRegistration, AgentStatus, LLMConfig, LLMProvider
 from matching.engine import (
@@ -24,6 +28,7 @@ from matching.engine import (
 from matching.arena import Arena, Tier
 from matching.negotiation import NegotiationProtocol
 from matching.calibration import OutcomeLogger, ReviewEscalator
+from connector_gateway import ConnectorGateway, create_connector_router
 
 
 # ============================================================
@@ -87,7 +92,80 @@ class SubmitProposalRequest(BaseModel):
 # ============================================================
 
 
-def create_app() -> FastAPI:
+def _is_loopback_client(scope: Scope) -> bool:
+    client = scope.get("client")
+    if not client:
+        return False
+    host = str(client[0]).split("%", 1)[0]
+    # Starlette's in-process TestClient uses this sentinel; an ASGI server
+    # supplies the real peer address and cannot be overridden by HTTP headers.
+    if host == "testclient":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+class _ConnectorLoopbackOnlyMiddleware:
+    """Fail closed when the unauthenticated demo plane is reached remotely."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        is_connector_request = scope["type"] in {"http", "websocket"} and scope.get(
+            "path", ""
+        ).startswith("/api/connectors")
+        if not is_connector_request or _is_loopback_client(scope):
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "http":
+            response = JSONResponse(
+                {"detail": "Unsafe Connector demo is restricted to loopback clients"},
+                status_code=403,
+            )
+            await response(scope, receive, send)
+            return
+
+        await send(
+            {
+                "type": "websocket.close",
+                # Before websocket.accept this rejects the upgrade. Uvicorn
+                # exposes it to the caller as an HTTP 403 handshake.
+                "code": 1008,
+                "reason": "Unsafe Connector demo is restricted to loopback clients",
+            }
+        )
+
+
+def _mount_connector_gateway(
+    app: FastAPI, connector_demo_enabled: Optional[bool]
+) -> None:
+    """Mount the unauthenticated MVP control plane only after an explicit opt-in.
+
+    The repository does not yet have a shared FastAPI/Supabase identity verifier,
+    so exposing these routes on a remotely reachable app would let callers drive
+    a paired local runtime. Production must replace this guard with authenticated
+    tenant/object authorization.
+    """
+
+    if connector_demo_enabled is None:
+        connector_demo_enabled = (
+            os.getenv("ADX_CONNECTOR_UNSAFE_DEMO", "").strip().lower()
+            in {"1", "true", "yes"}
+        )
+    app.state.connector_gateway_enabled = connector_demo_enabled
+    if not connector_demo_enabled:
+        return
+    app.add_middleware(_ConnectorLoopbackOnlyMiddleware)
+    connector_gateway = ConnectorGateway()
+    app.state.connector_gateway = connector_gateway
+    app.include_router(create_connector_router(connector_gateway))
+
+
+def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     app = FastAPI(
         title="ADX Agent Arena",
         description="Agent-to-Agent Resource Trading Platform",
@@ -100,6 +178,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    _mount_connector_gateway(app, connector_demo_enabled)
 
     # ---- Singletons (in production: proper DI container) ----
     registry = AgentRegistry()
@@ -470,7 +550,7 @@ def create_app() -> FastAPI:
 # Supabase-Backed Variant
 # ============================================================
 
-def create_app_with_db(db=None):
+def create_app_with_db(db=None, connector_demo_enabled: Optional[bool] = None):
     """
     Create the FastAPI app with Supabase persistence.
 
@@ -495,6 +575,8 @@ def create_app_with_db(db=None):
         version="0.2.0",
     )
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+    _mount_connector_gateway(app, connector_demo_enabled)
 
     # Use DB-backed stores
     registry = db.agents

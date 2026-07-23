@@ -103,6 +103,48 @@ body {
   letter-spacing: 4px;
 }
 
+/* === Connector outbound route === */
+.connector-track {
+  position: relative;
+  height: 1px;
+  overflow: hidden;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 240, 255, 0.08),
+    rgba(0, 240, 255, 0.55),
+    rgba(0, 240, 255, 0.08)
+  );
+}
+
+.connector-track-dot {
+  position: absolute;
+  top: -2px;
+  left: -8px;
+  width: 8px;
+  height: 5px;
+  border-radius: 999px;
+  background: #00f0ff;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.8);
+  animation: connectorOutbound 2.4s ease-in-out infinite;
+}
+
+@keyframes connectorOutbound {
+  0% {
+    left: -8px;
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
 /* === Animated Counter === */
 @keyframes countUp {
   from { opacity: 0; transform: translateY(10px); }
@@ -117,3 +159,14 @@ body {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #2e2e3e; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
