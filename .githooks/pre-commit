@@ -1,0 +1,55 @@
+#!/bin/bash
+# ============================================================
+# Git Author Guard — Pre-Commit Hook
+# Blocks commits that modify files NOT originally authored by you.
+# ============================================================
+set -e
+
+YOUR_EMAILS=("235239800+sunruize93-cmyk@users.noreply.github.com" "sunruize93@gmail.com")
+YOUR_NAMES=("sunruize" "Srzzz")
+
+is_my_file() {
+    local file="$1"
+
+    # Check if file has ever been committed to this repo
+    # New files (not in HEAD) are always allowed
+    if ! git cat-file -e "HEAD:$file" 2>/dev/null; then
+        return 0  # new file → yours
+    fi
+
+    local last_author=$(git log -1 --format="%an" -- "$file" 2>/dev/null || echo "")
+    local last_email=$(git log -1 --format="%ae" -- "$file" 2>/dev/null || echo "")
+
+    # No history at all → new file
+    [ -z "$last_author" ] && return 0
+
+    for name in "${YOUR_NAMES[@]}"; do
+        [ "$last_author" = "$name" ] && return 0
+    done
+    for email in "${YOUR_EMAILS[@]}"; do
+        [ "$last_email" = "$email" ] && return 0
+    done
+    return 1
+}
+
+echo "🔒 Author Guard: checking file ownership..."
+VIOLATIONS=()
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+
+for file in $STAGED; do
+    if ! is_my_file "$file"; then
+        VIOLATIONS+=("$file")
+        echo "  ❌ $file → last authored by $(git log -1 --format='%an <%ae>' -- "$file")"
+    else
+        echo "  ✅ $file"
+    fi
+done
+
+if [ ${#VIOLATIONS[@]} -gt 0 ]; then
+    echo ""
+    echo "⛔ COMMIT BLOCKED: You are modifying files authored by others."
+    echo "   To bypass: git commit --no-verify"
+    exit 1
+fi
+echo "✅ All files verified."
+exit 0
