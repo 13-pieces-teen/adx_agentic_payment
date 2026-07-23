@@ -295,7 +295,7 @@ func (s *FileStore) save(current state) error {
 	if err != nil {
 		return fmt.Errorf("encode connector state: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := ensureConnectorDirectory(filepath.Dir(s.path)); err != nil {
 		return fmt.Errorf("create connector state directory: %w", err)
 	}
 	temp, err := os.CreateTemp(filepath.Dir(s.path), ".state-*.tmp")
@@ -304,7 +304,7 @@ func (s *FileStore) save(current state) error {
 	}
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
-	if err := temp.Chmod(0o600); err != nil {
+	if err := secureOpenFile(temp, tempPath); err != nil {
 		temp.Close()
 		return fmt.Errorf("protect temporary connector state: %w", err)
 	}
@@ -322,7 +322,7 @@ func (s *FileStore) save(current state) error {
 	if err := os.Rename(tempPath, s.path); err != nil {
 		return fmt.Errorf("replace connector state: %w", err)
 	}
-	return os.Chmod(s.path, 0o600)
+	return secureFile(s.path)
 }
 
 func newState() state {
@@ -384,7 +384,7 @@ func (o *FileOutbox) Append(event protocol.RuntimeEvent) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if err := os.MkdirAll(o.directory, 0o700); err != nil {
+	if err := ensureConnectorDirectory(o.directory); err != nil {
 		return fmt.Errorf("create event outbox: %w", err)
 	}
 	data, err := json.Marshal(event)
@@ -408,7 +408,7 @@ func (o *FileOutbox) Append(event protocol.RuntimeEvent) error {
 	}
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
-	if err := temp.Chmod(0o600); err != nil {
+	if err := secureOpenFile(temp, tempPath); err != nil {
 		temp.Close()
 		return err
 	}
@@ -426,7 +426,7 @@ func (o *FileOutbox) Append(event protocol.RuntimeEvent) error {
 	if err := os.Rename(tempPath, target); err != nil {
 		return fmt.Errorf("commit outbox event: %w", err)
 	}
-	return os.Chmod(target, 0o600)
+	return secureFile(target)
 }
 
 func (o *FileOutbox) Pending() ([]protocol.RuntimeEvent, error) {

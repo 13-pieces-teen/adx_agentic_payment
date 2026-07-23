@@ -24,10 +24,21 @@ go test ./...
 
 ## First run
 
-Explicit pairing:
+The low-step foreground path is:
 
 ```sh
-./adx-connector pair --api-base https://arena.example
+adx-connector connect --server https://arena.example
+```
+
+The Connector requests a one-time code, opens the default browser directly to
+the approval page, saves the device credential, detects supported runtimes, and
+stays online. If the browser cannot be opened, the same approval URL is printed
+for manual use.
+
+Explicit pairing remains available for installers and service setup:
+
+```sh
+./adx-connector pair --server https://arena.example
 ./adx-connector run --allow-root /path/to/workspace
 ```
 
@@ -35,7 +46,16 @@ Explicit pairing:
 credential. The terminal displays the platform verification URL and a one-time
 user code. After the user approves it in the browser, the Connector exchanges
 the device code and saves the returned credential in the user configuration
-directory with file mode `0600`.
+directory with file mode `0600`. Directories created by the Connector use mode
+`0700`; a user-selected directory that already exists keeps its original mode
+and ACL. Windows builds apply the equivalent current-user-only DACL to files
+and Connector-created directories without replacing an existing parent
+directory ACL. Device tokens and device codes are never written to logs.
+
+Platform installers under [`deploy/install`](../deploy/install/README.md)
+register a current-user Scheduled Task on Windows or `systemd --user` service
+on Linux. They pair interactively once, then start `run --auto-pair=false` so a
+background service never opens an unexpected authorization browser.
 
 For local development, `http://localhost` and `ws://localhost` are allowed.
 Remote enrollment and transport require HTTPS/WSS.

@@ -1,0 +1,20 @@
+{
+	admin 127.0.0.1:2019
+}
+
+http://{$ADX_PUBLIC_HOST} {
+	log {
+		output stdout
+		format json
+	}
+
+	@acme path /.well-known/acme-challenge/*
+	handle @acme {
+		root * /var/www/certbot
+		file_server
+	}
+
+	handle {
+		respond "TLS certificate provisioning in progress" 503
+	}
+}

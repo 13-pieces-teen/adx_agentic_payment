@@ -60,6 +60,23 @@ class CreatePairingRequest(BaseModel):
     device_name: str = Field(default="Local computer", min_length=1, max_length=128)
 
 
+class AcceptInviteRequest(BaseModel):
+    invite_code: str = Field(min_length=20, max_length=512)
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class RegisterRequest(BaseModel):
+    invite_code: str = Field(min_length=20, max_length=512)
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=1, max_length=1024)
+
+
 class ApprovePairingRequest(BaseModel):
     owner_id: str = Field(default="demo-user", min_length=1, max_length=128)
 

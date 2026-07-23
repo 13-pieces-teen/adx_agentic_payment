@@ -47,6 +47,8 @@ import {
 } from '@/lib/connector-api';
 
 const REFRESH_INTERVAL_MS = 8_000;
+const CONNECTOR_DEMO_ENABLED =
+  process.env.NEXT_PUBLIC_CONNECTOR_DEMO === 'true';
 // Replace with the authenticated platform user once the existing login flow exposes it.
 const CURRENT_OWNER_ID = 'demo-user';
 
@@ -77,6 +79,12 @@ function runtimeLabel(kind: string): string {
   return kind.replaceAll('_', ' ');
 }
 
+function executableLabel(value: string): string {
+  if (!value) return 'Executable path not reported';
+  const basename = value.split(/[\\/]/).filter(Boolean).pop();
+  return basename ? `…/${basename}` : 'Executable detected';
+}
+
 function eventSummary(event: RuntimeEvent): string {
   if (!event.data || Object.keys(event.data).length === 0) {
     return 'No additional event data';
@@ -85,16 +93,9 @@ function eventSummary(event: RuntimeEvent): string {
   return raw.length > 140 ? `${raw.slice(0, 137)}…` : raw;
 }
 
-export interface ArenaAgentOption {
-  id: string;
-  name: string;
-}
-
 interface RuntimeRowProps {
   device: ConnectorDevice;
   runtime: ConnectorRuntime;
-  arenaAgents: ArenaAgentOption[];
-  selectedAgentId: string;
   binding?: AgentBinding;
   busyAction?: ConnectorCommandAction | 'binding';
   events?: RuntimeEvent[];
@@ -102,7 +103,6 @@ interface RuntimeRowProps {
   taskDraft: string;
   workspaceDraft: string;
   onBind: () => void;
-  onSelectedAgentChange: (agentId: string) => void;
   onAction: (action: ConnectorCommandAction, payload?: Record<string, unknown>) => void;
   onTaskDraftChange: (value: string) => void;
   onWorkspaceDraftChange: (value: string) => void;
@@ -112,8 +112,6 @@ interface RuntimeRowProps {
 function RuntimeRow({
   device,
   runtime,
-  arenaAgents,
-  selectedAgentId,
   binding,
   busyAction,
   events = [],
@@ -121,7 +119,6 @@ function RuntimeRow({
   taskDraft,
   workspaceDraft,
   onBind,
-  onSelectedAgentChange,
   onAction,
   onTaskDraftChange,
   onWorkspaceDraftChange,
@@ -168,7 +165,7 @@ function RuntimeRow({
                 )}
               </div>
               <p className="mt-1 truncate font-mono text-[11px] text-gray-600">
-                {runtime.executable_path || 'Executable path not reported'}
+                {executableLabel(runtime.executable_path)}
                 {runtime.version ? ` · ${runtime.version}` : ''}
               </p>
             </div>
@@ -199,26 +196,15 @@ function RuntimeRow({
 
         {!binding ? (
           <div className="grid min-w-[220px] gap-2">
-            <label
-              htmlFor={`agent-${device.device_id}-${runtime.runtime_id}`}
-              className="font-mono text-[9px] uppercase tracking-[0.16em] text-gray-600"
-            >
-              Arena identity
-            </label>
-            <select
-              id={`agent-${device.device_id}-${runtime.runtime_id}`}
-              value={selectedAgentId}
-              onChange={(event) => onSelectedAgentChange(event.target.value)}
-              disabled={!runtime.available || busyAction === 'binding'}
-              className="w-full rounded-lg border border-arena-border bg-arena-bg px-3 py-2 text-xs text-gray-300 outline-none transition focus:border-arena-accent/50 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <option value="">Connector-only identity (MVP)</option>
-              {arenaAgents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  Bind to {agent.name}
-                </option>
-              ))}
-            </select>
+            <div className="rounded-lg border border-arena-border bg-black/20 px-3 py-2">
+              <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-gray-600">
+                Control-plane identity
+              </p>
+              <p className="mt-1 text-xs leading-5 text-gray-400">
+                ADX assigns this binding. Arena trading identity stays separate until the
+                persistent ownership service is connected.
+              </p>
+            </div>
             <button
               type="button"
               onClick={onBind}
@@ -492,11 +478,7 @@ function RuntimeRow({
   );
 }
 
-export default function ConnectorConsole({
-  arenaAgents = [],
-}: {
-  arenaAgents?: ArenaAgentOption[];
-}) {
+export default function ConnectorConsole() {
   const [deviceName, setDeviceName] = useState('My computer');
   const [approvalCode, setApprovalCode] = useState('');
   const [pairing, setPairing] = useState<Pairing | null>(null);
@@ -506,7 +488,6 @@ export default function ConnectorConsole({
   const [openEvents, setOpenEvents] = useState<Record<string, boolean>>({});
   const [taskDrafts, setTaskDrafts] = useState<Record<string, string>>({});
   const [workspaceDrafts, setWorkspaceDrafts] = useState<Record<string, string>>({});
-  const [selectedAgentIds, setSelectedAgentIds] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<Record<string, ConnectorCommandAction | 'binding'>>({});
   const [pairingBusy, setPairingBusy] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
@@ -516,6 +497,7 @@ export default function ConnectorConsole({
   const [apiError, setApiError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [publicOrigin, setPublicOrigin] = useState(CONNECTOR_API_BASE_URL);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -533,6 +515,10 @@ export default function ConnectorConsole({
       if (!quiet) setRefreshing(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!publicOrigin) setPublicOrigin(window.location.origin);
+  }, [publicOrigin]);
 
   useEffect(() => {
     void refresh();
@@ -660,7 +646,7 @@ export default function ConnectorConsole({
 
   async function handleCopyStartCommand() {
     await navigator.clipboard.writeText(
-      `adx-connector run --api-base ${CONNECTOR_API_BASE_URL}`,
+      `adx-connector connect --server ${publicOrigin || window.location.origin}`,
     );
     setCommandCopied(true);
     window.setTimeout(() => setCommandCopied(false), 1_500);
@@ -668,22 +654,14 @@ export default function ConnectorConsole({
 
   async function handleCreateBinding(device: ConnectorDevice, runtime: ConnectorRuntime) {
     const key = `${device.device_id}:${runtime.runtime_id}`;
-    const selectedAgentId = selectedAgentIds[key] || '';
-    const selectedAgent = arenaAgents.find((agent) => agent.id === selectedAgentId);
     setBusy((current) => ({ ...current, [key]: 'binding' }));
     setApiError(null);
     try {
       await createBinding(device.device_id, {
         runtime_id: runtime.runtime_id,
-        agent_id: selectedAgentId || undefined,
-        display_name:
-          selectedAgent?.name || `${runtime.display_name} on ${device.name}`,
+        display_name: `${runtime.display_name} on ${device.name}`,
       });
-      setNotice(
-        selectedAgent
-          ? `${selectedAgent.name} is now bound to ${runtime.display_name}.`
-          : `${runtime.display_name} now has a Connector-only MVP binding.`,
-      );
+      setNotice(`${runtime.display_name} now has an ADX control-plane binding.`);
       await refresh(true);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Could not bind this runtime.');
@@ -863,7 +841,7 @@ export default function ConnectorConsole({
                   >
                     <span className="text-arena-success">$</span>
                     <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-gray-400">
-                      adx-connector run --api-base {CONNECTOR_API_BASE_URL}
+                      adx-connector connect --server {publicOrigin || 'this-arena-url'}
                     </code>
                     {commandCopied ? (
                       <Check className="h-3.5 w-3.5 shrink-0 text-arena-success" />
@@ -929,19 +907,21 @@ export default function ConnectorConsole({
                       className="w-full rounded-lg border border-arena-border bg-arena-bg/70 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-gray-700 focus:border-arena-accent/50"
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleCreatePairing}
-                    disabled={pairingBusy}
-                    className="mt-auto inline-flex items-center justify-center gap-2 rounded-lg border border-arena-border px-5 py-2.5 text-sm font-medium text-gray-400 transition hover:border-arena-accent/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {pairingBusy ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Link2 className="h-4 w-4" />
-                    )}
-                    Generate demo code
-                  </button>
+                  {CONNECTOR_DEMO_ENABLED && (
+                    <button
+                      type="button"
+                      onClick={handleCreatePairing}
+                      disabled={pairingBusy}
+                      className="mt-auto inline-flex items-center justify-center gap-2 rounded-lg border border-arena-border px-5 py-2.5 text-sm font-medium text-gray-400 transition hover:border-arena-accent/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {pairingBusy ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Link2 className="h-4 w-4" />
+                      )}
+                      Generate demo code
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -1188,12 +1168,6 @@ export default function ConnectorConsole({
                         key={runtime.runtime_id}
                         device={device}
                         runtime={runtime}
-                        arenaAgents={arenaAgents}
-                        selectedAgentId={
-                          selectedAgentIds[
-                            `${device.device_id}:${runtime.runtime_id}`
-                          ] || ''
-                        }
                         binding={binding}
                         busyAction={busy[busyKey]}
                         events={binding ? events[binding.binding_id] : []}
@@ -1203,12 +1177,6 @@ export default function ConnectorConsole({
                           binding ? workspaceDrafts[binding.binding_id] || '' : ''
                         }
                         onBind={() => void handleCreateBinding(device, runtime)}
-                        onSelectedAgentChange={(agentId) =>
-                          setSelectedAgentIds((current) => ({
-                            ...current,
-                            [`${device.device_id}:${runtime.runtime_id}`]: agentId,
-                          }))
-                        }
                         onAction={(action, payload) =>
                           binding && void handleCommand(binding, action, payload)
                         }

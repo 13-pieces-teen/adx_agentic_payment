@@ -1,13 +1,37 @@
-import { createClient } from '@supabase/supabase-js';
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+interface ListResponse<T> {
+  total?: number;
+  agents?: T[];
+  listings?: T[];
+  leaderboard?: T[];
+  battles?: T[];
+}
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+async function apiGet<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`ADX API returned HTTP ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function query(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') search.set(key, String(value));
+  });
+  const encoded = search.toString();
+  return encoded ? `?${encoded}` : '';
+}
 
 // Types from our DB schema
 export interface Agent {
   id: string;
+  agent_id?: string;
   owner_id: string;
   name: string;
   description: string;
@@ -26,6 +50,7 @@ export interface Agent {
 
 export interface Listing {
   id: string;
+  listing_id?: string;
   seller_agent_id: string;
   seller_name: string;
   asset_class: string;
@@ -44,6 +69,7 @@ export interface Listing {
 
 export interface Battle {
   id: string;
+  battle_id?: string;
   asset_class: string;
   description: string;
   agent_a_id: string;
@@ -54,6 +80,7 @@ export interface Battle {
   winner_agent_id: string;
   final_price: number;
   currency: string;
+  quantity: number;
   total_value: number;
   rounds_taken: number;
   duration_seconds: number;
@@ -80,22 +107,72 @@ export interface LeaderboardEntry {
   saved: number;
 }
 
+type ListingWire = Omit<Listing, 'created_at'> & {
+  price_range?: {
+    min?: number;
+    ideal?: number;
+    max?: number;
+    currency?: string;
+  };
+  created_at: string | number;
+};
+
+function timestamp(value: string | number): string {
+  if (typeof value === 'number') {
+    return new Date(value * 1000).toISOString();
+  }
+  return value;
+}
+
+function normalizeAgent(agent: Agent): Agent {
+  return {
+    ...agent,
+    id: agent.id || agent.agent_id || '',
+  };
+}
+
+function normalizeListing(listing: ListingWire): Listing {
+  return {
+    ...listing,
+    id: listing.id || listing.listing_id || '',
+    min_price: listing.min_price ?? listing.price_range?.min ?? 0,
+    ideal_price: listing.ideal_price ?? listing.price_range?.ideal ?? 0,
+    max_price: listing.max_price ?? listing.price_range?.max ?? 0,
+    currency: listing.currency || listing.price_range?.currency || '',
+    created_at: timestamp(listing.created_at),
+    is_active: listing.is_active ?? true,
+  };
+}
+
+function normalizeBattle(battle: Battle): Battle {
+  return {
+    ...battle,
+    id: battle.id || battle.battle_id || '',
+    ended_at: timestamp(battle.ended_at),
+  };
+}
+
 // Hooks
 export async function getAgents(): Promise<Agent[]> {
-  const { data } = await supabase.from('agents').select('*');
-  return (data || []) as Agent[];
+  const response = await apiGet<ListResponse<Agent>>('/api/agents');
+  return (response.agents || []).map(normalizeAgent);
 }
 
 export async function getAgent(id: string): Promise<Agent | null> {
-  const { data } = await supabase.from('agents').select('*').eq('id', id).single();
-  return data as Agent | null;
+  const response = await fetch(`${API_BASE_URL}/api/agents/${encodeURIComponent(id)}`, {
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`ADX API returned HTTP ${response.status}`);
+  return normalizeAgent((await response.json()) as Agent);
 }
 
 export async function getListings(assetClass?: string): Promise<Listing[]> {
-  let q = supabase.from('listings').select('*').eq('is_active', true);
-  if (assetClass) q = q.eq('asset_class', assetClass);
-  const { data } = await q.order('created_at', { ascending: false });
-  return (data || []) as Listing[];
+  const response = await apiGet<ListResponse<ListingWire>>(
+    `/api/listings${query({ asset_class: assetClass, available_only: 'true' })}`,
+  );
+  return (response.listings || []).map(normalizeListing);
 }
 
 export async function getLeaderboard(
@@ -103,41 +180,74 @@ export async function getLeaderboard(
   minBattles = 0,
   limit = 50
 ): Promise<LeaderboardEntry[]> {
-  const { data } = await supabase.rpc('get_leaderboard', {
-    p_asset_class: assetClass,
-    p_min_battles: minBattles,
-    p_limit: limit,
-  });
-  return (data || []) as LeaderboardEntry[];
+  const response = await apiGet<ListResponse<LeaderboardEntry>>(
+    `/api/arena/leaderboard${query({
+      asset_class: assetClass,
+      min_battles: minBattles,
+      limit,
+    })}`,
+  );
+  return response.leaderboard || [];
 }
 
 export async function getBattleFeed(limit = 20): Promise<Battle[]> {
-  const { data } = await supabase
-    .from('battles')
-    .select('*')
-    .order('ended_at', { ascending: false })
-    .limit(limit);
-  return (data || []) as Battle[];
+  const response = await apiGet<ListResponse<Battle>>(
+    `/api/arena/battles${query({ limit })}`,
+  );
+  return (response.battles || []).map(normalizeBattle);
 }
 
 export function subscribeBattles(callback: (battle: Battle) => void) {
-  return supabase
-    .channel('battles-feed')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'battles' },
-      (payload) => callback(payload.new as Battle)
-    )
-    .subscribe();
+  const seen = new Set<string>();
+  let stopped = false;
+  const poll = async () => {
+    try {
+      const battles = await getBattleFeed(20);
+      battles
+        .slice()
+        .reverse()
+        .forEach((battle) => {
+          if (!seen.has(battle.id)) {
+            seen.add(battle.id);
+            callback(battle);
+          }
+        });
+    } catch {
+      // The next poll retries; transient API errors should not break the page.
+    }
+  };
+  void poll();
+  const timer = window.setInterval(() => void poll(), 5000);
+  return {
+    unsubscribe() {
+      stopped = true;
+      window.clearInterval(timer);
+    },
+    get closed() {
+      return stopped;
+    },
+  };
 }
 
 export function subscribeListings(callback: (listing: Listing) => void) {
-  return supabase
-    .channel('listings-feed')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'listings' },
-      (payload) => callback(payload.new as Listing)
-    )
-    .subscribe();
+  const seen = new Set<string>();
+  const poll = async () => {
+    try {
+      const listings = await getListings();
+      listings
+        .slice()
+        .reverse()
+        .forEach((listing) => {
+          if (!seen.has(listing.id)) {
+            seen.add(listing.id);
+            callback(listing);
+          }
+        });
+    } catch {
+      // The next poll retries; transient API errors should not break the page.
+    }
+  };
+  void poll();
+  const timer = window.setInterval(() => void poll(), 5000);
+  return { unsubscribe: () => window.clearInterval(timer) };
 }
