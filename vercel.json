@@ -1,10 +1,24 @@
 {
-  "buildCommand": "cd frontend && npm install && npm run build",
-  "outputDirectory": "frontend/.next",
-  "installCommand": "cd frontend && npm install",
-  "framework": "nextjs",
+  "buildCommand": "",
+  "outputDirectory": "arena402",
+  "installCommand": "",
+  "framework": null,
   "env": {
     "NEXT_PUBLIC_SUPABASE_URL": "https://jvdxqjttvwphxnwcorkq.supabase.co",
     "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2ZHhxanR0dndwaHhud2NvcmtxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDc4MTAyOCwiZXhwIjoyMTAwMzU3MDI4fQ.PvdUI3EWGWnsWhqD3Oaw_3E1mGmMCa8hmGQO4JK6iX4"
-  }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/(.*\\.svg)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    }
+  ]
 }
