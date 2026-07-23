@@ -243,7 +243,7 @@ treat that run as independently reproducible evidence.
 - Relay state and SDK intents are in memory and are lost on restart.
 - The relay must constrain token, chain, payee, amount, and business order ID
   before production use.
-- The next product integration must connect an immutable ADX `Deal` to the
+- The next product integration must connect an immutable Arena 402 `Deal` to the
   settlement authorization and payment-gated delivery.
 - The frozen specs' M4 milestone proposed a TEE-produced authorization. Current
   product scope allows a test-only signer first and treats TEE custody as later

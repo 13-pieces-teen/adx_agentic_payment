@@ -1,9 +1,9 @@
-# Roadmap
+# Arena 402 Roadmap
 
 > Status: current cross-module implementation status and sequencing.
 
-ADX remains a prototype. The repository has two working foundations, but it does
-not yet provide the complete Agent Deal Exchange product loop.
+Arena 402 remains a prototype. The repository has two working foundations, but
+it does not yet provide the complete product loop.
 
 ## Product target
 
@@ -20,7 +20,9 @@ Mandate -> RFQ -> Offer -> Deal
 - [x] Establish repository-level agent guidance, product scope, roadmap, and
       project skill synchronization.
 - [x] Implement the in-memory Python Agent registry, resource listings/intents,
-      matching, negotiation state machine, Arena/ELO, and FastAPI wrapper.
+      matching, negotiation state machine, Arena/ELO component, and FastAPI
+      wrapper. The Arena/ELO component is not the complete Arena 402 RFQ
+      application layer.
 - [x] Define Python A2A/payment boundary types, fixtures, and mocks.
 - [x] Verify the Injective EVM testnet environment used by the settlement module.
 - [x] Implement an EIP-3009-compatible mock stablecoin deployment for testnet use.
@@ -41,7 +43,7 @@ Module-level settlement evidence, limitations, and verified commands live in
       endpoint with payment requirements, paid retry, and payment response.
 - [ ] Payment is not yet bound to a `DeliveryCommitment`.
 - [ ] Artifact unlock and buyer-side `Receipt` verification are not implemented.
-- [ ] There is no single command that runs the full ADX product loop.
+- [ ] There is no single command that runs the full Arena 402 product loop.
 
 ## Next
 

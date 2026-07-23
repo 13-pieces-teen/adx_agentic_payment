@@ -1,12 +1,12 @@
-# ADX Settlement Prototype Workspace
+# Arena 402 Settlement Prototype Workspace
 
 > Status: Injective EVM EIP-3009 settlement prototype; not a complete x402 or
-> ADX product implementation.
+> Arena 402 product implementation.
 
-This directory keeps the historical `agent-arena` name, but its current
-implemented focus is the settlement foundation for **ADX — Agent Deal
-Exchange**. The current ADX product is a bounded RFQ and machine-verifiable
-digital-delivery flow, described in [`../docs/product.md`](../docs/product.md).
+The `agent-arena/` directory name is retained for workspace compatibility. Its
+current implemented focus is the settlement foundation for **Arena 402**. The
+current product is a bounded RFQ and machine-verifiable digital-delivery flow,
+described in [`../docs/product.md`](../docs/product.md).
 
 The original
 [`AGENT_ARENA_FULL_SPEC.md`](../docs/archive/2026-07-23/AGENT_ARENA_FULL_SPEC.md)
@@ -66,15 +66,15 @@ must not be inferred from the historical monorepo plan.
 
 The next integration milestone is:
 
-1. convert an accepted Python negotiation into the canonical ADX `Deal`;
+1. convert an accepted Python negotiation into the canonical Arena 402 `Deal`;
 2. invoke SettlementSDK through a stable adapter;
 3. wrap settlement in a standard seller-side x402 HTTP challenge and paid retry;
 4. bind payment to a `DeliveryCommitment`;
 5. release and verify the artifact and `Receipt`.
 
-Until those steps pass together, describe this directory as an Injective EVM
-EIP-3009 settlement prototype, not as a completed x402 HTTP flow, TEE, escrow,
-or ADX.
+Until those steps pass together, describe this directory only as an Injective
+EVM EIP-3009 settlement prototype. It is not a complete x402 HTTP flow,
+TEE/escrow implementation, or Arena 402 product.
 
 ## Security
 

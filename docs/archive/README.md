@@ -4,6 +4,10 @@ This directory preserves superseded project documents for historical reference.
 Archived files are not current product, architecture, implementation, setup, or
 roadmap authority.
 
+Archived documents retain the project names and identifiers that were current
+when they were written, including the former `ADX` name. The active product name
+is **Arena 402**; do not rewrite archived files solely to update branding.
+
 ## Archive index
 
 | Archived document | Original path | Archived on | Reason | Current references |

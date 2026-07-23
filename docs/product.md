@@ -1,10 +1,10 @@
-# Product
+# Arena 402 Product Contract
 
 > Status: current product scope for the hackathon MVP.
 
 ## 产品定位
 
-**ADX — Agent Deal Exchange** 是面向 Agent 的受限 RFQ 交易协议，用于购买和
+**Arena 402** 是面向 Agent 的受限 RFQ 交易与可验证交付竞技场，用于购买和
 交付可机器验证的数字商品或服务结果。
 
 买方不是浏览通用 marketplace，而是把预算、期限、交付要求和授权边界写入
@@ -13,7 +13,8 @@
 可验证交付物。
 
 Injective 是 MVP 的具体 testnet 结算层。标准 x402 HTTP 支付流程是目标接口，但
-Injective、x402 或底层支付设施本身不负责 ADX 的 RFQ、报价、协商和交付验证。
+Injective、x402 或底层支付设施本身不负责 Arena 402 的 RFQ、报价、协商和
+交付验证。
 
 ## MVP 交易对象
 
@@ -56,10 +57,11 @@ Injective、x402 或底层支付设施本身不负责 ADX 的 RFQ、报价、协
 ## 当前实现边界
 
 - `matching/` 和 `web/api.py` 已实现内存版 Agent 注册、listing/intent、
-  matching、受规则约束的 negotiation 和 Arena/ELO 原型。
+  matching、受规则约束的 negotiation 和 Arena/ELO 记分/会话原型；它不是
+  完整的 Arena 402 RFQ 应用层。
 - `agent-arena/settlement/` 已实现 Injective EVM testnet 上的 EIP-3009
   授权与直接 mUSDC 结算原型。
-- 上述两部分尚未接成 ADX 的 `RFQ -> Deal` 领域协议。
+- 上述两部分尚未接成 Arena 402 的 `RFQ -> Deal` 领域协议。
 - x402 HTTP challenge、带支付重试、交付解锁和最终 `Receipt` 尚未形成
   端到端闭环。
 - TEE、链上 escrow、争议处理、真实退款、生产手续费和信誉系统尚未作为产品

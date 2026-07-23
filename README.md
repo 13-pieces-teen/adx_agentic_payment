@@ -1,13 +1,20 @@
-# ADX — Agent Deal Exchange
+# Arena 402
 
-ADX is an Agent-native exchange for **bounded RFQs and machine-verifiable digital
-delivery**. A buyer delegates a mandate, seller agents return structured offers,
-the parties close one limited negotiation, and payment unlocks a deliverable that
-the buyer can verify.
+Arena 402 is an Agent-native transaction arena for **bounded RFQs and
+machine-verifiable digital delivery**. A buyer delegates a mandate, seller
+agents compete with structured offers, the parties close one limited
+negotiation, and payment unlocks a deliverable that the buyer can verify.
 
-ADX is not a generic Agent marketplace, a paid-API directory, or an on-chain
-order book. Injective is the concrete testnet settlement layer for the MVP; the
-product boundary remains the RFQ and verifiable-delivery protocol.
+Arena 402 is not a generic Agent marketplace, a paid-API directory, or an
+on-chain order book. Injective is the concrete testnet settlement layer for the
+MVP; the product boundary remains the RFQ and verifiable-delivery protocol.
+
+The repository directory and some historical implementation paths still contain
+the former `adx` identifier for compatibility. The active product name is
+**Arena 402**. Archived documents preserve the names that were current when
+they were written. This documentation rename does not silently change package
+names, wire-protocol URIs, persisted identifiers, environment keys, or runtime
+display strings; those require an explicit compatibility migration.
 
 ## Target product loop
 
@@ -28,7 +35,7 @@ The repository does **not** run this full loop end to end yet.
 
 | Area | Current state |
 |------|---------------|
-| Python matching and Arena | Implemented as an in-memory prototype under `matching/`, exposed by `web/api.py` |
+| Python matching and Arena/ELO component | Implemented as an in-memory prototype under `matching/`, exposed by `web/api.py`; it is not the full Arena 402 RFQ application layer |
 | A2A/payment boundary | Python interfaces, fixtures, and mocks exist under `shared/`, `a2a_team/`, and `x402_team/` |
 | Injective settlement | Injective EVM testnet prototype under `agent-arena/settlement/`: EIP-3009 authorization, project-specific facilitator, and direct mUSDC settlement |
 | Standard x402 HTTP flow | Not complete; the seller-side 402 challenge, paid retry, and resource response are not wired into the product |
@@ -36,19 +43,20 @@ The repository does **not** run this full loop end to end yet.
 | TEE, escrow, disputes, refunds, and production fees | Not implemented as product capabilities |
 
 The existing EIP-3009 settlement prototype validates one payment primitive. It
-must not be described as a complete x402 or ADX product implementation.
+must not be described as a complete x402 or Arena 402 product implementation.
 
 ## Repository map
 
 | Path | Purpose |
 |------|---------|
-| `matching/` | Agent registry, listings/intents, matching, negotiation, calibration, and ELO/Arena logic |
+| `matching/` | Agent registry, listings/intents, matching, negotiation, calibration, and the current Arena/ELO component |
 | `web/api.py` | FastAPI wrapper around the in-memory Python prototype |
 | `shared/` | Python payment boundary and shared fixtures |
 | `a2a_team/`, `x402_team/` | Integration mocks |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 settlement prototype |
 | `docs/product.md` | Current product scope |
 | `docs/roadmap.md` | Current cross-module status and next steps |
+| `docs/agent-identity-and-a2a-onboarding.md` | Proposed Agent identity issuance, A2A onboarding, and Arena membership design |
 | `docs/injective/` | Fixed snapshots of external Injective documentation; reference only |
 
 ## Matching prototype quick start
@@ -69,7 +77,7 @@ python3 -c 'from web.api import create_app; import uvicorn; uvicorn.run(create_a
 ```
 
 This starts the Python prototype only. It does not start the settlement
-facilitator or a complete ADX demo.
+facilitator or a complete Arena 402 demo.
 
 These are repository-existing commands. This documentation update did not
 reinstall dependencies or re-run them from a clean environment; clean-environment
@@ -84,6 +92,7 @@ For settlement status and module-specific setup, read
 - Agent rules: [`AGENTS.md`](AGENTS.md)
 - Product scope: [`docs/product.md`](docs/product.md)
 - Implementation roadmap: [`docs/roadmap.md`](docs/roadmap.md)
+- Identity and A2A onboarding design: [`docs/agent-identity-and-a2a-onboarding.md`](docs/agent-identity-and-a2a-onboarding.md)
 - Shared project skills: [`.agents/skills/`](.agents/skills/)
 
 Codex reads `.agents/skills/` directly. Claude Code users can synchronize the

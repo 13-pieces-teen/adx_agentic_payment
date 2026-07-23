@@ -2,7 +2,7 @@
 
 ## Project
 
-This repository is an early-stage hackathon prototype for **ADX — Agent Deal Exchange**:
+This repository is an early-stage hackathon prototype for **Arena 402**:
 a bounded RFQ workflow for machine-verifiable digital delivery.
 
 The current repository contains two implemented but not yet integrated foundations:
@@ -45,7 +45,8 @@ behavior, explain the difference in the active module `README.md` or
 Additional context boundaries:
 
 - `docs/injective/` contains fixed external documentation snapshots. A snapshot is
-  reference material, not evidence that ADX has adopted or implemented that design.
+  reference material, not evidence that Arena 402 has adopted or implemented
+  that design.
 - `产品描述.docx` and `ISEK解读与ADX2025参赛策略.md` are background materials.
   Do not load or treat them as current project authority by default.
 
