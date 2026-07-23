@@ -59,6 +59,22 @@ python3 -c 'from web.api import create_app; import uvicorn; uvicorn.run(create_a
 This repo uses author-guard hooks. You can only modify files you originally authored.
 See `.githooks/pre-commit` and `.claude/guard_file_owner.py`.
 
+## 🧰 Repository Harness
+
+- Coding agent rules: [`AGENTS.md`](AGENTS.md)
+- Product outline: [`docs/product.md`](docs/product.md)
+- Current direction: [`docs/roadmap.md`](docs/roadmap.md)
+- Shared project skills: [`.agents/skills/`](.agents/skills/)
+
+Codex reads `.agents/skills/` directly. Claude Code users can synchronize the same project skills locally:
+
+```bash
+python scripts/sync_skills.py --write
+python scripts/sync_skills.py --check
+```
+
+Treat `.agents/skills/` as the editable source. Do not edit generated project-managed copies under `.claude/skills/`.
+
 ## 🏆 Arena Mechanics
 
 - **ELO Rating**: Starts at 1000, adjusted per battle outcome
