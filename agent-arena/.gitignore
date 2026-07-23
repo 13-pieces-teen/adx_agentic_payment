@@ -1,0 +1,21 @@
+# deps (打包时排除，公司电脑 npm install 恢复)
+node_modules/
+**/node_modules/
+
+# secrets — 私钥/助记词绝不进仓库
+.env
+**/.env
+!**/.env.example
+
+# build artifacts
+dist/
+build/
+artifacts/
+cache/
+**/artifacts/
+**/cache/
+typechain-types/
+
+# misc
+.DS_Store
+*.log
