@@ -27,7 +27,7 @@ const connectorVersion = "0.1.0"
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "adx-connector:", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
@@ -43,8 +43,10 @@ func run(arguments []string) error {
 		return runDoctor(arguments[1:])
 	case "pair":
 		return runPair(arguments[1:])
+	case "connect":
+		return runConnector(arguments[1:], "connect")
 	case "run":
-		return runConnector(arguments[1:])
+		return runConnector(arguments[1:], "run")
 	case "version", "--version", "-version":
 		fmt.Println(connectorVersion)
 		return nil
@@ -148,9 +150,14 @@ func runPair(arguments []string) error {
 		return err
 	}
 	flags := flag.NewFlagSet("pair", flag.ContinueOnError)
-	apiBase := flags.String("api-base", envOr("ADX_API_BASE", "http://localhost:8000"), "ADX platform HTTP API base")
+	server := flags.String("server", "", "ADX platform HTTPS origin")
+	apiBase := flags.String("api-base", "", "deprecated alias for --server")
 	statePath := flags.String("state", defaultState, "connector state file")
 	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	selectedServer, err := selectServer(*server, *apiBase, configuredServer("http://localhost:8000"))
+	if err != nil {
 		return err
 	}
 	stateLock, err := store.AcquireStateLock(*statePath)
@@ -161,7 +168,7 @@ func runPair(arguments []string) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	credentials, err := pair(ctx, *apiBase)
+	credentials, err := pair(ctx, selectedServer)
 	if err != nil {
 		return err
 	}
@@ -172,13 +179,14 @@ func runPair(arguments []string) error {
 	return nil
 }
 
-func runConnector(arguments []string) error {
+func runConnector(arguments []string, commandName string) error {
 	defaultState, err := store.DefaultPath()
 	if err != nil {
 		return err
 	}
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	apiBase := flags.String("api-base", envOr("ADX_API_BASE", "http://localhost:8000"), "ADX platform HTTP API base used for first-run pairing")
+	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
+	server := flags.String("server", "", "ADX platform HTTPS origin")
+	apiBase := flags.String("api-base", "", "deprecated alias for --server")
 	statePath := flags.String("state", defaultState, "connector state file")
 	gatewayOverride := flags.String("gateway", envOr("ADX_CONNECTOR_GATEWAY_URL", ""), "override the paired websocket gateway URL")
 	autoPair := flags.Bool("auto-pair", true, "start device pairing when credentials are missing")
@@ -206,6 +214,17 @@ func runConnector(arguments []string) error {
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
+	fallbackServer := configuredServer("http://localhost:8000")
+	if commandName == "connect" {
+		fallbackServer = configuredServer("")
+	}
+	selectedServer, err := selectServer(*server, *apiBase, fallbackServer)
+	if err != nil {
+		return err
+	}
+	if commandName == "connect" && selectedServer == "" {
+		return errors.New("connect requires --server https://arena.example")
+	}
 	stateLock, err := store.AcquireStateLock(*statePath)
 	if err != nil {
 		return fmt.Errorf("acquire connector state lock: %w", err)
@@ -223,7 +242,7 @@ func runConnector(arguments []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	fileStore := store.NewFileStore(*statePath)
-	credentials, err := loadCredentials(ctx, fileStore, *apiBase, *gatewayOverride, *autoPair)
+	credentials, err := loadCredentials(ctx, fileStore, selectedServer, *gatewayOverride, *autoPair)
 	if err != nil {
 		return err
 	}
@@ -360,14 +379,49 @@ func defaultAdditionalPaths() []string {
 	paths := []string{}
 	home, _ := os.UserHomeDir()
 	if home != "" {
-		paths = append(paths, filepath.Join(home, ".local", "bin"))
+		paths = append(
+			paths,
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".npm-global", "bin"),
+			filepath.Join(home, ".local", "share", "pnpm"),
+			filepath.Join(home, ".bun", "bin"),
+			filepath.Join(home, ".cargo", "bin"),
+		)
 	}
 	if runtime.GOOS == "windows" {
-		for _, variable := range []string{"APPDATA", "LOCALAPPDATA"} {
-			if value := os.Getenv(variable); value != "" {
-				paths = append(paths, filepath.Join(value, "npm"))
-			}
+		if value := os.Getenv("APPDATA"); value != "" {
+			paths = append(paths, filepath.Join(value, "npm"))
 		}
+		if value := os.Getenv("LOCALAPPDATA"); value != "" {
+			paths = append(paths, filepath.Join(value, "npm"), filepath.Join(value, "pnpm"))
+		}
+	} else if home != "" {
+		paths = appendVersionedBinaryDirectories(
+			paths,
+			filepath.Join(home, ".nvm", "versions", "node"),
+			"bin",
+		)
+		paths = appendVersionedBinaryDirectories(
+			paths,
+			filepath.Join(home, ".local", "share", "fnm", "node-versions"),
+			"installation",
+			"bin",
+		)
+	}
+	return paths
+}
+
+func appendVersionedBinaryDirectories(paths []string, root string, suffix ...string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return paths
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		parts := append([]string{root, entry.Name()}, suffix...)
+		paths = append(paths, filepath.Join(parts...))
 	}
 	return paths
 }
@@ -383,6 +437,37 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func configuredServer(fallback string) string {
+	if value := strings.TrimSpace(os.Getenv("ADX_SERVER")); value != "" {
+		return value
+	}
+	return envOr("ADX_API_BASE", fallback)
+}
+
+func selectServer(server, apiBase, fallback string) (string, error) {
+	server = strings.TrimSpace(server)
+	apiBase = strings.TrimSpace(apiBase)
+	if server != "" && apiBase != "" && strings.TrimRight(server, "/") != strings.TrimRight(apiBase, "/") {
+		return "", errors.New("--server and --api-base must refer to the same platform")
+	}
+	switch {
+	case server != "":
+		return server, nil
+	case apiBase != "":
+		return apiBase, nil
+	default:
+		return strings.TrimSpace(fallback), nil
+	}
+}
+
+func exitCode(err error) int {
+	if errors.Is(err, transport.ErrDeviceRevoked) ||
+		errors.Is(err, transport.ErrConnectionReplaced) {
+		return 78
+	}
+	return 1
 }
 
 func envEnabled(name string) bool {
@@ -429,6 +514,8 @@ Usage:
   adx-connector scan [flags]    Detect supported local agent runtimes
   adx-connector doctor [flags]  Check pairing and runtime readiness
   adx-connector pair [flags]    Enroll this device with the ADX platform
+  adx-connector connect --server https://arena.example
+                                Authorize once, then stay online
   adx-connector run [flags]     Connect, report inventory, and run managed sessions
   adx-connector version         Print the connector version
 

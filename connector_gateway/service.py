@@ -107,7 +107,11 @@ class ConnectorGateway:
         ),
     )
 
-    def __init__(self, verification_uri: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        verification_uri: Optional[str] = None,
+        max_pending_pairings: int = 500,
+    ) -> None:
         public_app_url = os.getenv("ADX_PUBLIC_APP_URL", "http://localhost:3000")
         self.verification_uri = verification_uri or (
             public_app_url.rstrip("/") + "/agents#connect"
@@ -126,16 +130,31 @@ class ConnectorGateway:
         # cumulative ACK can safely compact the device's durable outbox.
         self.event_ack_watermarks: dict[str, int] = {}
         self.event_pending_sequences: dict[str, set[int]] = {}
+        self.max_pending_pairings = max_pending_pairings
         self._lock = asyncio.Lock()
 
     async def create_pairing(
         self, requested_owner_id: Optional[str], device_name: str
     ) -> dict[str, Any]:
         async with self._lock:
+            now = utc_now()
+            self._remove_expired_pairings(now)
+            open_pairings = sum(
+                record["status"]
+                in {
+                    PairingStatus.PENDING.value,
+                    PairingStatus.APPROVED.value,
+                }
+                for record in self.pairings.values()
+            )
+            if open_pairings >= self.max_pending_pairings:
+                raise ConnectorError(
+                    503,
+                    "Connector pairing capacity is temporarily full; retry later",
+                )
             pairing_id = new_id("pair")
             user_code = self._unique_user_code()
             device_code = secrets.token_urlsafe(32)
-            now = utc_now()
             record = {
                 "pairing_id": pairing_id,
                 "owner_id": None,
@@ -161,12 +180,34 @@ class ConnectorGateway:
                 "verification_uri": self.verification_uri,
             }
 
+    def _remove_expired_pairings(self, now: datetime) -> int:
+        """Bound unauthenticated pairing state before taking another request."""
+
+        removed = 0
+        for user_code, record in list(self.pairings.items()):
+            if record["status"] not in {
+                PairingStatus.PENDING.value,
+                PairingStatus.APPROVED.value,
+                PairingStatus.EXPIRED.value,
+            }:
+                continue
+            if self._parse_time(record["expires_at"]) > now:
+                continue
+            device_code_hash = record.get("device_code_hash")
+            if device_code_hash:
+                self.pairings_by_device_code.pop(str(device_code_hash), None)
+            self.pairings.pop(user_code, None)
+            removed += 1
+        return removed
+
     async def approve_pairing(self, user_code: str, owner_id: str) -> dict[str, Any]:
         async with self._lock:
             record = self._get_pairing(user_code)
             self._refresh_pairing_expiry(record)
             if record["status"] == PairingStatus.EXPIRED.value:
                 raise ConnectorError(410, "Pairing code expired")
+            if record["status"] == PairingStatus.APPROVED.value:
+                raise ConnectorError(409, "Pairing code already approved")
             if record["status"] == PairingStatus.CONSUMED.value:
                 raise ConnectorError(409, "Pairing code already consumed")
             if record["owner_id"] is not None and record["owner_id"] != owner_id:
@@ -215,6 +256,8 @@ class ConnectorGateway:
                 "binding_epoch": 1,
                 "outbound_sequence": 0,
                 "last_inbound_sequence": None,
+                "event_ack_watermark": 0,
+                "event_pending_sequences": [],
                 "_connection_generation": 0,
             }
             self.devices[device_id] = device
@@ -566,6 +609,7 @@ class ConnectorGateway:
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
+        selected_command: dict[str, Any] | None = None
         async with self._lock:
             binding = self.bindings.get(binding_id)
             if not binding:
@@ -619,43 +663,65 @@ class ConnectorGateway:
                                 409,
                                 "Idempotency key was already used with a different command",
                             )
-                        return self._public_command(command)
-            now = utc_now()
-            command_id = new_id("cmd")
-            command = {
-                "command_id": command_id,
-                "binding_id": binding_id,
-                "device_id": binding["device_id"],
-                "runtime_id": binding["runtime_id"],
-                "agent_id": binding["agent_id"],
-                "binding_epoch": binding["binding_epoch"],
-                "session_id": payload.get("session_id") or binding["last_session_id"],
-                "action": action.value,
-                "payload": payload,
-                "idempotency_key": idempotency_key or command_id,
-                "request_fingerprint": request_fingerprint,
-                "status": CommandStatus.QUEUED.value,
-                "created_at": iso(now),
-                "expires_at": iso(now + timedelta(seconds=expires_in_seconds)),
-                "delivered_at": None,
-                "delivery_attempts": 0,
-                "updated_at": iso(now),
-                "result": None,
-                "error": None,
-            }
-            self.commands[command_id] = command
-            self._append_audit(
-                "command.queued",
-                "platform",
-                {
+                        selected_command = command
+                        break
+            if selected_command is None:
+                now = utc_now()
+                command_id = new_id("cmd")
+                selected_command = {
                     "command_id": command_id,
                     "binding_id": binding_id,
+                    "device_id": binding["device_id"],
+                    "runtime_id": binding["runtime_id"],
+                    "agent_id": binding["agent_id"],
+                    "binding_epoch": binding["binding_epoch"],
+                    "session_id": payload.get("session_id")
+                    or binding["last_session_id"],
                     "action": action.value,
-                },
-            )
+                    "payload": payload,
+                    "idempotency_key": idempotency_key or command_id,
+                    "request_fingerprint": request_fingerprint,
+                    "status": CommandStatus.QUEUED.value,
+                    "created_at": iso(now),
+                    "expires_at": iso(now + timedelta(seconds=expires_in_seconds)),
+                    "delivered_at": None,
+                    "delivery_attempts": 0,
+                    "updated_at": iso(now),
+                    "result": None,
+                    "error": None,
+                    # A persistent adapter flips this only after its durable
+                    # pre-delivery barrier has committed the record.
+                    "_durable_ready": False,
+                }
+                self.commands[command_id] = selected_command
+                self._append_audit(
+                    "command.queued",
+                    "platform",
+                    {
+                        "command_id": command_id,
+                        "binding_id": binding_id,
+                        "action": action.value,
+                    },
+                )
+            command_id = str(selected_command["command_id"])
+            delivery_device_id = str(selected_command["device_id"])
 
-        await self.deliver_pending(binding["device_id"])
-        return self._public_command(self.commands[command_id])
+        # Durable implementations override this barrier. No command frame may
+        # leave the process until its idempotency record is committed.
+        await self._prepare_command_delivery(command_id)
+        async with self._lock:
+            current = self.commands.get(command_id)
+            if current is None:
+                raise ConnectorError(404, "Command not found")
+            current["_durable_ready"] = True
+        await self.deliver_pending(delivery_device_id)
+        async with self._lock:
+            return self._public_command(self.commands[command_id])
+
+    async def _prepare_command_delivery(self, command_id: str) -> None:
+        """Persistence hook immediately before any command delivery attempt."""
+
+        return None
 
     async def deliver_pending(self, device_id: str) -> int:
         """Deliver queued commands to the active socket without holding the state lock."""
@@ -673,6 +739,8 @@ class ConnectorGateway:
             queued: list[dict[str, Any]] = []
             for command in self.commands.values():
                 if command["device_id"] != device_id or command["status"] != "queued":
+                    continue
+                if not command.get("_durable_ready", True):
                     continue
                 if self._parse_time(command["expires_at"]) <= now:
                     command["status"] = CommandStatus.EXPIRED.value
@@ -715,6 +783,7 @@ class ConnectorGateway:
                                 "delivered_at",
                                 "updated_at",
                                 "request_fingerprint",
+                                "_durable_ready",
                             }
                         },
                     }
@@ -973,6 +1042,8 @@ class ConnectorGateway:
                     422, "runtime event sequence must be a positive integer"
                 )
             supplied_event_id = str(payload.get("event_id", ""))[:128]
+            pending = self.event_pending_sequences.setdefault(device_id, set())
+            watermark = self.event_ack_watermarks.get(device_id, 0)
             for existing in self.events:
                 same_source_id = (
                     bool(supplied_event_id)
@@ -987,14 +1058,24 @@ class ConnectorGateway:
                         device_id, 0
                     )
                     return duplicate
-            pending = self.event_pending_sequences.setdefault(device_id, set())
-            watermark = self.event_ack_watermarks.get(device_id, 0)
+            # Already acknowledged events may be older than the retained
+            # observability window. Pending sequences can also age out while
+            # waiting for a gap. Acknowledge either replay without appending a
+            # duplicate database row.
+            if sequence <= watermark or sequence in pending:
+                return {
+                    "duplicate": True,
+                    "sequence": sequence,
+                    "ack_through_sequence": watermark,
+                }
             if sequence > watermark:
                 pending.add(sequence)
             while watermark + 1 in pending:
                 pending.remove(watermark + 1)
                 watermark += 1
             self.event_ack_watermarks[device_id] = watermark
+            device["event_ack_watermark"] = watermark
+            device["event_pending_sequences"] = sorted(pending)
             event = {
                 "event_id": new_id("event"),
                 "source_event_id": supplied_event_id or None,
@@ -1051,9 +1132,16 @@ class ConnectorGateway:
             ]
             return values[-max(1, min(limit, 500)) :]
 
-    async def list_audit(self, limit: int = 200) -> list[dict[str, Any]]:
+    async def list_audit(
+        self, limit: int = 200, owner_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
         async with self._lock:
-            return [dict(item) for item in self.audit[-max(1, min(limit, 1000)) :]]
+            values = [
+                dict(item)
+                for item in self.audit
+                if owner_id is None or item.get("owner_id") == owner_id
+            ]
+            return values[-max(1, min(limit, 1000)) :]
 
     def _validate_command_payload(
         self, action: CommandAction, payload: dict[str, Any]
@@ -1136,7 +1224,9 @@ class ConnectorGateway:
     @staticmethod
     def _public_command(command: dict[str, Any]) -> dict[str, Any]:
         return {
-            key: value for key, value in command.items() if key != "request_fingerprint"
+            key: value
+            for key, value in command.items()
+            if key != "request_fingerprint" and not key.startswith("_")
         }
 
     def _effective_device_status(self, device: dict[str, Any]) -> str:
@@ -1200,9 +1290,11 @@ class ConnectorGateway:
                 return code
 
     def _append_audit(self, action: str, actor: str, metadata: dict[str, Any]) -> None:
+        owner_id = self._resolve_audit_owner(actor, metadata)
         self.audit.append(
             {
                 "audit_id": new_id("audit"),
+                "owner_id": owner_id,
                 "action": action,
                 "actor": actor,
                 "metadata": metadata,
@@ -1211,6 +1303,44 @@ class ConnectorGateway:
         )
         if len(self.audit) > 10_000:
             del self.audit[:1_000]
+
+    def _resolve_audit_owner(
+        self, actor: str, metadata: dict[str, Any]
+    ) -> Optional[str]:
+        device_id = metadata.get("device_id")
+        device = self.devices.get(str(device_id)) if device_id else None
+        if device:
+            return str(device["owner_id"])
+        binding_id = metadata.get("binding_id")
+        binding = self.bindings.get(str(binding_id)) if binding_id else None
+        if binding:
+            binding_device = self.devices.get(str(binding["device_id"]))
+            if binding_device:
+                return str(binding_device["owner_id"])
+        command_id = metadata.get("command_id")
+        command = self.commands.get(str(command_id)) if command_id else None
+        if command:
+            command_device = self.devices.get(str(command["device_id"]))
+            if command_device:
+                return str(command_device["owner_id"])
+        pairing_id = metadata.get("pairing_id")
+        if pairing_id:
+            pairing = next(
+                (
+                    value
+                    for value in self.pairings.values()
+                    if value["pairing_id"] == pairing_id
+                ),
+                None,
+            )
+            if pairing and pairing.get("owner_id"):
+                return str(pairing["owner_id"])
+        known_owners = {
+            str(value["owner_id"])
+            for value in self.devices.values()
+            if value.get("owner_id")
+        }
+        return actor if actor in known_owners else None
 
     @staticmethod
     def _safe_error(value: Any) -> Optional[dict[str, Any]]:

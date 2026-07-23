@@ -24,6 +24,7 @@ type Client struct {
 	ConnectorVersion string
 	HTTPClient       *http.Client
 	Output           io.Writer
+	OpenBrowser      func(string) error
 }
 
 type pairingResponse struct {
@@ -44,11 +45,12 @@ type exchangeResponse struct {
 }
 
 func (c *Client) Pair(ctx context.Context) (store.Credentials, error) {
-	if c.HTTPClient == nil {
-		c.HTTPClient = &http.Client{Timeout: 15 * time.Second}
-	}
+	c.prepareHTTPClient()
 	if c.Output == nil {
 		c.Output = io.Discard
+	}
+	if c.OpenBrowser == nil {
+		c.OpenBrowser = openBrowser
 	}
 	baseURL, err := validateBaseURL(c.BaseURL)
 	if err != nil {
@@ -58,9 +60,18 @@ func (c *Client) Pair(ctx context.Context) (store.Credentials, error) {
 	if err != nil {
 		return store.Credentials{}, err
 	}
-	fmt.Fprintf(c.Output, "Open %s and enter code %s\n", pairing.VerificationURI, pairing.UserCode)
-	if pairing.VerificationURIComplete != "" {
-		fmt.Fprintf(c.Output, "Direct verification link: %s\n", pairing.VerificationURIComplete)
+	verificationURL := pairing.VerificationURIComplete
+	if verificationURL == "" {
+		verificationURL, err = completeVerificationURL(pairing.VerificationURI, pairing.UserCode)
+		if err != nil {
+			return store.Credentials{}, err
+		}
+	}
+	fmt.Fprintf(c.Output, "Authorize this computer with code %s\n", pairing.UserCode)
+	if err := c.OpenBrowser(verificationURL); err != nil {
+		fmt.Fprintf(c.Output, "Could not open the browser automatically. Open %s\n", verificationURL)
+	} else {
+		fmt.Fprintf(c.Output, "Opened %s in your browser. Waiting for approval...\n", verificationURL)
 	}
 
 	interval := time.Duration(pairing.Interval) * time.Second
@@ -139,12 +150,18 @@ func (c *Client) createPairing(ctx context.Context, baseURL *url.URL) (pairingRe
 		return pairingResponse{}, fmt.Errorf("parse verification_uri: %w", err)
 	}
 	response.VerificationURI = baseURL.ResolveReference(verificationURI).String()
+	if _, err := validateBaseURL(response.VerificationURI); err != nil {
+		return pairingResponse{}, fmt.Errorf("invalid verification_uri: %w", err)
+	}
 	if response.VerificationURIComplete != "" {
 		complete, err := url.Parse(response.VerificationURIComplete)
 		if err != nil {
 			return pairingResponse{}, fmt.Errorf("parse verification_uri_complete: %w", err)
 		}
 		response.VerificationURIComplete = baseURL.ResolveReference(complete).String()
+		if _, err := validateBaseURL(response.VerificationURIComplete); err != nil {
+			return pairingResponse{}, fmt.Errorf("invalid verification_uri_complete: %w", err)
+		}
 	}
 	return response, nil
 }
@@ -203,6 +220,27 @@ func (c *Client) postJSON(ctx context.Context, endpoint *url.URL, body any, targ
 	return response.StatusCode, nil
 }
 
+func (c *Client) prepareHTTPClient() {
+	if c.HTTPClient == nil {
+		c.HTTPClient = &http.Client{Timeout: 15 * time.Second}
+	}
+	clone := *c.HTTPClient
+	previousRedirectPolicy := clone.CheckRedirect
+	clone.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if _, err := validateBaseURL(request.URL.String()); err != nil {
+			return fmt.Errorf("reject insecure enrollment redirect: %w", err)
+		}
+		if previousRedirectPolicy != nil {
+			return previousRedirectPolicy(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	c.HTTPClient = &clone
+}
+
 func validateBaseURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(raw), "/"))
 	if err != nil {
@@ -210,6 +248,9 @@ func validateBaseURL(raw string) (*url.URL, error) {
 	}
 	if parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 		return nil, errors.New("API base URL must use http or https")
+	}
+	if parsed.User != nil {
+		return nil, errors.New("API base URL must not contain user information")
 	}
 	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
 		return nil, errors.New("unencrypted HTTP enrollment is allowed only for localhost")
@@ -236,6 +277,9 @@ func resolveGatewayURL(baseURL *url.URL, raw string) (string, error) {
 		return "", fmt.Errorf("parse ws_url: %w", err)
 	}
 	if reference.Scheme == "ws" || reference.Scheme == "wss" {
+		if err := validateGatewayURL(reference); err != nil {
+			return "", err
+		}
 		return reference.String(), nil
 	}
 	resolved := baseURL.ResolveReference(reference)
@@ -244,7 +288,34 @@ func resolveGatewayURL(baseURL *url.URL, raw string) (string, error) {
 	} else {
 		resolved.Scheme = "ws"
 	}
+	if err := validateGatewayURL(resolved); err != nil {
+		return "", err
+	}
 	return resolved.String(), nil
+}
+
+func completeVerificationURL(raw, userCode string) (string, error) {
+	verificationURL, err := validateBaseURL(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid verification URL: %w", err)
+	}
+	query := verificationURL.Query()
+	query.Set("code", strings.TrimSpace(userCode))
+	verificationURL.RawQuery = query.Encode()
+	return verificationURL.String(), nil
+}
+
+func validateGatewayURL(parsed *url.URL) error {
+	if parsed.Host == "" || (parsed.Scheme != "wss" && parsed.Scheme != "ws") {
+		return errors.New("gateway URL must use ws or wss")
+	}
+	if parsed.User != nil {
+		return errors.New("gateway URL must not contain user information")
+	}
+	if parsed.Scheme == "ws" && !isLoopbackHost(parsed.Hostname()) {
+		return errors.New("unencrypted websocket is allowed only for localhost")
+	}
+	return nil
 }
 
 func isLoopbackHost(host string) bool {

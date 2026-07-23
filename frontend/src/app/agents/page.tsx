@@ -30,9 +30,7 @@ export default function AgentsPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12">
-      <ConnectorConsole
-        arenaAgents={agents.map((agent) => ({ id: agent.id, name: agent.name }))}
-      />
+      <ConnectorConsole />
 
       <section
         id="platform-agents"

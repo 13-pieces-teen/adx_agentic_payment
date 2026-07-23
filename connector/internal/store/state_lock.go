@@ -22,14 +22,14 @@ func prepareStateLockFile(statePath string) (*os.File, string, error) {
 		return nil, "", errors.New("connector state path is required")
 	}
 	lockPath := statePath + ".lock"
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+	if err := ensureConnectorDirectory(filepath.Dir(lockPath)); err != nil {
 		return nil, "", fmt.Errorf("create connector state lock directory: %w", err)
 	}
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, "", fmt.Errorf("open connector state lock %s: %w", lockPath, err)
 	}
-	if err := file.Chmod(0o600); err != nil {
+	if err := secureOpenFile(file, lockPath); err != nil {
 		_ = file.Close()
 		return nil, "", fmt.Errorf("protect connector state lock %s: %w", lockPath, err)
 	}

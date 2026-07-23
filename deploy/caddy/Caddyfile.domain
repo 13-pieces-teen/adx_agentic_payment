@@ -1,0 +1,46 @@
+{
+	admin 127.0.0.1:2019
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+{$ADX_PUBLIC_HOST} {
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	request_body {
+		max_size 10MB
+	}
+
+	handle_path /downloads/* {
+		root * /srv/downloads
+		header Cache-Control "public, max-age=300"
+		file_server
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:8000 {
+			health_uri /api/health
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

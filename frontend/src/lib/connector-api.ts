@@ -100,13 +100,42 @@ interface ApiErrorBody {
   message?: string;
 }
 
+export class ConnectorApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ConnectorApiError';
+  }
+}
+
+function readCookie(name: string): string {
+  if (typeof document === 'undefined') return '';
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie
+    .split(';')
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : '';
+}
+
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || 'GET').toUpperCase();
+  const headers = new Headers(init?.headers);
+  headers.set('Accept', 'application/json');
+  if (init?.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers.has('X-CSRF-Token')) {
+    const csrfToken = readCookie('adx_csrf');
+    if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+  }
+
   const response = await fetch(`${CONNECTOR_API_BASE_URL}${path}`, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
+    credentials: 'include',
+    headers,
   });
 
   if (!response.ok) {
@@ -117,9 +146,13 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
       // The HTTP status still gives the user a useful next step.
     }
 
-    throw new Error(body.detail || body.message || `Connector API returned ${response.status}.`);
+    throw new ConnectorApiError(
+      body.detail || body.message || `Connector API returned ${response.status}.`,
+      response.status,
+    );
   }
 
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -167,6 +200,68 @@ export async function approvePairing(userCode: string, ownerId?: string): Promis
   return apiRequest<Pairing>(`/api/connectors/pairings/${encodeURIComponent(userCode)}/approve`, {
     method: 'POST',
     body: JSON.stringify(ownerId ? { owner_id: ownerId } : {}),
+  });
+}
+
+export interface ConnectorAuthUser {
+  user_id: string;
+  username: string;
+  temporary: boolean;
+}
+
+export interface ConnectorAuthSession {
+  user: ConnectorAuthUser;
+  csrf_token: string;
+}
+
+export async function getConnectorAuthSession(): Promise<ConnectorAuthSession | null> {
+  try {
+    return await apiRequest<ConnectorAuthSession>('/api/auth/session');
+  } catch (error) {
+    if (error instanceof ConnectorApiError && error.status === 401) return null;
+    throw error;
+  }
+}
+
+export async function acceptConnectorInvite(input: {
+  invite_code: string;
+  username: string;
+  password: string;
+}): Promise<ConnectorAuthSession> {
+  return apiRequest<ConnectorAuthSession>('/api/auth/invite', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function loginConnectorUser(input: {
+  username: string;
+  password: string;
+}): Promise<ConnectorAuthSession> {
+  return apiRequest<ConnectorAuthSession>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function approvePairingAuthenticated(
+  userCode: string,
+  csrfToken: string,
+): Promise<Pairing> {
+  return apiRequest<Pairing>(
+    `/api/connectors/pairings/${encodeURIComponent(userCode)}/approve`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function logoutConnectorUser(csrfToken: string): Promise<void> {
+  await apiRequest<void>('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
   });
 }
 

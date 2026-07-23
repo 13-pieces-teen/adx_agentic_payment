@@ -1,0 +1,427 @@
+"""PostgreSQL persistence for production Connector identity and runtime state."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime
+from typing import Any
+
+from .repository import DuplicateIdentityError, InvalidInviteError
+
+
+def _record(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        return json.loads(value)
+    return dict(value)
+
+
+class PostgresConnectorRepository:
+    """Single-writer repository for a one-worker Gateway deployment.
+
+    WebSocket ownership remains process-local. Durable entities are upserted in
+    one transaction, so a restart can reconstruct device, runtime, binding,
+    command, event and audit state without persisting socket objects.
+    """
+
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
+        self._pool: Any = None
+        self._initialize_lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        if self._pool is not None:
+            return
+        async with self._initialize_lock:
+            if self._pool is not None:
+                return
+            try:
+                import asyncpg
+            except ImportError as exc:  # pragma: no cover - deployment dependency
+                raise RuntimeError(
+                    "asyncpg is required for PostgreSQL Connector persistence"
+                ) from exc
+            self._pool = await asyncpg.create_pool(
+                self.database_url,
+                min_size=1,
+                max_size=5,
+                command_timeout=30,
+            )
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    def _require_pool(self) -> Any:
+        if self._pool is None:
+            raise RuntimeError("Connector repository is not initialized")
+        return self._pool
+
+    async def seed_invite(
+        self, token_hash: str, expires_at: datetime | None = None
+    ) -> None:
+        pool = self._require_pool()
+        await pool.execute(
+            """
+            INSERT INTO connector_invites (token_hash, expires_at)
+            VALUES ($1, $2)
+            ON CONFLICT (token_hash) DO NOTHING
+            """,
+            token_hash,
+            expires_at,
+        )
+
+    async def is_invite_available(self, token_hash: str, checked_at: datetime) -> bool:
+        pool = self._require_pool()
+        return bool(
+            await pool.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM connector_invites
+                    WHERE token_hash = $1
+                      AND consumed_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > $2)
+                )
+                """,
+                token_hash,
+                checked_at,
+            )
+        )
+
+    async def consume_invite_and_create_user(
+        self,
+        token_hash: str,
+        user_id: str,
+        username: str,
+        password_hash: str | None,
+        temporary: bool,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                invite = await connection.fetchrow(
+                    """
+                    SELECT token_hash
+                    FROM connector_invites
+                    WHERE token_hash = $1
+                      AND consumed_at IS NULL
+                      AND (expires_at IS NULL OR expires_at > $2)
+                    FOR UPDATE
+                    """,
+                    token_hash,
+                    created_at,
+                )
+                if invite is None:
+                    raise InvalidInviteError
+                try:
+                    user = await connection.fetchrow(
+                        """
+                        INSERT INTO connector_users (
+                            user_id, username, password_hash, temporary, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5)
+                        RETURNING user_id, username, password_hash, temporary,
+                                  created_at, disabled_at
+                        """,
+                        user_id,
+                        username,
+                        password_hash,
+                        temporary,
+                        created_at,
+                    )
+                except Exception as exc:
+                    if getattr(exc, "sqlstate", None) == "23505":
+                        raise DuplicateIdentityError from exc
+                    raise
+                updated = await connection.execute(
+                    """
+                    UPDATE connector_invites
+                    SET consumed_at = $2, consumed_by = $3
+                    WHERE token_hash = $1 AND consumed_at IS NULL
+                    """,
+                    token_hash,
+                    created_at,
+                    user_id,
+                )
+                if updated != "UPDATE 1":
+                    raise InvalidInviteError
+                return dict(user)
+
+    async def get_user_by_username(
+        self, normalized_username: str
+    ) -> dict[str, Any] | None:
+        pool = self._require_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT user_id, username, password_hash, temporary, created_at, disabled_at
+            FROM connector_users
+            WHERE username = $1
+            """,
+            normalized_username,
+        )
+        return dict(row) if row else None
+
+    async def create_session(
+        self,
+        token_hash: str,
+        user_id: str,
+        csrf_hash: str,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> None:
+        pool = self._require_pool()
+        await pool.execute(
+            """
+            INSERT INTO connector_sessions (
+                token_hash, user_id, csrf_hash, created_at, expires_at
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            token_hash,
+            user_id,
+            csrf_hash,
+            created_at,
+            expires_at,
+        )
+
+    async def get_session(self, token_hash: str) -> dict[str, Any] | None:
+        pool = self._require_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT s.token_hash, s.user_id, s.csrf_hash, s.created_at,
+                   s.expires_at, s.revoked_at, u.username, u.password_hash,
+                   u.temporary, u.disabled_at
+            FROM connector_sessions s
+            JOIN connector_users u ON u.user_id = s.user_id
+            WHERE s.token_hash = $1
+            """,
+            token_hash,
+        )
+        return dict(row) if row else None
+
+    async def revoke_session(self, token_hash: str, revoked_at: datetime) -> None:
+        pool = self._require_pool()
+        await pool.execute(
+            """
+            UPDATE connector_sessions
+            SET revoked_at = COALESCE(revoked_at, $2)
+            WHERE token_hash = $1
+            """,
+            token_hash,
+            revoked_at,
+        )
+
+    async def load_gateway_state(self) -> dict[str, Any]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            tables = (
+                ("pairings", "connector_pairings", "created_at"),
+                ("devices", "connector_devices", "created_at"),
+                ("bindings", "connector_bindings", "created_at"),
+                ("commands", "connector_commands", "created_at"),
+            )
+            state: dict[str, Any] = {}
+            for key, table, order_by in tables:
+                rows = await connection.fetch(
+                    f"SELECT record FROM {table} ORDER BY {order_by} ASC"
+                )
+                state[key] = [_record(row["record"]) for row in rows]
+            for key, table, order_by in (
+                ("events", "connector_events", "received_at"),
+                ("audit", "connector_audit", "occurred_at"),
+            ):
+                rows = await connection.fetch(
+                    f"""
+                    SELECT record
+                    FROM (
+                        SELECT record, {order_by}
+                        FROM {table}
+                        ORDER BY {order_by} DESC
+                        LIMIT 10000
+                    ) retained
+                    ORDER BY {order_by} ASC
+                    """
+                )
+                state[key] = [_record(row["record"]) for row in rows]
+            return state
+
+    async def save_gateway_state(self, state: dict[str, Any]) -> None:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                for pairing in state["pairings"]:
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_pairings (
+                            pairing_id, user_code, owner_id, device_code_hash,
+                            status, created_at, expires_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+                        ON CONFLICT (pairing_id) DO UPDATE SET
+                            owner_id = EXCLUDED.owner_id,
+                            device_code_hash = EXCLUDED.device_code_hash,
+                            status = EXCLUDED.status,
+                            expires_at = EXCLUDED.expires_at,
+                            record = EXCLUDED.record
+                        """,
+                        pairing["pairing_id"],
+                        pairing["user_code"],
+                        pairing.get("owner_id"),
+                        pairing.get("device_code_hash"),
+                        pairing["status"],
+                        pairing["created_at"],
+                        pairing["expires_at"],
+                        json.dumps(pairing),
+                    )
+                for device in state["devices"]:
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_devices (
+                            device_id, owner_id, token_hash, status, created_at,
+                            revoked_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+                        ON CONFLICT (device_id) DO UPDATE SET
+                            owner_id = EXCLUDED.owner_id,
+                            token_hash = EXCLUDED.token_hash,
+                            status = EXCLUDED.status,
+                            revoked_at = EXCLUDED.revoked_at,
+                            record = EXCLUDED.record
+                        """,
+                        device["device_id"],
+                        device["owner_id"],
+                        device["token_hash"],
+                        device["status"],
+                        device["created_at"],
+                        device.get("revoked_at"),
+                        json.dumps(device),
+                    )
+                    await connection.execute(
+                        "DELETE FROM connector_runtimes WHERE device_id = $1",
+                        device["device_id"],
+                    )
+                    for runtime in device.get("runtimes", []):
+                        await connection.execute(
+                            """
+                            INSERT INTO connector_runtimes (
+                                device_id, runtime_id, kind, available, record
+                            )
+                            VALUES ($1,$2,$3,$4,$5::jsonb)
+                            """,
+                            device["device_id"],
+                            runtime["runtime_id"],
+                            runtime["kind"],
+                            runtime.get("available", True),
+                            json.dumps(runtime),
+                        )
+                for binding in state["bindings"]:
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_bindings (
+                            binding_id, device_id, runtime_id, agent_id, status,
+                            created_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+                        ON CONFLICT (binding_id) DO UPDATE SET
+                            status = EXCLUDED.status, record = EXCLUDED.record
+                        """,
+                        binding["binding_id"],
+                        binding["device_id"],
+                        binding["runtime_id"],
+                        binding["agent_id"],
+                        binding["status"],
+                        binding["created_at"],
+                        json.dumps(binding),
+                    )
+                for command in state["commands"]:
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_commands (
+                            command_id, binding_id, device_id, status, action,
+                            idempotency_key, created_at, expires_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+                        ON CONFLICT (command_id) DO UPDATE SET
+                            status = EXCLUDED.status, record = EXCLUDED.record
+                        """,
+                        command["command_id"],
+                        command["binding_id"],
+                        command["device_id"],
+                        command["status"],
+                        command["action"],
+                        command["idempotency_key"],
+                        command["created_at"],
+                        command["expires_at"],
+                        json.dumps(command),
+                    )
+                for event in state["events"]:
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_events (
+                            event_id, device_id, binding_id, sequence,
+                            event_type, received_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+                        ON CONFLICT (event_id) DO NOTHING
+                        """,
+                        event["event_id"],
+                        event["device_id"],
+                        event["binding_id"],
+                        event["sequence"],
+                        event["event_type"],
+                        event["received_at"],
+                        json.dumps(event),
+                    )
+                for item in state["audit"]:
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_audit (
+                            audit_id, owner_id, action, actor, occurred_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+                        ON CONFLICT (audit_id) DO NOTHING
+                        """,
+                        item["audit_id"],
+                        item.get("owner_id"),
+                        item["action"],
+                        item["actor"],
+                        item["occurred_at"],
+                        json.dumps(item),
+                    )
+                # Pairing codes are short-lived, unauthenticated ingress state.
+                # Purging terminal expired rows keeps snapshot writes bounded.
+                await connection.execute(
+                    """
+                    DELETE FROM connector_pairings
+                    WHERE status IN ('pending', 'approved', 'expired')
+                      AND expires_at <= now()
+                    """
+                )
+                # Match the in-memory observability window. These tables are
+                # append-only, so prune oldest rows after each incremental
+                # write and keep restart memory/disk use bounded.
+                await connection.execute(
+                    """
+                    DELETE FROM connector_events
+                    WHERE event_id IN (
+                        SELECT event_id
+                        FROM connector_events
+                        ORDER BY received_at DESC, event_id DESC
+                        OFFSET 10000
+                    )
+                    """
+                )
+                await connection.execute(
+                    """
+                    DELETE FROM connector_audit
+                    WHERE audit_id IN (
+                        SELECT audit_id
+                        FROM connector_audit
+                        ORDER BY occurred_at DESC, audit_id DESC
+                        OFFSET 10000
+                    )
+                    """
+                )
