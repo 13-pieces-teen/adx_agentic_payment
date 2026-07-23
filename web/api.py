@@ -467,7 +467,210 @@ def create_app() -> FastAPI:
 
 
 # ============================================================
-# Run with: uvicorn web.api:create_app --factory --reload
+# Supabase-Backed Variant
+# ============================================================
+
+def create_app_with_db(db=None):
+    """
+    Create the FastAPI app with Supabase persistence.
+
+    Args:
+        db: ADXSupabase instance. If None, reads SUPABASE_URL/SUPABASE_ANON_KEY from env.
+
+    Usage:
+        uvicorn web.api:create_app_with_db --factory --reload
+
+    Env vars:
+        SUPABASE_URL     — https://xxx.supabase.co
+        SUPABASE_ANON_KEY — eyJhbG...
+    """
+    if db is None:
+        from db.client import ADXSupabase
+        db = ADXSupabase()
+        db.connect()
+
+    app = FastAPI(
+        title="ADX Agent Arena",
+        description="Agent-to-Agent Resource Trading Platform — Supabase Edition",
+        version="0.2.0",
+    )
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+    # Use DB-backed stores
+    registry = db.agents
+    orderbook = db.orderbook
+    # Arena still uses in-memory for negotiation sessions (DB used for persistence)
+    from matching.agent import AgentRegistry as MemRegistry
+    from matching.arena import Arena
+    mem_registry = MemRegistry()  # Arena needs AgentRegistration objects in memory
+    arena = Arena(mem_registry)
+    negotiation = NegotiationProtocol(arena=arena)
+
+    # Agent endpoints
+    @app.post("/api/agents/register")
+    async def register_agent(req: RegisterAgentRequest):
+        agent_id = f"agent_{uuid.uuid4().hex[:12]}"
+        data = {
+            "agent_id": agent_id,
+            "owner_id": f"user_{uuid.uuid4().hex[:8]}",  # TODO: real auth
+            "name": req.name,
+            "description": req.description,
+            "llm_provider": req.llm_provider,
+            "llm_model": req.llm_model,
+            "negotiation_style": req.negotiation_style,
+            "strategy_description": req.strategy_description,
+            "tradable_assets": req.tradable_assets,
+            "trade_direction": req.trade_direction,
+            "status": "online",
+        }
+        registry.register(data)
+        return {"agent_id": agent_id, **data}
+
+    @app.get("/api/agents")
+    async def list_agents(asset_class: str = "", min_elo: float = 0):
+        if asset_class:
+            agents = registry.find_by_asset(asset_class, min_elo=min_elo)
+        else:
+            result = db.client.table('agents').select('*').execute()
+            agents = result.data
+        return {"total": len(agents), "agents": agents}
+
+    @app.get("/api/agents/{agent_id}")
+    async def get_agent(agent_id: str):
+        agent = registry.get(agent_id)
+        if not agent:
+            raise HTTPException(404, "Agent not found")
+        return agent
+
+    @app.post("/api/agents/{agent_id}/heartbeat")
+    async def agent_heartbeat(agent_id: str):
+        registry.heartbeat(agent_id)
+        return {"status": "ok"}
+
+    # Listing endpoints
+    @app.post("/api/listings")
+    async def create_listing(req: CreateListingRequest):
+        agent = registry.get(req.seller_agent_id)
+        if not agent:
+            raise HTTPException(404, "Agent not found")
+        listing_id = f"list_{uuid.uuid4().hex[:10]}"
+        data = {
+            "listing_id": listing_id,
+            "seller_agent_id": req.seller_agent_id,
+            "seller_name": agent.get('name', ''),
+            "asset_class": req.asset_class,
+            "title": req.title,
+            "description": req.description,
+            "quantity": req.quantity,
+            "unit": req.unit,
+            "price_range": {
+                "min": req.min_price, "ideal": req.ideal_price, "max": req.max_price,
+                "currency": req.currency,
+            },
+            "tags": req.tags,
+        }
+        orderbook.publish_listing(data)
+        return {"listing_id": listing_id, **data}
+
+    @app.get("/api/listings")
+    async def get_listings(asset_class: str = "", available_only: bool = True):
+        listings = orderbook.get_listings(asset_class, available_only)
+        return {"total": len(listings), "listings": listings}
+
+    # Intents
+    @app.post("/api/intents")
+    async def create_intent(req: CreateIntentRequest):
+        agent = registry.get(req.agent_id)
+        if not agent:
+            raise HTTPException(404, "Agent not found")
+        intent_id = uuid.uuid4().hex
+        data = {
+            "id": intent_id, "agent_id": req.agent_id,
+            "agent_name": agent.get('name', ''),
+            "intent_type": req.intent_type, "asset_class": req.asset_class,
+            "description": req.description, "quantity": req.quantity,
+            "min_price": req.min_price, "ideal_price": req.ideal_price,
+            "max_price": req.max_price, "currency": req.currency,
+            "max_rounds": req.max_rounds, "auto_accept_threshold_pct": req.auto_accept_pct,
+            "negotiation_style": agent.get('negotiation_style', 'balanced'),
+            "tags": req.tags, "listing_id": req.listing_id, "ttl_seconds": 3600,
+        }
+        orderbook.publish(data)
+        return {"intent_id": intent_id, "intent_type": req.intent_type, "matches_found": 0, "matches": []}
+
+    @app.get("/api/intents/{intent_id}/matches")
+    async def get_matches(intent_id: str, top_k: int = 10):
+        intent = orderbook.get(intent_id)
+        if not intent:
+            raise HTTPException(404, "Intent not found")
+        # Find matching counterparties
+        opposite = "sell" if intent['intent_type'] == "buy" else "buy"
+        candidates = orderbook.find_active_intents(opposite, intent['asset_class'])
+        # Simple price overlap filter
+        matches = []
+        for c in candidates:
+            buy = intent if intent['intent_type'] == "buy" else c
+            sell = c if intent['intent_type'] == "buy" else intent
+            if buy['max_price'] >= sell['min_price'] and buy['min_price'] <= sell['max_price']:
+                zone_low = max(buy['min_price'], sell['min_price'])
+                zone_high = min(buy['max_price'], sell['max_price'])
+                matches.append({
+                    "match_id": f"match_{uuid.uuid4().hex[:10]}",
+                    "score": 85.0,
+                    "price_zone": [zone_low, zone_high],
+                    "buyer": buy.get('agent_name', ''),
+                    "seller": sell.get('agent_name', ''),
+                })
+        return {"intent_id": intent_id, "matches": matches[:top_k]}
+
+    # Arena (read from DB)
+    @app.get("/api/arena/leaderboard")
+    async def get_leaderboard(asset_class: str = "", min_battles: int = 0, limit: int = 50):
+        entries = db.leaderboard.rank(asset_class, min_battles, limit)
+        return {"total": len(entries), "leaderboard": entries}
+
+    @app.get("/api/arena/battles")
+    async def get_battle_feed(limit: int = 20):
+        battles = db.leaderboard.battle_feed(limit)
+        return {"total": len(battles), "battles": battles}
+
+    @app.get("/api/arena/agents/{agent_id}/history")
+    async def get_agent_history(agent_id: str, limit: int = 20):
+        history = db.leaderboard.agent_history(agent_id, limit)
+        agent = registry.get(agent_id)
+        return {
+            "agent_id": agent_id,
+            "agent_name": agent.get('name', 'unknown') if agent else 'unknown',
+            "elo": agent.get('elo_rating', 0) if agent else 0,
+            "history": history,
+        }
+
+    @app.get("/api/arena/stats")
+    async def get_arena_stats():
+        return {
+            "agents": db.agents.stats,
+            "orderbook": db.orderbook.stats,
+            "battles": db.leaderboard.stats,
+        }
+
+    @app.get("/api/health")
+    async def health():
+        return {
+            "status": "ok",
+            "version": "0.2.0-supabase",
+            "agents": db.agents.stats,
+            "listings": db.orderbook.stats,
+            "battles": db.leaderboard.stats,
+        }
+
+    return app
+
+
+# ============================================================
+# Run
+# ============================================================
+# Local dev (in-memory):    uvicorn web.api:create_app --factory --reload
+# Production (Supabase):     uvicorn web.api:create_app_with_db --factory --reload
 # ============================================================
 if __name__ == "__main__":
     import uvicorn
