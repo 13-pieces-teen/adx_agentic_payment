@@ -1,32 +1,89 @@
-# Facilitator — 自建 x402 结算服务 (SETTLE-004)
+# Custom EIP-3009 Relay (SETTLE-004)
 
-拿买方离线签名的 EIP-3009 授权，用 facilitator 私钥代付 gas，在 Injective EVM 上
-调 `mUSDC.transferWithAuthorization` 完成结算。买方/卖方零 gas。
+This Express service accepts a buyer's offline EIP-3009 authorization and uses
+the relay wallet to submit `mUSDC.transferWithAuthorization` on Injective EVM
+testnet. The relay pays INJ gas; buyer and payee do not submit transactions.
 
-## 启动
+## Protocol boundary
+
+This is a custom payment relay, not yet a complete x402 facilitator:
+
+- it does not issue or consume an HTTP `402` challenge;
+- it does not exchange `PaymentRequirements` or x402 payment headers;
+- it does not use `@x402/*` packages;
+- its request and response bodies are project-specific.
+
+## Start
+
+Create `settlement/.env` first; the process reads that file and
+`settlement/deployments.json`.
 
 ```bash
+cd agent-arena/settlement/facilitator
 npm install
-npm start          # 默认 :4021，读 ../.env 和 ../deployments.json
+npm start
 ```
 
-## 端点
+The default port is `4021`. Override it with `FACILITATOR_PORT`.
 
-| 方法 | 路由 | 说明 |
-|------|------|------|
-| GET | `/health` | 存活 + facilitator INJ 余额 |
-| POST | `/verify` | 预检（不上链）：nonce 未用 + 余额足 + 未过期 |
-| POST | `/settle` | 代付 gas 上链结算，返回 tx hash |
-| POST | `/faucet` | `{to}` → 发 1000 mUSDC（expo 现场领币）|
+## Endpoints
 
-`/settle` 和 `/faucet` body = SETTLE-003 产出的 `PaymentAuthorization`（settle）或 `{to}`（faucet）。
+| Method | Route | Implemented behavior |
+|---|---|---|
+| `GET` | `/health` | Returns relay address, INJ balance, token address, and chain ID |
+| `POST` | `/verify` | Checks expiry, token nonce state, and buyer token balance |
+| `POST` | `/settle` | Runs `/verify`, then submits `transferWithAuthorization` |
+| `POST` | `/faucet` | Calls the public mUSDC `faucet(to)` |
 
-## 设计要点
+`/settle` accepts the SETTLE-003 `PaymentAuthorization` JSON object.
+`/faucet` accepts:
 
-- **串行队列**：facilitator 单账户发交易，`/settle` 串行执行避免 nonce 冲突。
-- **legacy tx + gasPrice×3**（D7）；**blockscout 轮询确认**（不用 viem 回执，见 SETTLE-002.5 坑2）。
-- `/settle` 前先 `/verify` 预检，明知失败不烧 gas。
+```json
+{ "to": "0x..." }
+```
 
-## 验证
+## What `/verify` does and does not verify
 
-见 `../sdk/scripts/e2e.ts`（SETTLE-005）：一条命令跑通 签名→结算→防重放。
+It currently checks:
+
+- `validBefore` is later than the relay's current time;
+- `authorizationState[from][nonce]` is unused;
+- `balanceOf(from)` is at least `value`.
+
+It does not currently:
+
+- recover the EIP-712 signature;
+- check `validAfter`;
+- constrain `token` to the configured mUSDC address;
+- validate the supplied `chainId`;
+- bind `to`, `value`, or an order ID to server-side requirements.
+
+The mUSDC contract verifies the EIP-712 signature during `/settle`. An invalid
+authorization may therefore pass the precheck, revert on-chain, and still cost
+the relay gas.
+
+## Transaction behavior
+
+- Transactions use legacy type `0`.
+- The relay queries the current gas price and multiplies it by `3`.
+- One relay account submits writes through a serial promise queue to reduce
+  transaction-nonce conflicts.
+- Confirmation is polled through the Injective testnet Blockscout API.
+- `/settle` transfers the complete signed `value` to the signed `to` address.
+- There is no escrow, refund, release, or on-chain platform fee.
+
+## Verification
+
+With the relay running, the SDK E2E signs, settles, checks balance deltas, and
+re-submits the same authorization to test EIP-3009 nonce rejection:
+
+```bash
+cd agent-arena/settlement/sdk
+FACILITATOR_URL=http://localhost:4021 npm run e2e
+```
+
+This command performs a state-changing testnet transaction and requires
+explicit human confirmation.
+
+The recorded successful relay transaction is:
+`0x2458782ea387e981fde73b50bb00880736a7ec5953d50679096be72d0f9cef55`.

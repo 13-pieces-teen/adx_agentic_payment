@@ -1,0 +1,171 @@
+# Injective Documentation MCP Server
+
+> Connect AI agents and AI assistants to Injective documentation over MCP for context aware and up-to-date access to Injective's knowledge base.
+
+- Official source: [https://docs.injective.network/developers-ai/documentation-mcp](https://docs.injective.network/developers-ai/documentation-mcp)
+- Last source change: `2026-03-31`
+- Snapshot captured: `2026-07-23`
+- Upstream revision: [`1a31f4937cce`](https://github.com/InjectiveLabs/injective-docs/commit/1a31f4937cce679b1bf5542743dc1e223289d248)
+
+---
+
+The Injective documentation provides a Model Context Protocol (MCP) server that allows AI assistants like
+Claude, Cursor, and other MCP-compatible tools to **search and retrieve information** from the Injective docs.
+
+This is powerful not only for documentation search, but also useful when **used in combination**
+with other MCP servers and with AI agents.
+For example, you could add vibe code Injective applications by connecting your agentic development tools, such as Cursor,
+using this MCP server to **add Injective-specific knowledge** to the LLM's general-purpose software writing abilities.
+Details on how to configure your developer tools are included below.
+
+Teach your AI tools how to use this MCP server via
+the [Injective MCP Servers Skill](./injective-mcp-servers-skill.md).
+
+## What is MCP?
+
+[MCP](https://modelcontextprotocol.io/introduction) is an **open standard** that enables
+ AI assistants to connect to external data sources and tools.
+Instead of relying solely on training data, AI assistants can use MCP to access real-time,
+authoritative information directly from documentation.
+
+## Why use the Injective Documentation MCP server?
+
+When you connect an AI assistant to the Injective MCP server, it can:
+
+- Search the complete Injective documentation
+- Find code examples, API references, and guides
+- Answer questions with up-to-date information
+- Provide direct links to relevant documentation pages
+
+This is particularly useful when building on Injective, as the AI can help you find the right documentation
+for your specific use case.
+
+## MCP server details
+
+| Property | Value |
+|----------|-------|
+| Endpoint | `https://docs.injective.network/mcp` |
+| Transport | HTTP (Streamable HTTP) |
+| Available tool | `SearchInjectiveDocs` |
+
+## Connecting to the MCP server
+
+### All MCP clients
+
+    For MCP-compatible clients, use the endpoint URL directly:
+
+    ```
+    https://docs.injective.network/mcp
+    ```
+
+    The server uses Streamable HTTP transport, which is supported by most modern MCP clients.
+### Cursor
+
+    Add the MCP server in Cursor's settings:
+
+    1. Open Cursor Settings
+    2. Navigate to **Features** 鈫?**MCP Servers**
+    3. Click **Add new MCP server**
+    4. Enter the following:
+       - **Name**: `injective-docs`
+       - **Type**: `command`
+       - **Command**: `npx mcp-remote https://docs.injective.network/mcp`
+### Claude Desktop
+
+    Add the following to your Claude Desktop configuration file:
+
+#### macOS
+
+        Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+        ```json
+        {
+          "mcpServers": {
+            "injective-docs": {
+              "command": "npx",
+              "args": [
+                "mcp-remote",
+                "https://docs.injective.network/mcp"
+              ]
+            }
+          }
+        }
+        ```
+#### Windows
+
+        Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+
+        ```json
+        {
+          "mcpServers": {
+            "injective-docs": {
+              "command": "npx",
+              "args": [
+                "mcp-remote",
+                "https://docs.injective.network/mcp"
+              ]
+            }
+          }
+        }
+        ```
+
+    After saving the configuration, restart Claude Desktop. The Injective Docs tool will appear in Claude's available tools.
+
+## Using the MCP server
+
+Once connected, you can ask your AI assistant questions about Injective.
+The assistant will automatically use the `SearchInjectiveDocs` tool to find relevant information.
+
+**Example prompts:**
+
+- "How do I create a wallet on Injective?"
+- "Show me how to deploy an EVM smart contract"
+- "What are the network endpoints for Injective mainnet?"
+- "How do I use the Token Factory module?"
+- "Explain how margin trading works on Injective"
+
+The AI will search the documentation and provide answers with links to the relevant pages.
+
+## MCP Tool reference
+
+### `SearchInjectiveDocs`
+
+Searches across the Injective documentation to find relevant information.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | The search query to find relevant documentation |
+
+**Returns:**
+
+Contextual content with titles and direct links to documentation pages.
+The tool performs a semantic search across the entire Injective documentation corpus,
+matching your query against page content, headings, and code examples.
+Results are ranked by relevance and returned with extracted snippets that best answer your query,
+along with source URLs for further reading.
+
+**Example:**
+
+Request:
+```json
+{
+  "tool": "SearchInjectiveDocs",
+  "arguments": {
+    "query": "how to create a token using token factory"
+  }
+}
+```
+
+Response:
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "# Token Factory\n\nThe Token Factory module allows you to create and manage custom tokens on Injective...\n\n## Creating a Token\n\nTo create a new token, use the `tokenfactory/create-denom` message...\n\nSource: https://docs.injective.network/developers/concepts/token-factory"
+    }
+  ]
+}
+```
