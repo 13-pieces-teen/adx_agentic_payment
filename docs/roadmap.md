@@ -1,5 +1,29 @@
 # Arena 402 Roadmap
 
+## Clean-slate implementation status
+
+- [x] Milestone 1: King's Pawnhouse world, four goods, exact 20-gold
+  portfolios, restricted event DSL, round state, valuation, and ranking.
+- [x] Milestone 2: PostgreSQL pool entries, database-clock FCFS pairing,
+  three-turn public negotiation, deterministic Rule Runtime, dev HTTP control,
+  and public timeline.
+- [ ] Milestone 3: two Hosted Agents through durable AgentTask/Result workers.
+- [ ] Milestone 4: accepted negotiation to testnet settlement and
+  confirmation-gated inventory commit.
+- [ ] Milestone 5: production worker/Secret Manager boundaries and operating
+  guide.
+
+The Milestone 2 demonstration is:
+
+```powershell
+docker compose -f docker-compose.local.yml up --build -d
+python scripts/run_rule_pawnhouse_demo.py
+```
+
+An accepted negotiation is deliberately terminal only at
+`accepted_pending_settlement`; no balance or holding changes before confirmed
+settlement.
+
 > 状态：当前跨模块实施状态与建议顺序。
 
 Arena 402 已具备 matching、Connector 和 settlement 三个基础，但新定义的

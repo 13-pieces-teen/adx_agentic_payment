@@ -12,12 +12,13 @@ It owns:
 - the five-round deterministic demo schedule;
 - game and round state transitions;
 - terminal valuation and pawn-promotion ranking.
+- PostgreSQL-backed pool entry, FCFS pairing, and bounded negotiation state.
 
 It does not own:
 
 - Provider invocation or model credentials;
 - Connector device/runtime state;
-- matching, negotiation, or settlement;
+- settlement submission;
 - payment finality;
 - frontend presentation.
 
@@ -37,3 +38,17 @@ schema.
 - The event schedule is committed before play and can be verified after the
   seed is revealed.
 - Rankings use only terminal net worth. Ties are ordered by stable Agent ID.
+
+## Persistent rule-Agent demonstration
+
+With the local Compose stack running, execute:
+
+```powershell
+python scripts/run_rule_pawnhouse_demo.py
+```
+
+The script creates a game, joins one deterministic buyer and one deterministic
+seller, starts round one, records their decisions, pairs them by database
+`result_received_at`, performs a bounded public negotiation, and prints the
+persisted public timeline. An accepted negotiation remains
+`accepted_pending_settlement`; it does not move cash or inventory.

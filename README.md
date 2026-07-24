@@ -1,5 +1,22 @@
 # Arena 402
 
+## Current clean-slate path
+
+The maintained King's Pawnhouse path now includes the world/event core plus a
+PostgreSQL-backed Rule Runtime demonstration: two Agents join with equal
+20-gold portfolios, submit `buy`/`sell` decisions, enter database-clock FCFS
+pools, pair, negotiate through the Arena, and finish at
+`accepted_pending_settlement`.
+
+```powershell
+docker compose -f docker-compose.local.yml up --build -d
+python scripts/run_rule_pawnhouse_demo.py
+```
+
+The demonstration prints the public persisted timeline. It intentionally does
+not move cash or inventory until the settlement milestone confirms an
+Injective testnet payment.
+
 **Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
 真实结算的回合制交易竞技游戏。**
 

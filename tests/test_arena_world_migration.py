@@ -5,6 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SQL_PATH = ROOT / "db" / "migrations" / "006_arena_world_game_core.sql"
+MARKET_SQL_PATH = (
+    ROOT / "db" / "migrations" / "007_arena_market_negotiation.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -47,3 +50,23 @@ def test_world_migration_keeps_runtime_roles_least_privileged() -> None:
     ]
     assert all("INSERT" not in line and "UPDATE" not in line for line in api_grants)
 
+
+def test_market_migration_defines_fcfs_and_bounded_negotiation_state() -> None:
+    sql = MARKET_SQL_PATH.read_text(encoding="utf-8")
+    required = (
+        "CREATE TABLE arena402.rule_runtime_configs",
+        "CREATE TABLE arena402.pool_entries",
+        "CREATE TABLE arena402.pairings",
+        "CREATE TABLE arena402.negotiations",
+        "CREATE TABLE arena402.negotiation_messages",
+        "CREATE TABLE arena402.royal_orders",
+    )
+    assert all(item in sql for item in required)
+    assert "result_received_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()" in sql
+    assert "result_received_at,\n        pool_entry_id" in sql
+    assert "max_turns BETWEEN 2 AND 6" in sql
+    assert "UNIQUE (negotiation_id, turn_sequence)" in sql
+    assert "source_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "fixed_trade_quantity" not in sql
+    assert " REAL" not in sql.upper()
+    assert "DOUBLE PRECISION" not in sql.upper()

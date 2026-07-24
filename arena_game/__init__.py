@@ -20,6 +20,14 @@ from .game import (
 )
 from .goods import GOODS, GOOD_IDS, INITIAL_PRICES, GoodDefinition, GoodId
 from .money import GOLD_SCALE, MoneyError, apply_basis_points, format_gold, gold
+from .market import MarketError, MarketSide, Pairing, PoolEntry, fcfs_pair
+from .negotiation import (
+    Negotiation,
+    NegotiationAction,
+    NegotiationError,
+    NegotiationStatus,
+    NegotiationTurn,
+)
 from .portfolio import (
     INITIAL_NET_WORTH_ATOMIC,
     Portfolio,
@@ -27,8 +35,10 @@ from .portfolio import (
     normalize_holdings,
     portfolio_value,
 )
+from .postgres import PawnhouseRepositoryError, PostgresPawnhouseRepository
 from .presets import DEMO_EVENT_IDS, MVP_EVENT_CATALOG, demo_events
 from .ranking import RankingEntry, calculate_rankings, promotion_tier
+from .rule_runtime import RuleDecision, RuleRuntime, RuleStrategy
 
 __all__ = [
     "DEMO_EVENT_IDS",
@@ -48,10 +58,24 @@ __all__ = [
     "GoodDefinition",
     "GoodId",
     "MoneyError",
+    "MarketError",
+    "MarketSide",
+    "Pairing",
+    "PoolEntry",
+    "Negotiation",
+    "NegotiationAction",
+    "NegotiationError",
+    "NegotiationStatus",
+    "NegotiationTurn",
     "PawnhouseGame",
+    "PawnhouseRepositoryError",
     "Portfolio",
     "PortfolioError",
+    "PostgresPawnhouseRepository",
     "RankingEntry",
+    "RuleDecision",
+    "RuleRuntime",
+    "RuleStrategy",
     "RoundPhase",
     "RoyalOrder",
     "WorldEvent",
@@ -61,6 +85,7 @@ __all__ = [
     "calculate_rankings",
     "demo_events",
     "format_gold",
+    "fcfs_pair",
     "gold",
     "normalize_holdings",
     "portfolio_value",

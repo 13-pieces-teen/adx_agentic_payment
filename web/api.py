@@ -49,6 +49,7 @@ from connector_gateway import (
 )
 from connector_gateway.auth import AuthError, AuthPrincipal
 from arena_core import PostgresArenaParticipationRepository
+from arena_game import PostgresPawnhouseRepository
 from hosted_agent_control_plane import (
     CapabilityCatalogService,
     LocalHostedControlBundle,
@@ -59,6 +60,7 @@ from hosted_agent_control_plane import (
 from hosted_agent_runtime import CapabilityRegistry
 from web.hosted_agent_api import create_hosted_agent_router
 from web.arena_participation_api import create_arena_participation_router
+from web.pawnhouse_api import create_pawnhouse_router
 
 
 # ============================================================
@@ -225,6 +227,13 @@ def _arena_participation_requested() -> bool:
     ).strip().lower() in {"1", "true", "yes"}
 
 
+def _pawnhouse_dev_requested() -> bool:
+    return os.getenv(
+        "ADX_ARENA_DEV_CONTROL",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _allowed_origins(production: bool) -> list[str]:
     configured = [
         value.strip().rstrip("/")
@@ -250,6 +259,11 @@ def _allowed_origins(production: bool) -> list[str]:
 
 def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     production_connector = _production_connector_enabled(connector_demo_enabled)
+    environment = os.getenv("ADX_ENV", "").strip().lower()
+    if _pawnhouse_dev_requested() and environment != "development":
+        raise RuntimeError(
+            "ADX_ARENA_DEV_CONTROL is allowed only with ADX_ENV=development"
+        )
     if _hosted_local_dev_requested() and not _hosted_agents_requested():
         raise RuntimeError(
             "ADX_HOSTED_LOCAL_DEV requires ADX_HOSTED_AGENTS_ENABLED=true"
@@ -294,6 +308,22 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         arena_participation = PostgresArenaParticipationRepository(
             arena_participation_dsn
         )
+    pawnhouse_repository: PostgresPawnhouseRepository | None = None
+    pawnhouse_dev_token = ""
+    if _pawnhouse_dev_requested():
+        pawnhouse_dsn = os.getenv(
+            "ADX_ARENA_CORE_DATABASE_URL",
+            "",
+        ).strip()
+        if not pawnhouse_dsn:
+            raise RuntimeError(
+                "ADX_ARENA_CORE_DATABASE_URL is required for Pawnhouse dev control"
+            )
+        pawnhouse_dev_token = os.getenv(
+            "ADX_ARENA_DEV_TOKEN",
+            "",
+        ).strip()
+        pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -303,9 +333,13 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await hosted_bundle.initialize()
         if arena_participation is not None:
             await arena_participation.initialize()
+        if pawnhouse_repository is not None:
+            await pawnhouse_repository.initialize()
         try:
             yield
         finally:
+            if pawnhouse_repository is not None:
+                await pawnhouse_repository.close()
             if arena_participation is not None:
                 await arena_participation.close()
             if hosted_bundle is not None:
@@ -331,6 +365,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "Content-Type",
             "Idempotency-Key",
             "X-CSRF-Token",
+            "X-Arena-Dev-Token",
         ],
     )
 
@@ -376,6 +411,15 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             create_arena_participation_router(
                 auth=connector_bundle.auth,
                 repository=arena_participation,
+            )
+        )
+
+    if pawnhouse_repository is not None:
+        app.state.pawnhouse_repository = pawnhouse_repository
+        app.include_router(
+            create_pawnhouse_router(
+                repository=pawnhouse_repository,
+                dev_token=pawnhouse_dev_token,
             )
         )
 
@@ -811,6 +855,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "agents": registry.stats,
             "orderbook": orderbook.stats,
             "battles": arena.leaderboard.stats,
+            "pawnhouse_dev_control": pawnhouse_repository is not None,
         }
 
     # ========================================================
@@ -826,6 +871,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "agents": registry.stats,
             "listings": orderbook.stats,
             "battles": arena.leaderboard.stats,
+            "pawnhouse_dev_control": pawnhouse_repository is not None,
         }
 
     return app
