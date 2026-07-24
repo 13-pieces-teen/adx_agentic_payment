@@ -54,7 +54,6 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `matching/`, `web/` | 现有内存 matching、negotiation 和 Arena/ELO 原型 |
 | `db/` | 旧版 Agent/listing/intent/battle/ELO Supabase schema 与 Connector Gateway 迁移；尚无新游戏迁移 |
-| `shared/`, `a2a_team/`, `x402_team/` | 现有 Python 边界类型、fixtures 和 mocks |
 | `arena402/` | 根 Vercel 部署使用的 CDN-only 静态前端 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `frontend/` | Connector onboarding 和控制台 |
