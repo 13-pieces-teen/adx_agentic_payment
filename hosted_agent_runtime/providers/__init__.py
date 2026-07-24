@@ -17,6 +17,13 @@ from .base import (
     validate_provider_error_code,
     validate_provider_request_id,
 )
+from .arena_scripted import (
+    ARENA_SCRIPTED_ADAPTER_ID,
+    ARENA_SCRIPTED_BUYER_MODEL,
+    ARENA_SCRIPTED_PROVIDER_ID,
+    ARENA_SCRIPTED_SELLER_MODEL,
+    ArenaScriptedProvider,
+)
 from .fake import FakeProvider, FakeProviderScenario, FakeProviderStep
 from .openai_compatible import (
     OpenAICompatibleChatAdapter,
@@ -24,6 +31,11 @@ from .openai_compatible import (
 )
 
 __all__ = [
+    "ARENA_SCRIPTED_ADAPTER_ID",
+    "ARENA_SCRIPTED_BUYER_MODEL",
+    "ARENA_SCRIPTED_PROVIDER_ID",
+    "ARENA_SCRIPTED_SELLER_MODEL",
+    "ArenaScriptedProvider",
     "FakeProvider",
     "FakeProviderScenario",
     "FakeProviderStep",

@@ -1,5 +1,67 @@
 # Arena 402 Roadmap
 
+## Clean-slate implementation status
+
+- [x] Milestone 1: King's Pawnhouse world, four goods, exact 20-gold
+  portfolios, restricted event DSL, round state, valuation, and ranking.
+- [x] Milestone 2: PostgreSQL pool entries, database-clock FCFS pairing,
+  three-turn public negotiation, deterministic Rule Runtime, dev HTTP control,
+  and public timeline.
+- [x] Milestone 3: two isolated users and two Hosted Agents through the
+  durable validation worker, immutable AgentTask/Result path, Result Sink,
+  database-clock FCFS pairing, and sequential public negotiation.
+- [x] Milestone 4 foundation: accepted negotiation freezes a single-payment
+  testnet SettlementIntent; a local EIP-3009 bridge has an explicit human
+  confirmation gate; read-only chain recovery verifies the exact ERC-20
+  transfer; Arena commits cash and inventory exactly once only after a
+  persisted confirmation.
+- [ ] Milestone 4 live acceptance: explicitly approved fresh testnet transfer,
+  public transaction evidence, and recovery-driven inventory commit.
+- [ ] Milestone 5: production worker/Secret Manager boundaries and operating
+  guide.
+
+The Milestone 2 demonstration is:
+
+```powershell
+docker compose -f docker-compose.local.yml up --build -d
+python scripts/run_rule_pawnhouse_demo.py
+```
+
+The Milestone 3 local demonstration uses two fresh one-use invitations and:
+
+```powershell
+$env:ARENA_BUYER_INVITE="<first invite>"
+$env:ARENA_SELLER_INVITE="<second invite>"
+python scripts/run_dual_hosted_pawnhouse_demo.py
+```
+
+Verified local evidence on 2026-07-25: four Hosted tasks completed and were
+applied (`buy`, `sell`, `propose 7.000000`, `accept`); their private Attempt
+records retained provider/model, thinking-enabled, duration, token counts, and
+usage completeness without reasoning text. The public timeline contained two
+decisions, one FCFS pairing, and two negotiation messages. The final pairing
+and negotiation state was `accepted_pending_settlement` at
+`7000000` atomic gold. This verifies the development Runtime/Arena boundary,
+not production Secret Manager, a real external model, or chain settlement.
+
+An accepted negotiation is deliberately terminal only at
+`accepted_pending_settlement`; no balance or holding changes before confirmed
+settlement.
+
+The Milestone 4 no-broadcast demonstration is:
+
+```powershell
+python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
+```
+
+Verified local evidence on 2026-07-25: the dual Hosted Agent flow froze one
+immutable intent at `authorization_requested`; balances and holdings were
+unchanged, and there were no submission, confirmation, or inventory-commit
+records. A rollback-only PostgreSQL verifier proved the confirmation-gated
+cash/holding deltas and replay idempotency. A read-only Injective testnet
+recovery check also matched a historical successful ERC-20 transfer. No fresh
+transaction was signed or broadcast.
+
 > 状态：当前跨模块实施状态与建议顺序。
 
 Arena 402 已具备 matching、Connector 和 settlement 三个基础，但新定义的
@@ -7,6 +69,9 @@ Hosted/Local 统一 Runtime、回合制交易游戏和离线支付尚未端到�
 方向以 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
+
+王城典当行 clean-slate 实现已经开始。`arena_game/` 与 `006` 迁移是新的游戏业务
+内核权威；旧 `matching/` 不再作为目标实现。
 
 ## 目标垂直切片
 
@@ -25,6 +90,13 @@ create game
 ```
 
 ## 已完成基础
+
+- [x] 王城典当行 Milestone 1：四种货物、20 金自由初始组合、六位定点金额、
+      受限事件 DSL、5 回合固定演示事件表、事件 schedule commitment、回合状态机、
+      终场估值和兵卒封王排名。
+- [x] 新增隔离的 PostgreSQL `arena402` schema，包含 Game、Good、Participant、
+      Balance、Holding、Event Schedule/Occurrence、Round、Price Snapshot、
+      Game Event 与 Ranking 基础表。
 
 - [x] Python 内存版 Agent、listing/intent、matching、有限 negotiation、
       Arena/ELO 和 FastAPI wrapper。

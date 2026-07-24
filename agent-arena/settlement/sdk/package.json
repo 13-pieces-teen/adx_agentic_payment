@@ -5,7 +5,8 @@
   "description": "x402 EIP-3009 signing + settlement client for Injective EVM",
   "type": "module",
   "scripts": {
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "arena:settle": "tsx scripts/settle-arena-intent.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

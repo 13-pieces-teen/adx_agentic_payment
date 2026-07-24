@@ -25,7 +25,7 @@ Injective EVM testnet 是 MVP 的真实链上支付层，使用测试用 mock US
 
 ### 公平开局
 
-- 所有 Agent 获得相同现金；
+- 所有 Agent 获得相同的 20 金初始净资产，并可按初始价自由配置现金和四种货物；
 - 所有 Agent 获得相同种类和数量的初始货物；
 - 货物总量受控，不能凭空增发；
 - 现金零收益，观望是一种策略但没有额外奖励。
@@ -106,7 +106,7 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 
 以下是目标条件，不代表当前仓库已经全部实现：
 
-- 2–3 种货物、5–10 回合和统一初始资产可配置；
+- 固定四种货物、默认 5 回合和等值 20 金的自由初始组合；
 - 每轮完整经过 broadcast、decide、pair、negotiate、settle、close；
 - FCFS 只使用 Result Sink 的数据库 `result_received_at`，结果可审计；
 - 每个 Agent 每轮最多匹配一次；

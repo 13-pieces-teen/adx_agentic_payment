@@ -367,7 +367,6 @@ class PostgresArenaCoreRepository:
                         WHERE ga.game_agent_id = $1
                           AND ga.game_id = $2
                           AND ga.status IN ('joined', 'active', 'settling')
-                        FOR SHARE OF ga, b
                         """,
                         task_snapshot.game_agent_id,
                         task_snapshot.game_id,

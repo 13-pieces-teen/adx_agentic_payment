@@ -84,12 +84,17 @@ services:
       ADX_CONNECTOR_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
       ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
       ADX_ARENA_API_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
+      ADX_ARENA_CORE_DATABASE_URL: postgresql://adx_arena_core_login:arena402-local-core-password@postgres:5432/arena402
       ADX_HOSTED_WORKER_DATABASE_URL: postgresql://adx_hosted_worker_login:arena402-local-worker-password@postgres:5432/arena402
       ADX_CONNECTOR_SESSION_SECRET: arena402-local-session-secret-change-before-sharing
       ADX_BOOTSTRAP_INVITE_HASH: caf7a298a657faa1c5495eb7adf17a805d17df9e37f27afa53e20c3ca7eef559
       ADX_HOSTED_AGENTS_ENABLED: "true"
       ADX_HOSTED_LOCAL_DEV: "true"
       ADX_ARENA_PARTICIPATION_ENABLED: "true"
+      ADX_ARENA_DEV_CONTROL: "true"
+      ADX_ARENA_DEV_TOKEN: arena402-local-development-control-token
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:-https://k8s.testnet.json-rpc.injective.network/}
+      ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: ${ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL:-https://testnet.blockscout-api.injective.network/api/v2}
       ADX_HOSTED_FINGERPRINT_PEPPER_B64: YXJlbmE0MDItbG9jYWwtZmluZ2VycHJpbnQtcGVwcGVyLTMyYnl0ZXMhIQ==
       ADX_HOSTED_WORKER_POLL_SECONDS: "0.25"
       ADX_OPENAI_COMPATIBLE_ENDPOINT: ${ADX_OPENAI_COMPATIBLE_ENDPOINT:-}
