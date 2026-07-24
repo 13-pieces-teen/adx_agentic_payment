@@ -30,6 +30,7 @@ from .negotiation import (
     NegotiationStatus,
     NegotiationTurn,
 )
+from .orchestrator import PawnhouseGameOrchestrator
 from .portfolio import (
     INITIAL_NET_WORTH_ATOMIC,
     Portfolio,
@@ -75,6 +76,7 @@ __all__ = [
     "MarketError",
     "MarketSide",
     "Pairing",
+    "PawnhouseGameOrchestrator",
     "PoolEntry",
     "Negotiation",
     "NegotiationAction",

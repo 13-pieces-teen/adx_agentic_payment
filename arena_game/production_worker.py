@@ -12,6 +12,7 @@ from arena_core.postgres_repository import PostgresArenaCoreRepository
 
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseHostedCoordinator
+from .orchestrator import PawnhouseGameOrchestrator
 from .postgres import PostgresPawnhouseRepository
 from .settlement_worker import SettlementRecoveryWorker
 
@@ -38,38 +39,50 @@ def _https_url(name: str, *, required: bool) -> str | None:
 
 
 class ArenaProductionWorker:
-    """Run three independent, non-signing durable loops."""
+    """Run four independent, non-signing durable loops."""
 
     def __init__(
         self,
         *,
+        game_orchestrator: PawnhouseGameOrchestrator,
         coordinator: PawnhouseHostedCoordinator,
         arena_core: PostgresArenaCoreRepository,
         settlement_recovery: SettlementRecoveryWorker,
         coordinator_poll_seconds: float = 0.25,
         finalizer_poll_seconds: float = 1.0,
         settlement_poll_seconds: float = 3.0,
+        orchestration_poll_seconds: float = 0.25,
     ) -> None:
         if min(
+            orchestration_poll_seconds,
             coordinator_poll_seconds,
             finalizer_poll_seconds,
             settlement_poll_seconds,
         ) <= 0:
             raise ValueError("worker poll intervals must be positive")
+        self._game_orchestrator = game_orchestrator
         self._coordinator = coordinator
         self._arena_core = arena_core
         self._settlement_recovery = settlement_recovery
         self._coordinator_poll_seconds = coordinator_poll_seconds
         self._finalizer_poll_seconds = finalizer_poll_seconds
         self._settlement_poll_seconds = settlement_poll_seconds
+        self._orchestration_poll_seconds = orchestration_poll_seconds
         self._stopping = asyncio.Event()
 
     def stop(self) -> None:
         self._stopping.set()
+        self._game_orchestrator.stop()
         self._coordinator.stop()
 
     async def run_forever(self) -> None:
         tasks = [
+            asyncio.create_task(
+                self._game_orchestrator.run_forever(
+                    poll_seconds=self._orchestration_poll_seconds
+                ),
+                name="arena-game-orchestrator",
+            ),
             asyncio.create_task(
                 self._coordinator.run_forever(
                     poll_seconds=self._coordinator_poll_seconds
@@ -138,6 +151,7 @@ async def main() -> None:
             os.getenv("ADX_ARENA_WORKER_LEASE_SECONDS", "600")
         ),
     )
+    game_orchestrator = PawnhouseGameOrchestrator(repository=pawnhouse)
     settlement_recovery = SettlementRecoveryWorker(
         repository=pawnhouse,
         confirmation_reader=EvmJsonRpcConfirmationReader(
@@ -146,6 +160,7 @@ async def main() -> None:
         ),
     )
     worker = ArenaProductionWorker(
+        game_orchestrator=game_orchestrator,
         coordinator=coordinator,
         arena_core=arena_core,
         settlement_recovery=settlement_recovery,
@@ -157,6 +172,9 @@ async def main() -> None:
         ),
         settlement_poll_seconds=float(
             os.getenv("ADX_SETTLEMENT_RECOVERY_POLL_SECONDS", "3")
+        ),
+        orchestration_poll_seconds=float(
+            os.getenv("ADX_ARENA_ORCHESTRATION_POLL_SECONDS", "0.25")
         ),
     )
     await pawnhouse.initialize()

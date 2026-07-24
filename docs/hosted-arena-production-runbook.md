@@ -12,8 +12,9 @@ Hosted Arena path:
 - `credential-controller`: can disable/delete a Secret but cannot create or
   read it;
 - `arena-worker`: coordinates Hosted tasks, independently finalizes expired
-  tasks, reads chain evidence, and commits inventory after confirmation. It has
-  no wallet, signer, private key, or transaction-submission interface.
+  tasks, automatically advances complete games, reads chain evidence, and
+  commits inventory after confirmation. It has no wallet, signer, private key,
+  or transaction-submission interface.
 
 The public API remains the write-only Secret ingress and authenticated control
 plane. PostgreSQL, not process memory, is the durable queue and state authority.
@@ -118,6 +119,9 @@ Required observations:
 - PostgreSQL contains only the Secret reference, never the raw Provider key;
 - validation reaches `ready` with a real allowlisted Provider;
 - stopping the Hosted Worker still allows Arena Deadline Finalizer defaults;
+- a running Game advances across rounds from PostgreSQL state and freezes final
+  prices/rankings without a browser session;
+- a pending accepted settlement keeps its Round in `settle`;
 - an unknown chain receipt is retried read-only and never causes a second
   authorization or payment.
 

@@ -11,12 +11,19 @@ from typing import Any
 
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
 
-from .events import WorldEvent, WorldState, schedule_commitment
-from .goods import GOODS, GOOD_IDS
+from .events import (
+    EffectKind,
+    EventEffect,
+    WorldEvent,
+    WorldState,
+    schedule_commitment,
+)
+from .goods import GOODS, GOOD_IDS, require_good
 from .market import Pairing, PoolEntry, fcfs_pair
 from .money import gold
 from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
 from .portfolio import Portfolio
+from .ranking import calculate_rankings
 from .rule_runtime import RuleRuntime, RuleStrategy
 from .settlement import (
     ChainConfirmation,
@@ -219,7 +226,9 @@ class PostgresPawnhouseRepository:
                     """,
                     game_id,
                 )
-                if phase not in ("registration", "portfolio_setup"):
+                if phase is None:
+                    raise PawnhouseRepositoryError("game_not_found")
+                if phase["phase"] not in ("registration", "portfolio_setup"):
                     raise PawnhouseRepositoryError("game_not_joinable")
                 await connection.execute(
                     """
@@ -2385,6 +2394,376 @@ class PostgresPawnhouseRepository:
                     commit=commit,
                 )
 
+    async def automatable_game_ids(self, *, limit: int = 50) -> list[str]:
+        if limit < 1 or limit > 500:
+            raise ValueError("automation game limit must be between 1 and 500")
+        rows = await self._require_pool().fetch(
+            """
+            SELECT game_id
+            FROM arena402.games
+            WHERE phase = 'running'
+            ORDER BY started_at, game_id
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [str(row["game_id"]) for row in rows]
+
+    async def automation_state(
+        self,
+        *,
+        game_id: str,
+    ) -> dict[str, object]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            game = await connection.fetchrow(
+                """
+                SELECT phase, current_round
+                FROM arena402.games
+                WHERE game_id = $1
+                """,
+                game_id,
+            )
+            if game is None:
+                raise PawnhouseRepositoryError("game_not_found")
+            if game["phase"] != "running":
+                return {"gameId": game_id, "action": "idle"}
+            round_row = await connection.fetchrow(
+                """
+                SELECT round_id, round_index, phase
+                FROM arena402.rounds
+                WHERE game_id = $1
+                  AND round_index = $2
+                """,
+                game_id,
+                game["current_round"],
+            )
+            if round_row is None:
+                raise PawnhouseRepositoryError("current_round_not_found")
+            runtime_rows = await connection.fetch(
+                """
+                SELECT runtime_kind, count(*) AS participant_count
+                FROM arena402.game_participants
+                WHERE game_id = $1
+                  AND status IN ('active', 'settling')
+                GROUP BY runtime_kind
+                ORDER BY runtime_kind
+                """,
+                game_id,
+            )
+            runtime_kinds = {
+                str(row["runtime_kind"]): int(row["participant_count"])
+                for row in runtime_rows
+            }
+            hosted_run = await connection.fetchrow(
+                """
+                SELECT status, stage, safe_error_code
+                FROM arena402.runtime_runs
+                WHERE round_id = $1
+                  AND runtime_kind = 'hosted'
+                """,
+                round_row["round_id"],
+            )
+            active_negotiations = int(
+                await connection.fetchval(
+                    """
+                    SELECT count(*)
+                    FROM arena402.negotiations
+                    WHERE round_id = $1
+                      AND status = 'active'
+                    """,
+                    round_row["round_id"],
+                )
+            )
+            pending_settlements = int(
+                await connection.fetchval(
+                    """
+                    SELECT count(*)
+                    FROM arena402.pairings
+                    WHERE round_id = $1
+                      AND status IN (
+                          'accepted_pending_settlement',
+                          'settling'
+                      )
+                    """,
+                    round_row["round_id"],
+                )
+            )
+
+        action = "idle"
+        phase = str(round_row["phase"])
+        if len(runtime_kinds) != 1:
+            action = "wait_runtime_adapter"
+        elif phase == "decide":
+            if "rule" in runtime_kinds:
+                action = "run_rule"
+            elif "hosted" in runtime_kinds:
+                if hosted_run is None:
+                    action = "enqueue_hosted"
+                elif hosted_run["status"] == "failed":
+                    action = "blocked_runtime_failure"
+                else:
+                    action = "wait_runtime"
+            else:
+                action = "wait_runtime_adapter"
+        elif phase in {"negotiate", "settle", "round_close"}:
+            if "hosted" in runtime_kinds and (
+                hosted_run is None or hosted_run["status"] != "completed"
+            ):
+                action = (
+                    "blocked_runtime_failure"
+                    if hosted_run is not None
+                    and hosted_run["status"] == "failed"
+                    else "wait_runtime"
+                )
+            elif active_negotiations:
+                action = "wait_negotiation"
+            elif pending_settlements:
+                action = "wait_settlement"
+            else:
+                action = "advance_round"
+        return {
+            "gameId": game_id,
+            "roundId": str(round_row["round_id"]),
+            "roundIndex": int(round_row["round_index"]),
+            "roundPhase": phase,
+            "runtimeKinds": runtime_kinds,
+            "activeNegotiations": active_negotiations,
+            "pendingSettlements": pending_settlements,
+            "runtimeRunStatus": (
+                None if hosted_run is None else str(hosted_run["status"])
+            ),
+            "runtimeRunStage": (
+                None if hosted_run is None else str(hosted_run["stage"])
+            ),
+            "runtimeErrorCode": (
+                None
+                if hosted_run is None
+                else hosted_run["safe_error_code"]
+            ),
+            "action": action,
+        }
+
+    async def advance_round_or_game(
+        self,
+        *,
+        game_id: str,
+    ) -> dict[str, object]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                game = await connection.fetchrow(
+                    """
+                    SELECT
+                        phase, current_round, round_count, event_seed,
+                        event_schedule_commitment
+                    FROM arena402.games
+                    WHERE game_id = $1
+                    FOR UPDATE
+                    """,
+                    game_id,
+                )
+                if game is None:
+                    raise PawnhouseRepositoryError("game_not_found")
+                if game["phase"] == "completed":
+                    return {
+                        "gameId": game_id,
+                        "transition": "already_completed",
+                    }
+                if game["phase"] != "running":
+                    raise PawnhouseRepositoryError("game_not_running")
+                round_row = await connection.fetchrow(
+                    """
+                    SELECT round_id, round_index, phase
+                    FROM arena402.rounds
+                    WHERE game_id = $1
+                      AND round_index = $2
+                    FOR UPDATE
+                    """,
+                    game_id,
+                    game["current_round"],
+                )
+                if round_row is None:
+                    raise PawnhouseRepositoryError(
+                        "current_round_not_found"
+                    )
+                round_id = str(round_row["round_id"])
+                phase = str(round_row["phase"])
+                runtime_rows = await connection.fetch(
+                    """
+                    SELECT DISTINCT runtime_kind
+                    FROM arena402.game_participants
+                    WHERE game_id = $1
+                      AND status IN ('active', 'settling')
+                    """,
+                    game_id,
+                )
+                runtime_kinds = {
+                    str(value["runtime_kind"]) for value in runtime_rows
+                }
+                if runtime_kinds == {"hosted"}:
+                    run_status = await connection.fetchval(
+                        """
+                        SELECT status
+                        FROM arena402.runtime_runs
+                        WHERE round_id = $1
+                          AND runtime_kind = 'hosted'
+                        """,
+                        round_id,
+                    )
+                    if run_status != "completed":
+                        return {
+                            "gameId": game_id,
+                            "roundId": round_id,
+                            "transition": "waiting_runtime",
+                        }
+
+                active_negotiations = int(
+                    await connection.fetchval(
+                        """
+                        SELECT count(*)
+                        FROM arena402.negotiations
+                        WHERE round_id = $1
+                          AND status = 'active'
+                        """,
+                        round_id,
+                    )
+                )
+                if active_negotiations:
+                    return {
+                        "gameId": game_id,
+                        "roundId": round_id,
+                        "transition": "waiting_negotiation",
+                    }
+                pending_settlements = int(
+                    await connection.fetchval(
+                        """
+                        SELECT count(*)
+                        FROM arena402.pairings
+                        WHERE round_id = $1
+                          AND status IN (
+                              'accepted_pending_settlement',
+                              'settling'
+                          )
+                        """,
+                        round_id,
+                    )
+                )
+                if pending_settlements:
+                    if phase == "negotiate":
+                        await connection.execute(
+                            """
+                            UPDATE arena402.rounds
+                            SET phase = 'settle'
+                            WHERE round_id = $1
+                              AND phase = 'negotiate'
+                            """,
+                            round_id,
+                        )
+                        await connection.execute(
+                            """
+                            UPDATE public.rounds
+                            SET phase = 'settling'
+                            WHERE round_id = $1
+                            """,
+                            round_id,
+                        )
+                    return {
+                        "gameId": game_id,
+                        "roundId": round_id,
+                        "transition": "waiting_settlement",
+                        "pendingSettlements": pending_settlements,
+                    }
+                if phase in {"negotiate", "settle"}:
+                    await connection.execute(
+                        """
+                        UPDATE arena402.rounds
+                        SET phase = 'round_close',
+                            phase_deadline_at = NULL
+                        WHERE round_id = $1
+                          AND phase IN ('negotiate', 'settle')
+                        """,
+                        round_id,
+                    )
+                    phase = "round_close"
+                if phase != "round_close":
+                    raise PawnhouseRepositoryError(
+                        "round_not_ready_to_close"
+                    )
+
+                await self._snapshot_round_portfolios(
+                    connection,
+                    game_id=game_id,
+                    round_id=round_id,
+                    round_index=int(round_row["round_index"]),
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.rounds
+                    SET phase = 'completed',
+                        phase_deadline_at = NULL,
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
+                    WHERE round_id = $1
+                    """,
+                    round_id,
+                )
+                await connection.execute(
+                    """
+                    UPDATE public.rounds
+                    SET phase = 'completed',
+                        deadline_at = NULL,
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
+                    WHERE round_id = $1
+                    """,
+                    round_id,
+                )
+                await self._event(
+                    connection,
+                    game_id=game_id,
+                    round_id=round_id,
+                    event_type="round.closed",
+                    source_key=f"{round_id}:closed",
+                    public_payload={
+                        "roundId": round_id,
+                        "roundIndex": int(round_row["round_index"]),
+                    },
+                )
+
+                if int(game["current_round"]) < int(game["round_count"]):
+                    next_round = int(game["current_round"]) + 1
+                    result = await self._open_next_round(
+                        connection,
+                        game_id=game_id,
+                        round_index=next_round,
+                    )
+                    return {
+                        "gameId": game_id,
+                        "transition": "next_round",
+                        **result,
+                    }
+
+                rankings = await self._finalize_game(
+                    connection,
+                    game_id=game_id,
+                    round_index=int(round_row["round_index"]),
+                    event_seed=str(game["event_seed"]),
+                    event_schedule_commitment=str(
+                        game["event_schedule_commitment"]
+                    ),
+                )
+                return {
+                    "gameId": game_id,
+                    "roundId": round_id,
+                    "transition": "game_completed",
+                    "rankings": rankings,
+                }
+
     async def game_state(self, game_id: str) -> dict[str, object]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -2392,7 +2771,8 @@ class PostgresPawnhouseRepository:
                 """
                 SELECT
                     game_id, phase, round_count, current_round,
-                    event_schedule_commitment, started_at, completed_at
+                    event_schedule_commitment, event_seed,
+                    event_seed_revealed_at, started_at, completed_at
                 FROM arena402.games
                 WHERE game_id = $1
                 """,
@@ -2419,14 +2799,56 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            rankings = await connection.fetch(
+                """
+                SELECT
+                    r.rank, r.game_participant_id, p.agent_id,
+                    r.net_worth_atomic, r.tier, r.calculated_at
+                FROM arena402.rankings AS r
+                JOIN arena402.game_participants AS p
+                  ON p.game_participant_id = r.game_participant_id
+                WHERE r.game_id = $1
+                ORDER BY r.rank
+                """,
+                game_id,
+            )
+            final_prices = await connection.fetch(
+                """
+                SELECT good_id, price_atomic, source_round_index, frozen_at
+                FROM arena402.final_settlement_prices
+                WHERE game_id = $1
+                ORDER BY good_id
+                """,
+                game_id,
+            )
         return {
             "gameId": game["game_id"],
             "phase": game["phase"],
             "roundCount": game["round_count"],
             "currentRound": game["current_round"],
             "eventScheduleCommitment": game["event_schedule_commitment"],
+            "eventSeed": (
+                str(game["event_seed"])
+                if game["event_seed_revealed_at"] is not None
+                else None
+            ),
             "participants": [dict(row) for row in participants],
             "rounds": [dict(row) for row in rounds],
+            "finalPrices": {
+                str(row["good_id"]): str(int(row["price_atomic"]))
+                for row in final_prices
+            },
+            "rankings": [
+                {
+                    "rank": int(row["rank"]),
+                    "participantId": str(row["game_participant_id"]),
+                    "agentId": str(row["agent_id"]),
+                    "netWorthAtomic": str(int(row["net_worth_atomic"])),
+                    "tier": str(row["tier"]),
+                    "calculatedAt": row["calculated_at"].isoformat(),
+                }
+                for row in rankings
+            ],
             "schemaVersion": "arena.pawnhouse-game-state.v1",
         }
 
@@ -3138,6 +3560,415 @@ class PostgresPawnhouseRepository:
             "schemaVersion": "arena402.inventory-commit.v1",
         }
 
+    async def _snapshot_round_portfolios(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        round_id: str,
+        round_index: int,
+    ) -> None:
+        rows = await connection.fetch(
+            """
+            SELECT
+                p.game_participant_id,
+                b.cash_atomic,
+                h.good_id,
+                h.quantity
+            FROM arena402.game_participants AS p
+            JOIN arena402.balances AS b
+              ON b.game_participant_id = p.game_participant_id
+            JOIN arena402.holdings AS h
+              ON h.game_participant_id = p.game_participant_id
+             AND h.game_id = p.game_id
+            WHERE p.game_id = $1
+            ORDER BY p.game_participant_id, h.good_id
+            """,
+            game_id,
+        )
+        portfolios: dict[str, dict[str, object]] = {}
+        for row in rows:
+            participant_id = str(row["game_participant_id"])
+            value = portfolios.setdefault(
+                participant_id,
+                {
+                    "cash_atomic": int(row["cash_atomic"]),
+                    "holdings": {},
+                },
+            )
+            holdings = value["holdings"]
+            assert isinstance(holdings, dict)
+            holdings[str(row["good_id"])] = int(row["quantity"])
+        for participant_id, value in portfolios.items():
+            await connection.execute(
+                """
+                INSERT INTO arena402.round_portfolio_snapshots (
+                    game_id, round_id, round_index, game_participant_id,
+                    cash_atomic, holdings_snapshot
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (round_id, game_participant_id) DO NOTHING
+                """,
+                game_id,
+                round_id,
+                round_index,
+                participant_id,
+                value["cash_atomic"],
+                _json(value["holdings"]),
+            )
+
+    @staticmethod
+    async def _scheduled_events(
+        connection: Any,
+        *,
+        game_id: str,
+    ) -> tuple[WorldEvent, ...]:
+        rows = await connection.fetch(
+            """
+            SELECT
+                round_index, event_id, display_name, narrative,
+                duration_rounds, effect_snapshot, schema_version
+            FROM arena402.event_schedule
+            WHERE game_id = $1
+            ORDER BY round_index
+            """,
+            game_id,
+        )
+        events: list[WorldEvent] = []
+        for row in rows:
+            raw_effects = row["effect_snapshot"]
+            if isinstance(raw_effects, str):
+                raw_effects = json.loads(raw_effects)
+            effects: list[EventEffect] = []
+            for raw in raw_effects:
+                effect = dict(raw)
+                effects.append(
+                    EventEffect(
+                        kind=EffectKind(str(effect["kind"])),
+                        good=require_good(str(effect["good"])),
+                        target=str(effect.get("target", "market")),
+                        basis_points=(
+                            int(effect["basisPoints"])
+                            if effect.get("basisPoints") is not None
+                            else None
+                        ),
+                        order_price_atomic=(
+                            int(effect["orderPriceAtomic"])
+                            if effect.get("orderPriceAtomic") is not None
+                            else None
+                        ),
+                        order_limit=(
+                            int(effect["orderLimit"])
+                            if effect.get("orderLimit") is not None
+                            else None
+                        ),
+                    )
+                )
+            events.append(
+                WorldEvent(
+                    event_id=str(row["event_id"]),
+                    display_name=str(row["display_name"]),
+                    narrative=str(row["narrative"]),
+                    reveal_round=int(row["round_index"]),
+                    duration_rounds=(
+                        int(row["duration_rounds"])
+                        if row["duration_rounds"] is not None
+                        else None
+                    ),
+                    effects=tuple(effects),
+                    schema_version=str(row["schema_version"]),
+                )
+            )
+        return tuple(events)
+
+    async def _open_next_round(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        round_index: int,
+    ) -> dict[str, object]:
+        events = await self._scheduled_events(
+            connection,
+            game_id=game_id,
+        )
+        event_by_round = {event.reveal_round: event for event in events}
+        event = event_by_round.get(round_index)
+        if event is None:
+            raise PawnhouseRepositoryError("round_event_not_found")
+        world = WorldState({value.event_id: value for value in events})
+        snapshot = None
+        for scheduled in events:
+            if scheduled.reveal_round > round_index:
+                break
+            snapshot = world.reveal(
+                scheduled.event_id,
+                round_index=scheduled.reveal_round,
+            )
+        if snapshot is None:
+            raise PawnhouseRepositoryError("round_world_snapshot_missing")
+
+        round_id = f"round:{game_id}:{round_index}"
+        await connection.execute(
+            """
+            INSERT INTO arena402.rounds (
+                round_id, game_id, round_index, phase
+            )
+            VALUES ($1, $2, $3, 'event_reveal')
+            ON CONFLICT (game_id, round_index) DO NOTHING
+            """,
+            round_id,
+            game_id,
+            round_index,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.games
+            SET current_round = $2
+            WHERE game_id = $1
+              AND phase = 'running'
+            """,
+            game_id,
+            round_index,
+        )
+        await self._event(
+            connection,
+            game_id=game_id,
+            round_id=round_id,
+            event_type="round.started",
+            source_key=f"{round_id}:started",
+            public_payload={
+                "roundId": round_id,
+                "roundIndex": round_index,
+            },
+        )
+        await self._persist_world_snapshot(
+            connection,
+            game_id=game_id,
+            round_id=round_id,
+            event=event,
+            snapshot=snapshot,
+        )
+        deadline_at = await connection.fetchval(
+            """
+            UPDATE arena402.rounds
+            SET phase = 'decide',
+                phase_deadline_at = (
+                    clock_timestamp()
+                    + (
+                        SELECT action_timeout_ms
+                        FROM arena402.games
+                        WHERE game_id = $2
+                    ) * interval '1 millisecond'
+                )
+            WHERE round_id = $1
+            RETURNING phase_deadline_at
+            """,
+            round_id,
+            game_id,
+        )
+        await connection.execute(
+            """
+            INSERT INTO public.rounds (
+                round_id, game_id, round_index, phase, deadline_at
+            )
+            VALUES ($1, $2, $3, 'decide', $4)
+            ON CONFLICT (game_id, round_index) DO NOTHING
+            """,
+            round_id,
+            game_id,
+            round_index,
+            deadline_at,
+        )
+        return {
+            "roundId": round_id,
+            "roundIndex": round_index,
+            "roundPhase": "decide",
+            "deadlineAt": deadline_at,
+            "eventId": event.event_id,
+        }
+
+    async def _finalize_game(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        round_index: int,
+        event_seed: str,
+        event_schedule_commitment: str,
+    ) -> list[dict[str, object]]:
+        await connection.execute(
+            """
+            INSERT INTO arena402.final_settlement_prices (
+                game_id, good_id, price_atomic, source_round_index
+            )
+            SELECT
+                game_id, good_id, final_price_atomic, round_index
+            FROM arena402.price_snapshots
+            WHERE game_id = $1
+              AND round_index = $2
+            ON CONFLICT (game_id, good_id) DO NOTHING
+            """,
+            game_id,
+            round_index,
+        )
+        final_rows = await connection.fetch(
+            """
+            SELECT good_id, price_atomic
+            FROM arena402.final_settlement_prices
+            WHERE game_id = $1
+            ORDER BY good_id
+            """,
+            game_id,
+        )
+        final_prices = {
+            require_good(str(row["good_id"])): int(row["price_atomic"])
+            for row in final_rows
+        }
+        if set(final_prices) != set(GOOD_IDS):
+            raise PawnhouseRepositoryError(
+                "final_settlement_prices_incomplete"
+            )
+
+        portfolio_rows = await connection.fetch(
+            """
+            SELECT
+                p.game_participant_id,
+                p.agent_id,
+                b.cash_atomic,
+                h.good_id,
+                h.quantity
+            FROM arena402.game_participants AS p
+            JOIN arena402.balances AS b
+              ON b.game_participant_id = p.game_participant_id
+            JOIN arena402.holdings AS h
+              ON h.game_participant_id = p.game_participant_id
+             AND h.game_id = p.game_id
+            WHERE p.game_id = $1
+            ORDER BY p.game_participant_id, h.good_id
+            """,
+            game_id,
+        )
+        portfolios: dict[str, Portfolio] = {}
+        participant_agents: dict[str, str] = {}
+        mutable: dict[str, dict[str, object]] = {}
+        for row in portfolio_rows:
+            participant_id = str(row["game_participant_id"])
+            participant_agents[participant_id] = str(row["agent_id"])
+            value = mutable.setdefault(
+                participant_id,
+                {
+                    "cash_atomic": int(row["cash_atomic"]),
+                    "holdings": {},
+                },
+            )
+            holdings = value["holdings"]
+            assert isinstance(holdings, dict)
+            holdings[str(row["good_id"])] = int(row["quantity"])
+        for participant_id, value in mutable.items():
+            portfolios[participant_id] = Portfolio(
+                cash_atomic=int(value["cash_atomic"]),
+                holdings=dict(value["holdings"]),
+            )
+
+        entries = calculate_rankings(portfolios, final_prices)
+        public_rankings: list[dict[str, object]] = []
+        for entry in entries:
+            await connection.execute(
+                """
+                INSERT INTO arena402.rankings (
+                    game_id, game_participant_id, rank,
+                    net_worth_atomic, tier
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (game_id, game_participant_id) DO NOTHING
+                """,
+                game_id,
+                entry.agent_id,
+                entry.rank,
+                entry.net_worth_atomic,
+                entry.tier,
+            )
+            public_rankings.append(
+                {
+                    "rank": entry.rank,
+                    "participantId": entry.agent_id,
+                    "agentId": participant_agents[entry.agent_id],
+                    "netWorthAtomic": str(entry.net_worth_atomic),
+                    "tier": entry.tier,
+                }
+            )
+
+        await connection.execute(
+            """
+            UPDATE arena402.games
+            SET phase = 'completed',
+                completed_at = COALESCE(
+                    completed_at,
+                    clock_timestamp()
+                ),
+                event_seed_revealed_at = COALESCE(
+                    event_seed_revealed_at,
+                    clock_timestamp()
+                )
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.game_participants
+            SET status = 'completed',
+                completed_at = COALESCE(
+                    completed_at,
+                    clock_timestamp()
+                )
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        await connection.execute(
+            """
+            UPDATE public.games
+            SET status = 'completed',
+                completed_at = COALESCE(
+                    completed_at,
+                    clock_timestamp()
+                )
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        await connection.execute(
+            """
+            UPDATE public.game_agents
+            SET status = 'completed',
+                completed_at = COALESCE(
+                    completed_at,
+                    clock_timestamp()
+                )
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        await self._event(
+            connection,
+            game_id=game_id,
+            event_type="game.completed",
+            source_key=f"{game_id}:completed",
+            public_payload={
+                "roundCount": round_index,
+                "eventSeed": event_seed,
+                "eventScheduleCommitment": event_schedule_commitment,
+                "finalPricesAtomic": {
+                    good_id: str(final_prices[good_id])
+                    for good_id in GOOD_IDS
+                },
+                "rankings": public_rankings,
+            },
+        )
+        return public_rankings
+
     async def _persist_world_snapshot(
         self,
         connection: Any,
@@ -3185,6 +4016,8 @@ class PostgresPawnhouseRepository:
                 snapshot.bubble_premium_bps[good_id],
             )
         for order in snapshot.royal_orders:
+            if order.event_id != event.event_id:
+                continue
             await connection.execute(
                 """
                 INSERT INTO arena402.royal_orders (

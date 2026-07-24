@@ -24,6 +24,8 @@ ARENA_SCRIPTED_PROVIDER_ID = "arena-scripted"
 ARENA_SCRIPTED_ADAPTER_ID = "arena-scripted-v1"
 ARENA_SCRIPTED_BUYER_MODEL = "arena-buyer-v1"
 ARENA_SCRIPTED_SELLER_MODEL = "arena-seller-v1"
+ARENA_SCRIPTED_REJECTING_BUYER_MODEL = "arena-rejecting-buyer-v1"
+ARENA_SCRIPTED_REJECTING_SELLER_MODEL = "arena-rejecting-seller-v1"
 
 _USAGE = ProviderUsage(
     input_tokens=32,
@@ -67,6 +69,8 @@ class ArenaScriptedProvider:
         if request.model_id not in {
             ARENA_SCRIPTED_BUYER_MODEL,
             ARENA_SCRIPTED_SELLER_MODEL,
+            ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
+            ARENA_SCRIPTED_REJECTING_SELLER_MODEL,
         }:
             raise ProviderInvocationError("permanent_request")
         try:
@@ -78,7 +82,10 @@ class ArenaScriptedProvider:
             raise ProviderInvocationError("invalid_structured_output")
 
         if request.task_kind == "arena.decide":
-            if request.model_id == ARENA_SCRIPTED_BUYER_MODEL:
+            if request.model_id in {
+                ARENA_SCRIPTED_BUYER_MODEL,
+                ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
+            }:
                 return {"action": "buy", "good": "iron"}
             return {"action": "sell", "good": "iron"}
 
@@ -90,6 +97,14 @@ class ArenaScriptedProvider:
                 "message": "I offer seven gold for one lot of iron.",
             }
         if role == "seller":
+            if (
+                request.model_id
+                == ARENA_SCRIPTED_REJECTING_SELLER_MODEL
+            ):
+                return {
+                    "action": "reject",
+                    "message": "No agreement this round.",
+                }
             return {"action": "accept"}
         raise ProviderInvocationError("invalid_structured_output")
 
@@ -98,6 +113,8 @@ __all__ = [
     "ARENA_SCRIPTED_ADAPTER_ID",
     "ARENA_SCRIPTED_BUYER_MODEL",
     "ARENA_SCRIPTED_PROVIDER_ID",
+    "ARENA_SCRIPTED_REJECTING_BUYER_MODEL",
+    "ARENA_SCRIPTED_REJECTING_SELLER_MODEL",
     "ARENA_SCRIPTED_SELLER_MODEL",
     "ArenaScriptedProvider",
 ]

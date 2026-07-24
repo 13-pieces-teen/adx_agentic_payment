@@ -52,6 +52,7 @@ from connector_gateway.auth import AuthError, AuthPrincipal
 from arena_core import PostgresArenaParticipationRepository
 from arena_game import (
     EvmJsonRpcConfirmationReader,
+    PawnhouseGameOrchestrator,
     PostgresPawnhouseRepository,
 )
 from arena_game import PawnhouseHostedCoordinator
@@ -317,6 +318,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
     pawnhouse_coordinator: PawnhouseHostedCoordinator | None = None
     pawnhouse_coordinator_task: asyncio.Task[None] | None = None
+    pawnhouse_orchestrator: PawnhouseGameOrchestrator | None = None
+    pawnhouse_orchestrator_task: asyncio.Task[None] | None = None
     settlement_confirmation_reader: EvmJsonRpcConfirmationReader | None = None
     pawnhouse_dev_token = ""
     if _pawnhouse_dev_requested():
@@ -333,6 +336,9 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "",
         ).strip()
         pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
+        pawnhouse_orchestrator = PawnhouseGameOrchestrator(
+            repository=pawnhouse_repository
+        )
         settlement_rpc_url = os.getenv(
             "ADX_ARENA_SETTLEMENT_RPC_URL",
             "",
@@ -382,7 +388,12 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await arena_participation.initialize()
         if pawnhouse_repository is not None:
             await pawnhouse_repository.initialize()
-        nonlocal pawnhouse_coordinator_task
+        nonlocal pawnhouse_coordinator_task, pawnhouse_orchestrator_task
+        if pawnhouse_orchestrator is not None:
+            pawnhouse_orchestrator_task = asyncio.create_task(
+                pawnhouse_orchestrator.run_forever(poll_seconds=0.1),
+                name="pawnhouse-game-orchestrator-local-dev",
+            )
         if pawnhouse_coordinator is not None:
             await pawnhouse_coordinator.initialize()
             pawnhouse_coordinator_task = asyncio.create_task(
@@ -392,6 +403,11 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         try:
             yield
         finally:
+            if pawnhouse_orchestrator is not None:
+                pawnhouse_orchestrator.stop()
+                if pawnhouse_orchestrator_task is not None:
+                    await pawnhouse_orchestrator_task
+                    pawnhouse_orchestrator_task = None
             if pawnhouse_coordinator is not None:
                 pawnhouse_coordinator.stop()
                 if pawnhouse_coordinator_task is not None:

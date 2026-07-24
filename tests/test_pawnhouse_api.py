@@ -54,6 +54,14 @@ class _Repository:
             "schemaVersion": "arena.pawnhouse-game-state.v1",
         }
 
+    async def automation_state(self, *, game_id):
+        return {
+            "gameId": game_id,
+            "roundId": f"round:{game_id}:1",
+            "action": "wait_settlement",
+            "pendingSettlements": 1,
+        }
+
     async def timeline(self, game_id, *, after_sequence=0):
         return [
             {
@@ -221,6 +229,12 @@ def test_read_interfaces_do_not_require_the_development_token() -> None:
     assert state.json()["phase"] == "running"
     assert timeline.status_code == 200
     assert timeline.json()["nextAfter"] == 5
+
+    automation = client.get(
+        "/api/v1/pawnhouse/games/game_1/automation"
+    )
+    assert automation.status_code == 200
+    assert automation.json()["action"] == "wait_settlement"
 
 
 def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:

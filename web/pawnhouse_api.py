@@ -351,6 +351,17 @@ def create_pawnhouse_router(
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
+    @router.get("/api/v1/pawnhouse/games/{game_id}/automation")
+    async def game_automation(game_id: _Id) -> dict[str, object]:
+        try:
+            value = await repository.automation_state(game_id=game_id)
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        return {
+            **value,
+            "schemaVersion": "arena.pawnhouse-automation.v1",
+        }
+
     @router.get("/api/v1/pawnhouse/games/{game_id}/timeline")
     async def game_timeline(
         game_id: _Id,

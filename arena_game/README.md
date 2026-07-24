@@ -16,6 +16,8 @@ It owns:
 - immutable single-payment SettlementIntent snapshots;
 - read-only EVM confirmation validation;
 - confirmation-gated, idempotent cash and inventory commit.
+- durable five-round orchestration and recovery from PostgreSQL state;
+- per-round cash/holding snapshots, frozen terminal prices, and rankings.
 
 It does not own:
 
@@ -58,11 +60,32 @@ persisted public timeline. A Game without settlement configuration remains at
 immutable intent at `authorization_requested`; neither path moves cash or
 inventory until Arena has persisted and checked the exact chain confirmation.
 
+## Complete backend-only demonstrations
+
+Run eight deterministic Rule Agents across all four goods and five rounds:
+
+```powershell
+python scripts/run_full_pawnhouse_game_demo.py
+```
+
+With two fresh one-use invitations, run two Hosted Agents through five durable
+Runtime runs:
+
+```powershell
+python scripts/run_full_hosted_pawnhouse_demo.py
+```
+
+Both full-game demonstrations use rejecting negotiations so they can verify
+Round close and terminal ranking without inventing a payment. The accepted
+trade demonstration remains blocked in `settle` until its exact chain transfer
+is confirmed.
+
 ## Production worker boundary
 
 `python -m arena_game.production_worker` runs without a public port and
-combines three independent loops:
+combines four independent loops:
 
+- the durable full-game orchestrator;
 - the Pawnhouse Hosted-task coordinator;
 - the Arena-owned Deadline Finalizer, which keeps running when Hosted model
   workers are unavailable;

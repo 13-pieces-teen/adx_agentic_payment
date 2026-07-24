@@ -391,12 +391,16 @@ class DurableHostedWorker:
         secret_reader: SecretReader,
         worker_id: str | None = None,
         lease_seconds: int = 600,
+        task_concurrency: int = 5,
     ) -> None:
+        if task_concurrency < 1 or task_concurrency > 32:
+            raise ValueError("task_concurrency must be between 1 and 32")
         self._repository = repository
         self._providers = providers
         self._secret_reader = secret_reader
         self._worker_id = worker_id or f"hosted-worker-{uuid.uuid4().hex[:16]}"
         self._lease_seconds = lease_seconds
+        self._task_concurrency = task_concurrency
         self._stopping = asyncio.Event()
         self._public_policy = PublicOutputPolicy()
 
@@ -406,23 +410,13 @@ class DurableHostedWorker:
         processed = 0
         tasks = await self._repository.claim_tasks(
             self._worker_id,
-            limit=5,
+            limit=self._task_concurrency,
             lease_seconds=self._lease_seconds,
         )
-        for task in tasks:
-            try:
-                await self._execute_task(task)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                # The lease is the durable recovery boundary. Never log a raw
-                # SDK/database exception because it may contain request data.
-                _LOGGER.error(
-                    "hosted_task_processing_failed_%s",
-                    type(exc).__name__,
-                    extra={"task_id": task.task.task_id},
-                )
-            processed += 1
+        await asyncio.gather(
+            *(self._execute_task_safely(task) for task in tasks)
+        )
+        processed += len(tasks)
 
         validations = await self._repository.claim_validations(
             self._worker_id,
@@ -441,6 +435,20 @@ class DurableHostedWorker:
                 )
             processed += 1
         return processed
+
+    async def _execute_task_safely(self, task: ClaimedTask) -> None:
+        try:
+            await self._execute_task(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The lease is the durable recovery boundary. Never log a raw
+            # SDK/database exception because it may contain request data.
+            _LOGGER.error(
+                "hosted_task_processing_failed_%s",
+                type(exc).__name__,
+                extra={"task_id": task.task.task_id},
+            )
 
     async def run_forever(self, poll_seconds: float = 1.0) -> None:
         while not self._stopping.is_set():
