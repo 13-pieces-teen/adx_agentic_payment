@@ -1,0 +1,10 @@
+# Runtime dependencies for the self-hosted ADX control plane.
+#
+# Keep this file human-maintained. Regenerate production.txt with:
+#   uv pip compile --generate-hashes --output-file requirements/production.txt requirements/production.in
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+pydantic>=2.10,<3
+argon2-cffi>=21.3,<26
+itsdangerous>=2.2,<3
+asyncpg>=0.29,<1

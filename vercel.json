@@ -1,0 +1,24 @@
+{
+  "buildCommand": "",
+  "outputDirectory": "arena402",
+  "installCommand": "",
+  "framework": null,
+  "env": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://jvdxqjttvwphxnwcorkq.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2ZHhxanR0dndwaHhud2NvcmtxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3ODEwMjgsImV4cCI6MjEwMDM1NzAyOH0.2Q2m9wA3JIa3Zv5L1hJqPfJJmUJYq0qK0kO0yD0pCtA"
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/(.*\\.svg)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    }
+  ]
+}

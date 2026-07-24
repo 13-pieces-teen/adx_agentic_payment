@@ -1,0 +1,60 @@
+{
+	admin 127.0.0.1:2019
+	default_sni {$ADX_PUBLIC_HOST}
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+http://{$ADX_PUBLIC_HOST} {
+	@acme path /.well-known/acme-challenge/*
+	handle @acme {
+		root * /var/www/certbot
+		file_server
+	}
+
+	handle {
+		redir https://{$ADX_PUBLIC_HOST}{uri} permanent
+	}
+}
+
+https://{$ADX_PUBLIC_HOST} {
+	tls /etc/letsencrypt/live/{$ADX_PUBLIC_HOST}/fullchain.pem /etc/letsencrypt/live/{$ADX_PUBLIC_HOST}/privkey.pem
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=31536000"
+	}
+
+	request_body {
+		max_size 10MB
+	}
+
+	handle_path /downloads/* {
+		root * /srv/downloads
+		header Cache-Control "public, max-age=300"
+		file_server
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:8000 {
+			health_uri /api/health
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

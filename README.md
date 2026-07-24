@@ -37,6 +37,7 @@ The repository does **not** run this full loop end to end yet.
 |------|---------------|
 | Python matching and Arena/ELO component | Implemented as an in-memory prototype under `matching/`, exposed by `web/api.py`; it is not the full Arena 402 RFQ application layer |
 | A2A/payment boundary | Python interfaces, fixtures, and mocks exist under `shared/`, `a2a_team/`, and `x402_team/` |
+| Local Agent Connector | Self-hosted beta control plane under `connector/` and `connector_gateway/`; pairing, runtime discovery, typed commands, durable events, and PostgreSQL persistence are implemented, but the Connector is not yet bound to the Arena 402 Deal/payment loop |
 | Injective settlement | Injective EVM testnet prototype under `agent-arena/settlement/`: EIP-3009 authorization, project-specific facilitator, and direct mUSDC settlement |
 | Standard x402 HTTP flow | Not complete; the seller-side 402 challenge, paid retry, and resource response are not wired into the product |
 | Product integration | Not complete; accepted negotiations do not yet produce the final Deal, payment-gated delivery, and Receipt flow |
@@ -53,6 +54,10 @@ must not be described as a complete x402 or Arena 402 product implementation.
 | `web/api.py` | FastAPI wrapper around the in-memory Python prototype |
 | `shared/` | Python payment boundary and shared fixtures |
 | `a2a_team/`, `x402_team/` | Integration mocks |
+| `connector/`, `connector_gateway/` | Local runtime Connector and self-hosted control plane |
+| `arena402/` | CDN-only public Arena frontend used by the root Vercel deployment |
+| `frontend/` | Next.js Connector onboarding and control console used by the self-hosted deployment |
+| `deploy/`, `docker-compose.production.yml` | Connector control-plane deployment and installers |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 settlement prototype |
 | `docs/product.md` | Current product scope |
 | `docs/roadmap.md` | Current cross-module status and next steps |
@@ -86,6 +91,13 @@ demo verification remains roadmap work.
 For settlement status and module-specific setup, read
 [`agent-arena/README.md`](agent-arena/README.md) and
 [`agent-arena/settlement/README.md`](agent-arena/settlement/README.md).
+
+For the local Agent control plane, read
+[`connector/README.md`](connector/README.md),
+[`docs/local-agent-connector-spec.md`](docs/local-agent-connector-spec.md), and
+[`docs/self-hosted-connector-deployment.md`](docs/self-hosted-connector-deployment.md).
+The `adx-connector` executable and `ADX_*` environment names remain compatibility
+identifiers even though the maintained product name is Arena 402.
 
 ## Repository harness
 

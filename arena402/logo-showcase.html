@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>arena402 — Logo Background Styles</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', system-ui, sans-serif; background: #0a0a0c; color: #c0c0c0; }
+
+.bg-void { background: #000; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E"); }
+.bg-frosted { background: #1a1a1f; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E"); box-shadow: inset 0 0 200px rgba(100,140,180,0.04); }
+.bg-fluid { background: radial-gradient(ellipse at 30% 40%, #1a1040 0%, transparent 60%), radial-gradient(ellipse at 70% 60%, #201008 0%, transparent 60%), #080810; }
+.bg-studio { background: radial-gradient(ellipse at 70% 30%, #2a2a28 0%, transparent 50%), radial-gradient(ellipse at 30% 70%, #1a1a18 0%, transparent 50%), #0f0f0e; }
+.bg-analog { background: #ff6b00; box-shadow: inset 0 0 100px rgba(255,255,255,0.06); }
+.bg-led { background: #020204; background-image: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,240,255,0.015) 3px, rgba(0,240,255,0.015) 4px); }
+.bg-editorial { background: #f5f4f0; }
+.bg-iridescent { background: linear-gradient(135deg, #e8e6f0 0%, #f0ecf8 30%, #ece8f4 60%, #eae8f2 100%); }
+.bg-morning { background: radial-gradient(ellipse at 60% 40%, rgba(200,240,220,0.4) 0%, transparent 50%), radial-gradient(ellipse at 30% 60%, rgba(255,220,180,0.25) 0%, transparent 50%), #faf8f2; }
+.bg-clinical { background: linear-gradient(180deg, #fff 0%, #f2f2f4 100%); }
+.bg-ui { background: #f8f8fa; }
+.bg-swiss { background: #1a3a2a; }
+
+.header { text-align: center; padding: 40px 20px 20px; }
+.header h1 { font-size: 28px; font-weight: 200; color: #fff; letter-spacing: 6px; text-transform: uppercase; }
+.header .sub { color: #666; font-size: 12px; margin-top: 6px; font-family: 'JetBrains Mono', monospace; }
+
+.style-picker { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 0 20px 30px; max-width: 900px; margin: 0 auto; }
+.style-btn { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 8px 14px; border: 1px solid #333; background: #111; color: #888; cursor: pointer; transition: all 0.15s; }
+.style-btn:hover { border-color: #666; color: #ccc; }
+.style-btn.active { border-color: #fff; color: #fff; background: #1a1a1a; }
+.style-btn.rec { border-color: rgba(255,255,255,0.25); color: #ccc; }
+
+.preview { max-width: 900px; margin: 0 auto 40px; border-radius: 16px; overflow: hidden; transition: all 0.5s; border: 1px solid #222; }
+.preview.light { border-color: #ddd; }
+.preview-inner { padding: 80px 40px; display: flex; align-items: center; justify-content: center; min-height: 400px; transition: all 0.5s; }
+.preview-inner svg { width: min(280px, 50vw); height: auto; }
+
+.recs { max-width: 900px; margin: 0 auto 50px; padding: 0 20px; }
+.recs h3 { font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #888; text-transform: uppercase; margin-bottom: 12px; }
+.rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.rec-card { border: 1px solid #222; padding: 16px; cursor: pointer; transition: all 0.2s; }
+.rec-card:hover { border-color: #555; background: #111; }
+.rec-card h4 { font-size: 13px; color: #fff; margin-bottom: 4px; }
+.rec-card p { font-size: 11px; color: #666; line-height: 1.4; }
+.rec-card .tag { display: inline-block; margin-top: 6px; font-size: 9px; padding: 3px 8px; background: rgba(255,255,255,0.04); color: #888; }
+
+.footer { text-align: center; padding: 30px; color: #444; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+
+<div class="header"><h1>arena402</h1><p class="sub">12 Background Styles · Logo Presentation</p></div>
+<div class="style-picker" id="picker"></div>
+
+<div class="preview" id="preview">
+  <div class="preview-inner bg-led" id="previewInner"></div>
+</div>
+
+<div class="recs" id="recs"><h3>★ Recommended for arena402</h3><div class="rec-grid"></div></div>
+<div class="footer">Click any style to preview · ★ = recommended</div>
+
+<script>
+var SVG = '<svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg"><g fill="none" stroke="COLOR"><g opacity=".06" transform="translate(4,5)"><polygon points="100,8 190,60 190,98 100,118 10,98 10,60" stroke-width="3"/><circle cx="100" cy="63" r="52" stroke-width="2" stroke-dasharray="70 16 40 12 60 20 30 8"/></g><polyline points="100,10 180,60 100,64" stroke-width="3.5" stroke-linecap="round"/><polyline points="100,64 20,60 100,10" stroke-width="3.5" stroke-linecap="round" opacity=".55"/><line x1="100" y1="64" x2="130" y2="88" stroke-width="2.8" stroke-linecap="round"/><line x1="136" y1="92" x2="158" y2="106" stroke-width="2.5" stroke-linecap="round"/><line x1="70" y1="88" x2="100" y2="64" stroke-width="2.8" stroke-linecap="round" opacity=".7"/><circle cx="100" cy="62" r="48" stroke-width="2.5" stroke-dasharray="80 18 50 14 60 16 30 10" opacity=".75"/><circle cx="104" cy="64" r="32" stroke-width="1.8" stroke-dasharray="40 15 55 12 30 8" opacity=".55"/><circle cx="102" cy="63" r="18" stroke-width="1.2" stroke-dasharray="28 10 18 6" opacity=".4"/><g stroke-linecap="round"><line x1="100" y1="2" x2="100" y2="24" stroke-width="2" opacity=".65"/><line x1="186" y1="18" x2="160" y2="42" stroke-width="1.8" opacity=".55"/><line x1="196" y1="65" x2="170" y2="64" stroke-width="2" opacity=".65"/><line x1="180" y1="110" x2="156" y2="90" stroke-width="1.6" opacity=".5"/><line x1="100" y1="118" x2="100" y2="100" stroke-width="2" opacity=".65"/><line x1="14" y1="110" x2="40" y2="92" stroke-width="1.6" opacity=".5"/><line x1="8" y1="65" x2="30" y2="64" stroke-width="2" opacity=".65"/><line x1="16" y1="20" x2="40" y2="42" stroke-width="1.8" opacity=".55"/></g><g fill="COLOR"><rect x="148" y="28" width="4" height="2" opacity=".4" transform="rotate(15,150,29)"/><rect x="42" y="34" width="5" height="2" opacity=".35" transform="rotate(-10,44,35)"/><rect x="156" y="82" width="3" height="2" opacity=".3" transform="rotate(25,157,83)"/><rect x="38" y="78" width="4" height="1.5" opacity=".35" transform="rotate(-20,40,79)"/><rect x="128" y="108" width="6" height="2" opacity=".3" transform="rotate(8,131,109)"/><rect x="92" y="8" width="3" height="2" opacity=".4" transform="rotate(5,93,9)"/></g><text x="100" y="72" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="22" fill="COLOR" letter-spacing="3">402</text><circle cx="100" cy="64" r="2.5" fill="COLOR"/></g></svg>';
+
+var STYLES = [
+  {id:'void',name:'THE VOID',cls:'bg-void',dark:1,desc:'Absolute void, electronic film grain, faint icy glow'},
+  {id:'frosted',name:'FROSTED HORIZON',cls:'bg-frosted',dark:1,desc:'Titanium gray, rough stone texture, breathing space'},
+  {id:'fluid',name:'FLUID ABYSS',cls:'bg-fluid',dark:1,desc:'Deep purple/blue nebula, dark matter fluidity'},
+  {id:'studio',name:'STUDIO SPOTLIGHT',cls:'bg-studio',dark:1,desc:'Warm carbon gray, low-light camera grain, vignette'},
+  {id:'analog',name:'ANALOG LIQUID',cls:'bg-analog',dark:1,desc:'Solid orange, metallic mica shimmer, bold contrast'},
+  {id:'led',name:'LED MATRIX',cls:'bg-led',dark:1,desc:'Digital retro CRT, dot matrix, cyberpunk retro-futurism'},
+  {id:'editorial',name:'EDITORIAL PAPER',cls:'bg-editorial',dark:0,desc:'Off-white alabaster, art paper grain, independent magazine'},
+  {id:'iridescent',name:'IRIDESCENT FROST',cls:'bg-iridescent',dark:0,desc:'Silver-gray frosted glass, holographic pastel tones'},
+  {id:'morning',name:'MORNING AURA',cls:'bg-morning',dark:0,desc:'Warm ivory, pastel mist, approachable AI softness'},
+  {id:'clinical',name:'CLINICAL STUDIO',cls:'bg-clinical',dark:0,desc:'Pure white, sharp digital noise, sterile order'},
+  {id:'ui',name:'UI CONTAINER',cls:'bg-ui',dark:0,desc:'Clean gradient, app-native presentation, micro-depth'},
+  {id:'swiss',name:'SWISS FLAT',cls:'bg-swiss',dark:1,desc:'Pure solid deep green, zero effects, absolute flatness'},
+];
+
+var REC = ['led','void','frosted','fluid'];
+var reasons = {led:'♟ Cyberpunk + pixel chess = natural fit',void:'♟ arena402 core visual — absolute void',frosted:'♟ Premium breathing room for dense logo',fluid:'♟ AI agent dynamic fluidity on the board'};
+
+var current = 'led';
+function set(id){
+  current=id;
+  var s=STYLES.find(function(x){return x.id===id});
+  var p=document.getElementById('preview');
+  var inner=document.getElementById('previewInner');
+  inner.className='preview-inner '+s.cls;
+  inner.innerHTML=s.dark?SVG.replace(/COLOR/g,'#fff'):SVG.replace(/COLOR/g,'#111');
+  p.className='preview'+(s.dark?'':' light');
+  document.querySelectorAll('.style-btn').forEach(function(b){b.classList.toggle('active',b.dataset.id===id)});
+}
+
+function build(){
+  var picker=document.getElementById('picker');
+  STYLES.forEach(function(s){
+    var isRec=REC.indexOf(s.id)>=0;
+    var btn=document.createElement('button');
+    btn.className='style-btn'+(s.id===current?' active':'')+(isRec?' rec':'');
+    btn.dataset.id=s.id;btn.textContent=(isRec?'★ ':'')+s.name;
+    btn.onclick=function(){set(s.id)};
+    picker.appendChild(btn);
+  });
+  var grid=document.querySelector('.rec-grid');
+  REC.forEach(function(id){
+    var s=STYLES.find(function(x){return x.id===id});
+    var card=document.createElement('div');
+    card.className='rec-card';card.onclick=function(){set(s.id)};
+    card.innerHTML='<h4>'+s.name+'</h4><p>'+s.desc+'</p><span class="tag">'+reasons[id]+'</span>';
+    grid.appendChild(card);
+  });
+}
+
+build();set('led');
+</script>
+</body>
+</html>

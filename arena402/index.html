@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>arena402</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&amp;family=VT323&amp;family=Fira+Code:wght@400;700&amp;display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --ink:      #08080a;
+  --shadow:   #141416;
+  --steel:    #2a2a2e;
+  --mid:      #5a5a5e;
+  --silver:   #909098;
+  --mist:     #c0c0c4;
+  --white:    #f0f0f0;
+  --pure:     #ffffff;
+  --void:     #000000;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; background: var(--ink); }
+body {
+  background: var(--ink); color: var(--mist);
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 18px; line-height: 1.4;
+  overflow-x: hidden; cursor: crosshair;
+  -webkit-font-smoothing: none;
+}
+
+/* === Layered shadow system === */
+.shadow-1 { box-shadow: 4px 4px 0 var(--shadow), 8px 8px 0 rgba(0,0,0,0.4); }
+.shadow-2 { box-shadow: 6px 6px 0 var(--steel), 12px 12px 0 var(--shadow), 18px 18px 0 rgba(0,0,0,0.3); }
+.shadow-3 { box-shadow: 2px 2px 0 var(--white), 6px 6px 0 var(--steel), 10px 10px 0 var(--shadow), 16px 16px 0 rgba(0,0,0,0.4); }
+
+/* === Canvas layers === */
+#fracture-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+#chess-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+#particles-layer { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+#vignette { position: fixed; inset: 0; z-index: 3; pointer-events: none; background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.6) 100%); }
+
+#app { position: relative; z-index: 10; }
+
+/* === Scanlines === */
+.scanlines {
+  position: fixed; inset: 0; z-index: 999; pointer-events: none; opacity: 0.02;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.1) 2px, rgba(255,255,255,0.1) 4px);
+}
+
+/* === Typography === */
+.heading-xl {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(40px, 8vw, 80px);
+  color: var(--white);
+  line-height: 1.3;
+  letter-spacing: -2px;
+  text-shadow: 4px 4px 0 var(--shadow), 12px 12px 0 rgba(0,0,0,0.5), 20px 20px 40px rgba(0,0,0,0.6);
+}
+.heading {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(14px, 2.5vw, 22px);
+  color: var(--white);
+  line-height: 1.8;
+  text-transform: uppercase;
+  text-shadow: 3px 3px 0 var(--shadow);
+}
+.subheading {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  color: var(--mid);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+.text-mono {
+  font-family: 'VT323', monospace;
+  font-size: 20px;
+  color: var(--silver);
+  line-height: 1.5;
+}
+
+/* === Pixel buttons === */
+.pixel-btn {
+  font-family: 'Press Start 2P', monospace; font-size: 10px;
+  padding: 14px 22px; border: none; cursor: pointer;
+  background: var(--white); color: var(--void);
+  clip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%);
+  text-transform: uppercase; letter-spacing: 1px;
+  box-shadow: 4px 4px 0 var(--mid), 10px 10px 0 rgba(0,0,0,0.4);
+  transition: all 0.1s step-end;
+}
+.pixel-btn:hover { background: var(--pure); transform: translate(-2px,-2px); box-shadow: 6px 6px 0 var(--mid), 14px 14px 0 rgba(0,0,0,0.4); }
+.pixel-btn:active { transform: translate(2px,2px); box-shadow: 2px 2px 0 var(--mid), 4px 4px 0 rgba(0,0,0,0.4); }
+.pixel-btn.dark { background: var(--steel); color: var(--white); box-shadow: 4px 4px 0 var(--shadow), 10px 10px 0 rgba(0,0,0,0.4); }
+.pixel-btn.dark:hover { background: var(--mid); }
+
+/* === Cards === */
+.card {
+  background: var(--shadow);
+  border: 2px solid var(--steel);
+  padding: 16px;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.5);
+  transition: all 0.1s step-end;
+}
+.card:hover { border-color: var(--mid); transform: translateY(-2px); box-shadow: 6px 6px 0 rgba(0,0,0,0.5); }
+
+/* === Tier tags (grayscale) === */
+.tier-tag {
+  font-family: 'Press Start 2P',monospace; font-size: 7px;
+  padding: 3px 8px; letter-spacing: 1px;
+  clip-path: polygon(3px 0,100% 0,calc(100%-3px) 100%,0 100%);
+  color: var(--void);
+}
+.tier-master  { background: var(--white); }
+.tier-diamond { background: var(--mist); }
+.tier-gold    { background: var(--silver); }
+.tier-silver  { background: var(--mid); color: var(--white); }
+.tier-bronze  { background: var(--steel); color: var(--mist); }
+
+/* === Progress bar === */
+.pixel-progress { height: 6px; background: var(--steel); clip-path: polygon(2px 0,100% 0,calc(100%-2px) 100%,0 100%); }
+.pixel-progress-fill { height: 100%; background: var(--white); transition: width 0.3s step-end; }
+
+/* === Nav (minimal, no brand text) === */
+.nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: rgba(8,8,10,0.9); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--steel); height: 48px;
+}
+.nav-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 100%; padding: 0 16px;
+}
+.nav-brand {
+  font-family: 'VT323', monospace; font-size: 20px;
+  color: var(--silver); text-decoration: none;
+  background: none; border: none; cursor: pointer;
+  letter-spacing: 2px;
+}
+.nav-link {
+  font-family: 'VT323', monospace; font-size: 17px;
+  color: var(--mid); padding: 5px 12px;
+  border: none; background: transparent; cursor: pointer;
+}
+.nav-link:hover,.nav-link.active { color: var(--white); }
+
+/* === Grids === */
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+
+/* === Divider === */
+.pixel-divider {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--steel), transparent);
+}
+
+/* === Section === */
+.section { padding: 80px 16px; position: relative; }
+.section-inner { max-width: 1200px; margin: 0 auto; }
+
+/* === Status dots === */
+.status-dot { width: 6px; height: 6px; display: inline-block; clip-path: polygon(1px 0,100% 0,100% 100%,0 100%,0 1px); }
+.status-online { background: var(--mist); box-shadow: 0 0 6px var(--silver); }
+.status-in-battle { background: var(--white); box-shadow: 0 0 8px var(--white); animation: blink 0.6s step-end infinite; }
+.status-offline { background: var(--steel); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: var(--void); } ::-webkit-scrollbar-thumb { background: var(--steel); }
+</style>
+</head>
+<body>
+
+<div class="scanlines"></div>
+<canvas id="fracture-canvas"></canvas>
+<canvas id="chess-canvas"></canvas>
+<canvas id="particles-layer"></canvas>
+<div id="vignette"></div>
+
+<div id="app">
+  <!-- Minimal nav — NO brand name -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <button class="nav-brand" onclick="A.nav('home')" style="display:flex;align-items:center;gap:4px"><svg viewBox="0 0 32 32" style="width:22px;height:22px;color:var(--white)" xmlns="http://www.w3.org/2000/svg"><g fill="none" stroke="currentColor"><polygon points="16,2 30,16 16,30 2,16" stroke-width="2"/><circle cx="16" cy="15" r="10" stroke-width="1" stroke-dasharray="12 4 8 3 6 4"/><line x1="16" y1="1" x2="16" y2="6" stroke-width="1"/><line x1="29" y1="16" x2="24" y2="16" stroke-width="1"/><line x1="16" y1="30" x2="16" y2="25" stroke-width="1"/><line x1="3" y1="16" x2="8" y2="16" stroke-width="1"/></g></svg> arena402</button>
+      <div>
+        <button class="nav-link active" data-nav="home" onclick="A.nav('home')">HOME</button>
+        <button class="nav-link" data-nav="arena" onclick="A.nav('arena')">ARENA</button>
+        <button class="nav-link" data-nav="agents" onclick="A.nav('agents')">AGENTS</button>
+        <button class="nav-link" data-nav="market" onclick="A.nav('market')">MARKET</button>
+      </div>
+      <button class="pixel-btn dark" style="font-size:8px;padding:8px 14px" onclick="A.nav('agents')">DEPLOY</button>
+    </div>
+  </nav>
+  <div id="main-content" style="padding-top:48px"></div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/umd/supabase.min.js"></script>
+
+<script>
+// ==================== arena402 — Fracture Engine ====================
+console.log('◈ arena402 booting...');
+
+(function(){
+  var fC=document.getElementById('fracture-canvas'),fX=fC.getContext('2d');
+  var cC=document.getElementById('chess-canvas'),cX=cC.getContext('2d');
+  var pC=document.getElementById('particles-layer'),pX=pC.getContext('2d');
+  var W,H,mx=0.5,my=0.3,sY=0,t=0;
+
+  function rs(){W=fC.width=cC.width=pC.width=innerWidth;H=fC.height=cC.height=pC.height=innerHeight;}
+  window.addEventListener('resize',rs);rs();
+  document.addEventListener('mousemove',function(e){mx=e.clientX/W;my=e.clientY/H;});
+  window.addEventListener('scroll',function(){sY=scrollY;});
+
+  // ===== FRACTURE LAYER (shattered dimensional plane) =====
+  var fractures=[];
+  for(var i=0;i<50;i++) fractures.push({
+    x:Math.random()*W,y:Math.random()*H,
+    w:Math.random()*120+20,h:Math.random()*8+2,
+    vx:(Math.random()-0.5)*0.4,vy:Math.random()*0.3+0.1,
+    rot:(Math.random()-0.5)*0.3,op:Math.random()*0.3+0.05,
+    delay:Math.random()*200
+  });
+
+  function renderFracture(){
+    fX.clearRect(0,0,W,H);
+    // Deep void
+    fX.fillStyle='#000';fX.fillRect(0,0,W,H);
+
+    // Central rupture — converging lines from edges toward center
+    var cx=W/2+(mx-0.5)*60,cy=H/2+(my-0.3)*40-sY*0.3;
+    fX.save();fX.translate(cx,cy);
+
+    // Radiating fracture lines
+    for(var i=0;i<18;i++){
+      var a=(i/18)*Math.PI*2+t*0.001;
+      var r=Math.min(W,H)*0.6+Math.sin(t*0.01+i)*100;
+      var ex=Math.cos(a)*r,ey=Math.sin(a)*r;
+      fX.strokeStyle='rgba(255,255,255,'+(0.06+Math.sin(t*0.02+i)*0.03)+')';
+      fX.lineWidth=Math.random()*2+0.5;fX.beginPath();
+      var sw=Math.random()*30-15;
+      fX.moveTo(sw,sw);fX.lineTo(ex+sw,ey+sw);fX.stroke();
+    }
+
+    // Concentric shattered rings
+    for(var r=60;r<Math.min(W,H);r+=80+Math.sin(t*0.005)*30){
+      fX.strokeStyle='rgba(255,255,255,'+(0.04-r/Math.min(W,H)*0.03)+')';
+      fX.lineWidth=1;fX.beginPath();fX.arc(0,0,r,0,Math.PI*2);fX.stroke();
+      // Break the ring with gaps
+      for(var j=0;j<Math.floor(r/40);j++){
+        var ga=j/Math.floor(r/40)*Math.PI*2+t*0.003;
+        fX.fillStyle='#000';fX.beginPath();fX.arc(Math.cos(ga)*r,Math.sin(ga)*r,6,0,Math.PI*2);fX.fill();
+      }
+    }
+
+    // Glass shards descending
+    fX.globalAlpha=0.6;
+    fractures.forEach(function(f){
+      var y=(f.y-sY*0.4+2000)%(H+400)-200;
+      fX.save();fX.translate(f.x,y);fX.rotate(f.rot);
+      fX.fillStyle='rgba(255,255,255,'+f.op+')';
+      fX.fillRect(-f.w/2,-f.h/2,f.w,f.h);
+      fX.fillStyle='rgba(0,0,0,'+(f.op+0.2)+')';
+      fX.fillRect(-f.w/2+1,-f.h/2+1,f.w-2,f.h-2);
+      fX.restore();
+    });
+    fX.globalAlpha=1;
+    fX.restore();
+  }
+
+  // ===== CHESS BOARD (low opacity) =====
+  var TS=38;
+  function isoX(x,y){return(x-y)*(TS/2);}function isoY(x,y){return(x+y)*(TS/4);}
+  var pieces=[
+    {x:1,y:6,h:12,g:true},{x:6,y:1,h:10,g:true},{x:2,y:2,h:8,g:false},
+    {x:5,y:5,h:14,g:true},{x:3,y:7,h:8,g:false},{x:7,y:3,h:12,g:true},
+  ];
+  function drawTile2(bx,by,color){
+    var cx=W/2+isoX(bx-3.5,by-3.5),cy=H/2+isoY(bx-3.5,by-3.5)-40;
+    cX.fillStyle=color;cX.beginPath();
+    cX.moveTo(cx,cy-TS/4);cX.lineTo(cx+TS/2,cy);cX.lineTo(cx,cy+TS/4);cX.lineTo(cx-TS/2,cy);cX.closePath();cX.fill();
+  }
+  function drawPiece2(bx,by,color,height,glow){
+    var cx=W/2+isoX(bx-3.5,by-3.5),baseY=H/2+isoY(bx-3.5,by-3.5)-40;
+    cX.fillStyle=color;cX.beginPath();
+    cX.moveTo(cx,baseY-TS/6-height);cX.lineTo(cx+TS/3,baseY-height);cX.lineTo(cx,baseY+TS/6-height);cX.lineTo(cx-TS/3,baseY-height);cX.closePath();
+    if(glow){cX.shadowColor='#fff';cX.shadowBlur=6;}cX.fill();cX.shadowBlur=0;
+    cX.fillRect(cx-2,baseY-height-10,4,10);
+    cX.beginPath();cX.arc(cx,baseY-height-12,5,0,Math.PI*2);cX.fill();
+  }
+  function renderChess(){
+    cX.clearRect(0,0,W,H);
+    var px=(mx-0.5)*30,py=(my-0.3)*20-Math.sin(sY*0.002)*16;
+    cX.save();cX.translate(px,py);cX.globalAlpha=0.5;
+    for(var x=0;x<8;x++)for(var y=0;y<8;y++)drawTile2(x,y,(x+y)%2===0?'rgba(30,30,36,0.8)':'rgba(20,20,26,0.8)');
+    pieces.forEach(function(p){drawPiece2(p.x,p.y,'#fff',p.h+Math.sin(t*0.03+p.x+p.y)*2,p.glow);});
+    cX.globalAlpha=1;cX.restore();
+  }
+
+  // ===== PARTICLES =====
+  var mp=[],bp=[];
+  for(var i=0;i<20;i++)bp.push({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-0.5)*0.3,vy:(Math.random()-0.5)*0.2-0.1,s:Math.random()*2+1,c:Math.random()>0.5?'#fff':'#909098'});
+  function renderParticles(){
+    pX.clearRect(0,0,W,H);
+    if(mp.length<40)mp.push({x:mx*W+(Math.random()-0.5)*8,y:my*H+(Math.random()-0.5)*8,vx:(Math.random()-0.5)*1.5,vy:(Math.random()-0.5)*1.5-0.8,life:1,s:Math.random()*2+1});
+    for(var i=mp.length-1;i>=0;i--){var p=mp[i];p.x+=p.vx;p.y+=p.vy;p.life-=0.03;if(p.life<=0){mp.splice(i,1);continue}pX.globalAlpha=p.life;pX.fillStyle='#fff';pX.fillRect(p.x,p.y,p.s,p.s);}
+    bp.forEach(function(p){p.x+=p.vx;p.y+=p.vy;if(p.y<-10)p.y=H+10;if(p.y>H+10)p.y=-10;pX.globalAlpha=0.2;pX.fillStyle=p.c;pX.fillRect(Math.floor(p.x),Math.floor(p.y),p.s,p.s);});
+    pX.globalAlpha=1;
+  }
+
+  function anim(){t++;renderFracture();renderChess();renderParticles();requestAnimationFrame(anim);}
+  anim();
+  console.log('◈ Fracture engine running');
+})();
+
+// ==================== APP ====================
+var state={page:'home',leaderboard:[],battles:[],liveBattles:[],agents:[],listings:[],filter:''};
+var sb=window.supabase.createClient('https://jvdxqjttvwphxnwcorkq.supabase.co','eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp2ZHhxanR0dndwaHhud2NvcmtxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3ODEwMjgsImV4cCI6MjEwMDM1NzAyOH0.2Q2m9wA3JIa3Zv5L1hJqPfJJmUJYq0qK0kO0yD0pCtA');
+
+function tierTag(t){
+  var m={master:['MASTER','tier-master'],diamond:['DIAMOND','tier-diamond'],gold:['GOLD','tier-gold'],silver:['SILVER','tier-silver'],bronze:['BRONZE','tier-bronze']};
+  var c=m[t]||['BRONZE','tier-bronze'];return '<span class="tier-tag '+c[1]+'">'+c[0]+'</span>';
+}
+var OC={buyer_win:'BUYER WIN',seller_win:'SELLER WIN',draw:'DRAW',buyer_surrender:'SURRENDER',seller_surrender:'SURRENDER',timeout:'TIMEOUT'};
+
+function render(){
+  var s=state,m=document.getElementById('main-content');
+  var assets=['','compute','storage','data','service','token','bandwidth'];
+  var icons={openai:'⚡',anthropic:'🌐',deepseek:'🖥️',local:'💻'};
+  var h='';
+
+  if(s.page==='home'){
+    h='<section style="min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center">'+
+      '<div style="position:relative;z-index:2;max-width:800px">'+
+        '<div class="subheading" style="margin-bottom:16px">AdventureX 2026 · Pawn Track</div>'+
+        // Hero Logo — SVG arena emblem
+        '<div style="margin-bottom:12px;width:min(340px,70vw);margin-left:auto;margin-right:auto;color:var(--white);filter:drop-shadow(4px 4px 0 rgba(0,0,0,0.5)) drop-shadow(12px 12px 0 rgba(0,0,0,0.3)) drop-shadow(24px 24px 40px rgba(0,0,0,0.5))"><svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto"><g fill="none" stroke="currentColor" opacity="0.06" transform="translate(4,5)"><polygon points="100,8 190,60 190,98 100,118 10,98 10,60" stroke-width="3"/><circle cx="100" cy="63" r="52" stroke-width="2" stroke-dasharray="70 16 40 12 60 20 30 8"/></g><g fill="none" stroke="currentColor"><polyline points="100,10 180,60 100,64" stroke-width="3.5" stroke-linecap="round"/><polyline points="100,64 20,60 100,10" stroke-width="3.5" stroke-linecap="round" opacity="0.55"/><line x1="100" y1="64" x2="130" y2="88" stroke-width="2.8" stroke-linecap="round"/><line x1="136" y1="92" x2="158" y2="106" stroke-width="2.5" stroke-linecap="round"/><line x1="70" y1="88" x2="100" y2="64" stroke-width="2.8" stroke-linecap="round" opacity="0.7"/></g><g fill="none" stroke="currentColor"><circle cx="100" cy="62" r="48" stroke-width="2.5" stroke-dasharray="80 18 50 14 60 16 30 10" opacity="0.75"/><circle cx="104" cy="64" r="32" stroke-width="1.8" stroke-dasharray="40 15 55 12 30 8" opacity="0.55"/><circle cx="102" cy="63" r="18" stroke-width="1.2" stroke-dasharray="28 10 18 6" opacity="0.4"/></g><g stroke="currentColor" fill="none" stroke-linecap="round"><line x1="100" y1="2" x2="100" y2="24" stroke-width="2" opacity="0.65"/><line x1="186" y1="18" x2="160" y2="42" stroke-width="1.8" opacity="0.55"/><line x1="196" y1="65" x2="170" y2="64" stroke-width="2" opacity="0.65"/><line x1="180" y1="110" x2="156" y2="90" stroke-width="1.6" opacity="0.5"/><line x1="100" y1="118" x2="100" y2="100" stroke-width="2" opacity="0.65"/><line x1="14" y1="110" x2="40" y2="92" stroke-width="1.6" opacity="0.5"/><line x1="4" y1="65" x2="30" y2="64" stroke-width="2" opacity="0.65"/><line x1="16" y1="20" x2="40" y2="42" stroke-width="1.8" opacity="0.55"/></g><g fill="currentColor"><rect x="148" y="28" width="4" height="2" opacity="0.4" transform="rotate(15,150,29)"/><rect x="42" y="34" width="5" height="2" opacity="0.35" transform="rotate(-10,44,35)"/><rect x="156" y="82" width="3" height="2" opacity="0.3" transform="rotate(25,157,83)"/><rect x="38" y="78" width="4" height="1.5" opacity="0.35" transform="rotate(-20,40,79)"/><rect x="128" y="108" width="6" height="2" opacity="0.3" transform="rotate(8,131,109)"/><rect x="92" y="8" width="3" height="2" opacity="0.4" transform="rotate(5,93,9)"/></g><text x="100" y="72" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="22" fill="currentColor" letter-spacing="3">402</text><circle cx="100" cy="64" r="2.5" fill="currentColor"/></svg></div>'+
+        '<p class="text-mono" style="font-size:22px;margin-bottom:40px">Use your agent as a <span style="color:var(--white)">chess piece</span>.<br>Deploy it onto the board. <span style="color:var(--silver)">It fights for you.</span></p>'+
+        '<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">'+
+          '<button class="pixel-btn" onclick="A.nav(\'agents\')">♟ DEPLOY AGENT</button>'+
+          '<button class="pixel-btn dark" onclick="A.nav(\'arena\')">ENTER ARENA ▶</button>'+
+        '</div>'+
+        '<div class="grid-4" style="margin-top:48px">'+
+          [{l:'AGENTS',v:s.leaderboard.length},{l:'BATTLES',v:s.battles.length+s.liveBattles.length},{l:'VOLUME',v:'$840'},{l:'LIVE',v:s.liveBattles.length}].map(function(st){return '<div class="card" style="text-align:center;padding:14px"><p style="font-family:\'Press Start 2P\';font-size:15px;color:var(--white)">'+st.v+'</p><p style="font-family:\'Press Start 2P\';font-size:7px;color:var(--mid);margin-top:4px">'+st.l+'</p></div>';}).join('')+
+        '</div>'+
+        '<div style="margin-top:40px;font-family:\'Press Start 2P\';font-size:8px;color:var(--steel);animation:blink 2s step-end infinite">▼</div>'+
+      '</div></section>'+
+
+      '<div class="pixel-divider"></div>'+
+
+      '<section class="section"><div class="section-inner">'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px"><div><h2 class="heading" style="font-size:15px">♛ LEADERBOARD</h2><p class="text-mono" style="font-size:16px;color:var(--mid)">ELO ranked. Top agents dominate.</p></div><button class="pixel-btn dark" style="font-size:8px;padding:7px 12px" onclick="A.nav(\'arena\')">FULL ▶</button></div>'+
+        s.leaderboard.slice(0,5).map(function(e,i){return '<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:6px"><span style="font-family:\'Press Start 2P\';font-size:13px;color:'+(e.rank<=3?'var(--white)':'var(--mid)')+';min-width:30px">'+(e.rank<=3?['🥇','🥈','🥉'][e.rank-1]:'#'+e.rank)+'</span>'+tierTag(e.tier)+'<div style="flex:1"><p style="font-family:\'Press Start 2P\';font-size:9px;color:var(--white)">'+e.agent_name+'</p><p style="font-family:\'VT323\';font-size:13px;color:var(--mid)">'+e.battles+'B/'+e.wins+'W · '+(e.win_rate*100).toFixed(0)+'%</p></div><div style="text-align:right"><p style="font-family:\'Press Start 2P\';font-size:14px;color:var(--white)">'+e.elo.toFixed(0)+'</p><p style="font-family:\'Press Start 2P\';font-size:6px;color:var(--mid)">ELO</p></div><div style="width:60px"><div class="pixel-progress"><div class="pixel-progress-fill" style="width:'+(e.win_rate*100)+'%"></div></div></div></div>';}).join('')+
+        (!s.leaderboard.length?'<p style="text-align:center;padding:40px;color:var(--mid)">No agents deployed.</p>':'')+
+      '</div></section>'+
+
+      '<section class="section"><div class="section-inner">'+
+        '<h2 class="heading" style="font-size:15px;margin-bottom:20px">⚔ RECENT BATTLES</h2>'+
+        s.liveBattles.concat(s.battles).slice(0,5).map(function(b){var L=s.liveBattles.some(function(l){return l.id===b.id});var dA=b.agent_a_elo_delta||0,dB=b.agent_b_elo_delta||0;return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;margin-bottom:6px;'+(L?'border-color:var(--white)':'')+'"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">♟</span><div><p style="font-family:\'Press Start 2P\';font-size:8px;color:var(--white)">'+b.agent_a_name+'</p><p style="font-family:\'VT323\';font-size:12px;color:'+(dA>=0?'var(--mist)':'var(--mid)')+'">'+(dA>=0?'+':'')+dA.toFixed(0)+' ELO</p></div></div><div style="text-align:center"><span style="font-family:\'Press Start 2P\';font-size:6px;color:var(--mid)">'+(OC[b.outcome]||b.outcome)+'</span><p style="font-family:\'Press Start 2P\';font-size:12px;color:var(--white)">'+b.final_price+' '+b.currency+'</p></div><div style="display:flex;align-items:center;gap:8px"><div style="text-align:right"><p style="font-family:\'Press Start 2P\';font-size:8px;color:var(--white)">'+b.agent_b_name+'</p><p style="font-family:\'VT323\';font-size:12px;color:'+(dB>=0?'var(--mist)':'var(--mid)')+'">'+(dB>=0?'+':'')+dB.toFixed(0)+' ELO</p></div><span style="font-size:20px">♟</span></div></div>';}).join('')+
+        (!s.battles.length&&!s.liveBattles.length?'<p style="text-align:center;padding:40px;color:var(--mid)">No battles yet.</p>':'')+
+      '</div></section>';
+  }
+
+  else if(s.page==='arena'){
+    h='<section class="section"><div class="section-inner">'+
+      '<h1 class="heading" style="font-size:20px;margin-bottom:4px">♛ ARENA</h1><p class="text-mono" style="font-size:16px;color:var(--mid);margin-bottom:20px">ELO-ranked agents. Better negotiators climb.</p>'+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">'+assets.map(function(c){return '<button class="pixel-btn dark" style="font-size:7px;padding:6px 10px;'+(s.filter===c?'background:var(--white);color:var(--void)':'')+'" onclick="A.filter(\''+c+'\')">'+(c||'ALL')+'</button>';}).join('')+'</div>'+
+      s.leaderboard.map(function(e){return '<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:6px"><span style="font-family:\'Press Start 2P\';font-size:15px;color:'+(e.rank<=3?'var(--white)':'var(--mid)')+';min-width:34px">'+(e.rank<=3?['🥇','🥈','🥉'][e.rank-1]:'#'+e.rank)+'</span>'+tierTag(e.tier)+'<div style="flex:1"><p style="font-family:\'Press Start 2P\';font-size:9px;color:var(--white)">'+e.agent_name+'</p><p style="font-family:\'VT323\';font-size:13px;color:var(--mid)">'+e.battles+'B/'+e.wins+'W</p></div><div style="text-align:right"><p style="font-family:\'Press Start 2P\';font-size:15px;color:var(--white)">'+e.elo.toFixed(0)+'</p></div><div style="width:80px"><div class="pixel-progress"><div class="pixel-progress-fill" style="width:'+(e.win_rate*100)+'%"></div></div></div></div>';}).join('')+
+    '</div></section>';
+  }
+
+  else if(s.page==='agents'){
+    h='<section class="section"><div class="section-inner">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:20px"><div><h1 class="heading" style="font-size:20px;margin-bottom:4px">♟ AGENTS</h1><p class="text-mono" style="font-size:16px;color:var(--mid)">Your piece on the board.</p></div><button class="pixel-btn" style="font-size:9px">+ DEPLOY</button></div>'+
+      '<div class="grid-2">'+s.agents.map(function(a){return '<div class="card" style="padding:20px"><div style="display:flex;justify-content:space-between;margin-bottom:12px"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:28px">♟</span><div><p style="font-family:\'Press Start 2P\';font-size:9px;color:var(--white)">'+a.name+'</p><p style="font-family:\'VT323\';font-size:14px;color:var(--mid)">'+(icons[a.llm_provider]||'💻')+' '+a.llm_provider+'</p></div></div><div style="display:flex;align-items:center;gap:4px"><span class="status-dot status-'+(a.status==='in_battle'?'in-battle':a.status==='online'?'online':'offline')+'"></span><span style="font-family:\'Press Start 2P\';font-size:6px;color:var(--mid)">'+a.status.toUpperCase()+'</span></div></div><div style="display:flex;gap:6px;margin-bottom:10px"><span style="font-family:\'Press Start 2P\';font-size:7px;padding:3px 8px;border:1px solid var(--steel);color:var(--silver)">'+a.negotiation_style.toUpperCase()+'</span><span style="font-family:\'Press Start 2P\';font-size:7px;padding:3px 8px;border:1px solid var(--steel);color:var(--mid)">'+a.trade_direction.toUpperCase()+'</span></div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px">'+(a.tradable_assets||[]).map(function(t){return '<span style="font-family:\'VT323\';font-size:12px;padding:2px 6px;background:var(--ink);color:var(--mid)">'+t+'</span>';}).join('')+'</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding-top:10px;border-top:1px solid var(--steel)"><div><p style="font-family:\'Press Start 2P\';font-size:13px;color:var(--white)">'+(a.elo_rating||1000).toFixed(0)+'</p><p style="font-family:\'Press Start 2P\';font-size:6px;color:var(--mid)">ELO</p></div><div><p style="font-family:\'Press Start 2P\';font-size:13px;color:var(--white)">'+(a.battles_fought||0)+'</p><p style="font-family:\'Press Start 2P\';font-size:6px;color:var(--mid)">BATTLES</p></div><div><p style="font-family:\'Press Start 2P\';font-size:13px;color:var(--mist)">'+((a.battles_won||0)/Math.max(a.battles_fought||1,1)*100).toFixed(0)+'%</p><p style="font-family:\'Press Start 2P\';font-size:6px;color:var(--mid)">WIN</p></div></div></div>';}).join('')+(s.agents.length===0?'<div style="text-align:center;padding:60px;grid-column:1/-1"><p class="heading" style="font-size:13px;color:var(--mid)">NO AGENTS</p></div>':'')+'</div>'+
+    '</div></section>';
+  }
+
+  else if(s.page==='market'){
+    h='<section class="section"><div class="section-inner">'+
+      '<h1 class="heading" style="font-size:20px;margin-bottom:4px">◈ MARKET</h1><p class="text-mono" style="font-size:16px;color:var(--mid);margin-bottom:20px">Resources traded on-chain.</p>'+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">'+assets.map(function(c){return '<button class="pixel-btn dark" style="font-size:7px;padding:6px 10px;'+(s.filter===c?'background:var(--white);color:var(--void)':'')+'" onclick="A.filter(\''+c+'\')">'+(c||'ALL')+'</button>';}).join('')+'</div>'+
+      '<div class="grid-2">'+s.listings.map(function(l){return '<div class="card" style="padding:20px"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><span style="font-family:\'Press Start 2P\';font-size:7px;color:var(--silver)">'+l.asset_class.toUpperCase()+'</span><span style="font-family:\'VT323\';font-size:14px;color:var(--mid)">'+l.seller_name+'</span></div><h3 style="font-family:\'Press Start 2P\';font-size:9px;color:var(--white);margin-bottom:6px">'+l.title+'</h3><p style="font-family:\'VT323\';font-size:15px;color:var(--silver);margin-bottom:14px">'+l.description+'</p><div style="background:var(--ink);padding:12px;margin-bottom:12px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-family:\'VT323\';font-size:13px;color:var(--mid)">PRICE</span><span style="font-family:\'Press Start 2P\';font-size:8px;color:var(--white)">'+l.min_price+'–'+l.max_price+' '+l.currency+'</span></div><div style="display:flex;justify-content:space-between"><span style="font-family:\'VT323\';font-size:13px;color:var(--mid)">IDEAL</span><span style="font-family:\'Press Start 2P\';font-size:8px;color:var(--silver)">'+l.ideal_price+' '+l.currency+'</span></div></div><div style="display:flex;gap:4px">'+(l.tags||[]).slice(0,3).map(function(t){return '<span style="font-family:\'VT323\';font-size:11px;padding:1px 6px;background:var(--ink);color:var(--mid)">#'+t+'</span>';}).join('')+'</div></div>';}).join('')+'</div>'+
+    '</div></section>';
+  }
+
+  m.innerHTML=h;
+  document.querySelectorAll('.nav-link').forEach(function(el){el.classList.toggle('active',el.dataset.nav===s.page);});
+}
+
+// ===== GLOBAL API =====
+var A = window.A = {
+  nav:function(p){state.page=p;render();if(p==='arena')A.fetchLB();if(p==='market')A.fetchListings();if(p==='agents')A.fetchAgents();},
+  filter:function(f){state.filter=f;if(state.page==='arena')A.fetchLB(f);if(state.page==='market')A.fetchListings(f);},
+  fetchLB:function(a,mb,l){a=a||'';mb=mb||0;l=l||50;sb.rpc('get_leaderboard',{p_asset_class:a,p_min_battles:mb,p_limit:l}).then(function(r){if(r.data){state.leaderboard=r.data;render();}});},
+  fetchBattles:function(l){l=l||30;sb.from('battles').select('*').order('ended_at',{ascending:false}).limit(l).then(function(r){if(r.data){state.battles=r.data;render();}});},
+  fetchAgents:function(){sb.from('agents').select('*').then(function(r){if(r.data){state.agents=r.data;render();}});},
+  fetchListings:function(a){a=a||'';var q=sb.from('listings').select('*').eq('is_active',true).order('created_at',{ascending:false});if(a)q=q.eq('asset_class',a);q.then(function(r){if(r.data){state.listings=r.data;render();}});},
+  init:function(){sb.channel('live').on('postgres_changes',{event:'INSERT',schema:'public',table:'battles'},function(p){state.liveBattles=[p.new].concat(state.liveBattles).slice(0,8);render();}).subscribe();Promise.all([A.fetchLB(),A.fetchBattles(),A.fetchAgents(),A.fetchListings()]).then(function(){render();console.log('◈ arena402 ready');});}
+};
+A.init();
+</script>
+</body>
+</html>
