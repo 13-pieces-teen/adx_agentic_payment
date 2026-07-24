@@ -1,0 +1,22 @@
+{
+  "_spec": "SETTLE-001",
+  "chainId": 1439,
+  "rpc": "https://k8s.testnet.json-rpc.injective.network/",
+  "usdc": {
+    "address": "0x06D223D12774386A96D33863D9106A800e52BDeD",
+    "symbol": "mUSDC",
+    "decimals": 6,
+    "eip712Name": "Mock USD Coin",
+    "eip712Version": "1",
+    "domainSeparator": "0xe00644bb9ea40949710ce5222f478fb2c6cb69ed32deb867137960554cd1494f",
+    "supportsEip3009": true,
+    "faucetAmount": "1000",
+    "_spec": "SETTLE-002.5"
+  },
+  "wallets": {
+    "buyer": "0x07900F7f7C5E3d92BB0Eeea43981050605e1aB25",
+    "seller": "0x93Dafa6bFa2428CA033e8d6Fe9C94e40d1AC8754",
+    "facilitator": "0x7fB8d49698E40656F727511Da6251D3e6dfFaD50"
+  },
+  "note": "eip712Version 若来自默认值需人工核对；supportsEip3009=false 时切 Permit2"
+}

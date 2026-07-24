@@ -1,0 +1,143 @@
+# AI developers
+
+> How to build AI-powered applications and agents on Injective, including generative AI tools, MCP servers, and agent skills.
+
+- Official source: [https://docs.injective.network/developers-ai](https://docs.injective.network/developers-ai)
+- Last source change: `2026-07-01`
+- Snapshot captured: `2026-07-23`
+- Upstream revision: [`1a31f4937cce`](https://github.com/InjectiveLabs/injective-docs/commit/1a31f4937cce679b1bf5542743dc1e223289d248)
+
+---
+
+## Why build using generative AI tools on Injective?
+
+With generative AI coding tools, you can build applications very quickly, including on Injective.
+However building very fast in the wrong direction is not ideal.
+You will find skills, agents, workflows, and MCP servers here that will help you with effective AI software engineering.
+
+## What types of generative AI tools are available?
+
+LLMs, LLM providers, MCP servers, agent skills, CLIs/SDKs/functions/scripts,
+AI engineering IDEs/Harnesses/Orchestrators are various types of generative AI tools.
+You can use all of them when building on Injective.
+
+- **LLMs** -
+    Large language models (LLMs) are the base-layer technology powering almost all generative AI software engineering.
+    Almost all AI development tools are wrappers around LLMs.
+    Popular ones include Claude Opus (Anthropic), Gemini (Google), and Kimi (Moonshot AI).
+- **LLM Providers** -
+    Low-tier and mid-tier LLMs are possible to run on retail/ consumer hardware.
+    However the top-tier LLMs need to be accessed remotely.
+    You have 3 main options:
+    - **Local providers** -
+      For example, using LM Studio or Ollama.
+    - **Remote providers from model developers** -
+      For example, accessing Claude Opus via an Anthropic subscription.
+    - **Remote providers from model aggregators** -
+      For example, accessing Claude Opus, Gemini, or Kimi via an OpenRouter subscription.
+- **CLIs, SDKs, functions, and scripts** -
+    These can be anything from functions, to scripts, to command-line interfaces (CLIs) that are packaged up in a manner
+    that make them understood or callable by LLMs.
+    For example, if you want the LLM to access real-time information,
+    i.e. information that was not available to it when the LLM was trained,
+    you would need to give it access to call tools for web searches or other data APIs.
+    Note that even when these are not adapted for use by LLMs,
+    agent skills may be used to provide thin wrappers around them.
+- **MCP** -
+    Model Context Protocol (MCP) is a protocol designed for discovery and calling of tools by LLMs.
+    They are designed to standardize the way for different LLMs and LLM providers to invoke tools.
+    Previously each LLM or LLM provider had competing standards/ protocols for doing so.
+- **Agent Skills** -
+    These are markdown files that primarily include a detailed repeatable prompt.
+    They optionally reference supporting resources, tools, MCP servers and others.
+    They are designed specifically to work with AI engineering harnesses,
+    but can be used in other contexts too.
+    They can be recursive, for example a skill can reference other skills.
+    These are sometimes also referred to as "workflows", "subagents", and "agents".
+    In this context, workflows are usually a set of skills with a defined order;
+    and agents/ subagents are sets of workflows and skills with no specified order,
+    where the LLM is given agency over which ones to use and in what order.
+    Note that the term "agents" is overused, with multiple definitions,
+    so the above definition is specific to this context.
+- **AI Engineering IDEs** -
+    These are either dedicated IDEs or plugins within IDEs that allow you to prompt LLMs,
+    including execution of tool calls or MCPs,
+    and use their output to work on the code base that is open within the IDE.
+    Popular ones include: Roo, Cline, and Cursor.
+- **AI Engineering Harnesses** -
+    These are command line interfaces (CLIs) or terminal user interfaces (TUIs) that are designed around
+    invoking LLMs for coding tasks.
+    They operate directly on the file system, and often come with baked-in optimizations and utilities for engineering tasks.
+    These tend to be more powerful than working with AI engineering IDEs,
+    as they work best when skills, workflows, and agents are used.
+    Popular ones include: Claude Code (Anthropic), Codex (OpenAI), and OpenCode (unaffiliated).
+- **AI Engineering Orchestrators** -
+    These are tools that act as wrappers around harnesses.
+    Their main intent is to enable long-running loops or parallelization of harness invocation,
+    such that it becomes possible have LLMs working autonomously on longer and more complex tasks
+    without the need for constant human supervision.
+    Popular ones include: Ralph, GSD.
+
+## Which types of generative AI tools will work when developing on Injective?
+
+LLMs, LLM Providers, Tools, MCP, Skills, Workflows, Agents, AI engineering IDEs,
+AI engineering Harnesses, AI engineering Orchestrators.
+In short, all of them!
+In fact, that is the point of this **AI Developers** section!
+
+## AI SDK
+
+Injective makes it easy for you to develop using AI.
+Use the [Injective AI SDK](./ai-sdk.md)
+which provides you with agent skills, CLI, and MCP servers - all in a single install.
+
+## Agent skills
+
+### Injective CLI agent skill
+
+How to install and use the [Injective CLI skill](./injective-cli-skill.md).
+
+Use the `injectived` binary to query and transact against an Injective chain
+with consistent wallet handling, endpoint selection, and gas configuration.
+
+### Injective EVM developer agent skill
+
+How to install and use the [Injective EVM Developer skill](./injective-evm-developer-skill.md).
+
+When building on Injective's EVM,
+you will need regular EVM developer skills that are applicable to EVM-compatible networks.
+You will also need some specifics to Injective's EVM.
+This skill augments existing EVM developer skills to provide you with just that.
+
+### Injective MCP servers agent skill
+
+How to install and use the [Injective MCP Servers skill](./injective-mcp-servers-skill.md).
+
+### Injective trading agent skills
+
+How to install and use the [Injective Trading skills](./injective-trading-skills.md).
+
+This is a set of multiple skills which you can mix and match from,
+and are used in a variety of trading contexts:
+Account, auto-sign, bridge, chain analysis, market data, staking, and tokens.
+
+## MCP servers
+
+### Injective documentation MCP server
+
+How to use the [Injective documentation MCP server](./documentation-mcp.md)
+to obtain up-to-date information from this documentation site.
+
+If you ask any LLM about Injective,
+it will likely give you out-of-date information, as it does with any fast moving technology.
+This is because their information is obtained from its training data,
+which is by definition "frozen in time".
+By adding this MCP to your AI development workflow,
+not only will you get up-to-date information about developing on Injective,
+you will also have citations for that information in the form of URLs from this documentation site.
+
+### Injective MCP server
+
+How to use the [Injective MCP server](./mcp.md)
+to give AI tools full trading capabilities on Injective.
+Including perpetual futures, spot transfers, cross-chain bridging, and raw EVM transactions.
