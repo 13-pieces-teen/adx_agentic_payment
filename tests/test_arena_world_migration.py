@@ -11,6 +11,9 @@ MARKET_SQL_PATH = (
 HOSTED_SQL_PATH = (
     ROOT / "db" / "migrations" / "008_arena_pawnhouse_hosted_runtime.sql"
 )
+SETTLEMENT_SQL_PATH = (
+    ROOT / "db" / "migrations" / "009_arena_settlement_commit.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -84,3 +87,21 @@ def test_hosted_runtime_migration_defines_recoverable_round_run_queue() -> None:
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON arena402.runtime_runs" in sql
     assert "TO adx_arena_core" in sql
     assert "GRANT SELECT ON arena402.runtime_runs TO adx_arena_api" in sql
+
+
+def test_settlement_migration_separates_chain_confirmation_from_inventory() -> None:
+    sql = SETTLEMENT_SQL_PATH.read_text(encoding="utf-8")
+    required = (
+        "CREATE TABLE arena402.participant_settlement_accounts",
+        "CREATE TABLE arena402.settlement_intents",
+        "CREATE TABLE arena402.settlement_submissions",
+        "CREATE TABLE arena402.settlement_confirmations",
+        "CREATE TABLE arena402.inventory_commits",
+    )
+    assert all(item in sql for item in required)
+    assert "authorization_mode = 'single_eip3009'" in sql
+    assert "'chain_confirmed_uncommitted'" in sql
+    assert "settlement_intent_id TEXT NOT NULL UNIQUE" in sql
+    assert "CHECK (buyer_holding_after = buyer_holding_before + 1)" in sql
+    assert "CHECK (seller_holding_after = seller_holding_before - 1)" in sql
+    assert "GRANT SELECT ON ALL TABLES IN SCHEMA arena402 TO adx_arena_api" in sql

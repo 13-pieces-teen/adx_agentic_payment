@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from arena_core.hashing import sha256_identifier
+from arena_core.hashing import sha256_identifier, sha256_text_identifier
 
 from .events import WorldEvent, WorldState, schedule_commitment
 from .goods import GOODS, GOOD_IDS
@@ -18,6 +18,16 @@ from .money import gold
 from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
 from .portfolio import Portfolio
 from .rule_runtime import RuleRuntime, RuleStrategy
+from .settlement import (
+    ChainConfirmation,
+    SettlementAccount,
+    SettlementConfig,
+    SettlementError,
+    SettlementIntent,
+    normalize_authorization_nonce,
+    normalize_tx_hash,
+    validate_chain_confirmation,
+)
 
 
 class PawnhouseRepositoryError(RuntimeError):
@@ -84,10 +94,12 @@ class PostgresPawnhouseRepository:
         event_seed: str,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
+        settlement_config: SettlementConfig | None = None,
     ) -> dict[str, object]:
         if not game_id:
             raise PawnhouseRepositoryError("game_id_required")
         commitment = schedule_commitment(events, seed=event_seed)
+        resolved_settlement = settlement_config or SettlementConfig()
         config = {
             "world": "aurelia-402",
             "venue": "kings-pawnhouse",
@@ -95,6 +107,7 @@ class PostgresPawnhouseRepository:
             "initialNetWorthAtomic": "20000000",
             "fixedTradeQuantity": 1,
             "goldScale": 1_000_000,
+            "settlement": resolved_settlement.to_snapshot(),
             "schemaVersion": "arena.pawnhouse-game.v1",
         }
         pool = self._require_pool()
@@ -197,7 +210,7 @@ class PostgresPawnhouseRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                phase = await connection.fetchval(
+                phase = await connection.fetchrow(
                     """
                     SELECT phase
                     FROM arena402.games
@@ -291,14 +304,15 @@ class PostgresPawnhouseRepository:
         user_id: str,
         agent_id: str,
         portfolio: Portfolio,
+        settlement_account: SettlementAccount | None = None,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                phase = await connection.fetchval(
+                phase = await connection.fetchrow(
                     """
-                    SELECT phase
+                    SELECT phase, config_snapshot
                     FROM arena402.games
                     WHERE game_id = $1
                     FOR UPDATE
@@ -307,8 +321,23 @@ class PostgresPawnhouseRepository:
                 )
                 if phase is None:
                     raise PawnhouseRepositoryError("game_not_found")
-                if phase not in ("registration", "portfolio_setup"):
+                if phase["phase"] not in ("registration", "portfolio_setup"):
                     raise PawnhouseRepositoryError("game_not_joinable")
+                game_config = (
+                    json.loads(phase["config_snapshot"])
+                    if isinstance(phase["config_snapshot"], str)
+                    else dict(phase["config_snapshot"])
+                )
+                settlement_config = self._settlement_config(game_config)
+                if settlement_config.authorization_mode != "none":
+                    if settlement_account is None:
+                        raise PawnhouseRepositoryError(
+                            "settlement_account_required"
+                        )
+                    if settlement_account.chain_id != settlement_config.chain_id:
+                        raise PawnhouseRepositoryError(
+                            "settlement_account_chain_mismatch"
+                        )
                 hosted = await connection.fetchrow(
                     """
                     SELECT
@@ -420,6 +449,21 @@ class PostgresPawnhouseRepository:
                         game_id,
                         good_id,
                         quantity,
+                    )
+                if settlement_account is not None:
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.participant_settlement_accounts (
+                            game_participant_id, game_id, chain_id,
+                            account_address, custody_mode
+                        )
+                        VALUES ($1, $2, $3, $4, $5)
+                        """,
+                        participant_id,
+                        game_id,
+                        settlement_account.chain_id,
+                        settlement_account.address,
+                        settlement_account.custody_mode,
                     )
                 await connection.execute(
                     """
@@ -1560,6 +1604,14 @@ class PostgresPawnhouseRepository:
                         negotiation.status.value,
                         completed_at,
                     )
+                    if (
+                        negotiation.status
+                        is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
+                    ):
+                        await self._freeze_settlement_intent(
+                            connection,
+                            negotiation_id=negotiation_id,
+                        )
         return {
             "negotiationId": negotiation_id,
             "status": negotiation.status.value,
@@ -1589,6 +1641,718 @@ class PostgresPawnhouseRepository:
             game_id,
         )
         return None if row is None else dict(row)
+
+    async def settlement_intents_for_game(
+        self,
+        *,
+        game_id: str,
+    ) -> list[dict[str, object]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT
+                i.*,
+                s.tx_hash,
+                s.submission_source,
+                c.block_number,
+                c.block_hash,
+                c.confirmation_count
+            FROM arena402.settlement_intents AS i
+            LEFT JOIN arena402.settlement_submissions AS s
+              ON s.settlement_intent_id = i.settlement_intent_id
+            LEFT JOIN arena402.settlement_confirmations AS c
+              ON c.settlement_intent_id = i.settlement_intent_id
+            WHERE i.game_id = $1
+            ORDER BY i.created_at, i.settlement_intent_id
+            """,
+            game_id,
+        )
+        return [self._settlement_public(row) for row in rows]
+
+    async def record_settlement_submission(
+        self,
+        *,
+        settlement_intent_id: str,
+        tx_hash: str,
+        authorization_nonce: str,
+        submission_source: str,
+    ) -> dict[str, object]:
+        normalized_tx = normalize_tx_hash(tx_hash)
+        normalized_nonce = normalize_authorization_nonce(
+            authorization_nonce
+        )
+        if submission_source not in {"wallet", "sandbox_guest"}:
+            raise PawnhouseRepositoryError("invalid_submission_source")
+        nonce_digest = sha256_text_identifier(normalized_nonce)
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                intent = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.settlement_intents
+                    WHERE settlement_intent_id = $1
+                    FOR UPDATE
+                    """,
+                    settlement_intent_id,
+                )
+                if intent is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_intent_not_found"
+                    )
+                existing = await connection.fetchrow(
+                    """
+                    SELECT
+                        tx_hash, authorization_nonce_digest,
+                        submission_source
+                    FROM arena402.settlement_submissions
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                if existing is not None:
+                    if (
+                        existing["tx_hash"] != normalized_tx
+                        or existing["authorization_nonce_digest"]
+                        != nonce_digest
+                        or existing["submission_source"] != submission_source
+                    ):
+                        raise PawnhouseRepositoryError(
+                            "settlement_submission_conflict"
+                        )
+                    return self._settlement_public(
+                        {
+                            **dict(intent),
+                            "tx_hash": existing["tx_hash"],
+                            "submission_source": existing[
+                                "submission_source"
+                            ],
+                            "block_number": None,
+                            "block_hash": None,
+                            "confirmation_count": None,
+                        }
+                    )
+                if intent["status"] not in (
+                    "authorization_requested",
+                    "confirmation_timeout",
+                ):
+                    raise PawnhouseRepositoryError(
+                        "settlement_not_awaiting_submission"
+                    )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.settlement_submissions (
+                        settlement_intent_id, tx_hash,
+                        authorization_nonce_digest, submission_source
+                    )
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    settlement_intent_id,
+                    normalized_tx,
+                    nonce_digest,
+                    submission_source,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.settlement_intents
+                    SET status = 'submitted',
+                        submitted_at = clock_timestamp(),
+                        safe_error_code = NULL
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                await self._event(
+                    connection,
+                    game_id=intent["game_id"],
+                    round_id=intent["round_id"],
+                    event_type="settlement.submitted",
+                    source_key=f"{settlement_intent_id}:submitted",
+                    public_payload={
+                        "settlementIntentId": settlement_intent_id,
+                        "txHash": normalized_tx,
+                        "status": "submitted",
+                    },
+                )
+                updated = dict(intent)
+                updated.update(
+                    {
+                        "status": "submitted",
+                        "tx_hash": normalized_tx,
+                        "submission_source": submission_source,
+                        "block_number": None,
+                        "block_hash": None,
+                        "confirmation_count": None,
+                    }
+                )
+                return self._settlement_public(updated)
+
+    async def mark_confirmation_timeout(
+        self,
+        *,
+        settlement_intent_id: str,
+    ) -> dict[str, object]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    UPDATE arena402.settlement_intents
+                    SET status = 'confirmation_timeout',
+                        safe_error_code = 'confirmation_timeout'
+                    WHERE settlement_intent_id = $1
+                      AND status = 'submitted'
+                    RETURNING *
+                    """,
+                    settlement_intent_id,
+                )
+                if row is None:
+                    row = await connection.fetchrow(
+                        """
+                        SELECT *
+                        FROM arena402.settlement_intents
+                        WHERE settlement_intent_id = $1
+                        """,
+                        settlement_intent_id,
+                    )
+                    if row is None:
+                        raise PawnhouseRepositoryError(
+                            "settlement_intent_not_found"
+                        )
+                    if row["status"] != "confirmation_timeout":
+                        raise PawnhouseRepositoryError(
+                            "settlement_not_submitted"
+                        )
+                submission = await connection.fetchrow(
+                    """
+                    SELECT tx_hash, submission_source
+                    FROM arena402.settlement_submissions
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                await self._event(
+                    connection,
+                    game_id=row["game_id"],
+                    round_id=row["round_id"],
+                    event_type="settlement.confirmation_timeout",
+                    source_key=f"{settlement_intent_id}:confirmation_timeout",
+                    public_payload={
+                        "settlementIntentId": settlement_intent_id,
+                        "txHash": (
+                            submission["tx_hash"]
+                            if submission is not None
+                            else None
+                        ),
+                        "status": "confirmation_timeout",
+                    },
+                )
+                value = dict(row)
+                value.update(
+                    {
+                        "tx_hash": (
+                            submission["tx_hash"]
+                            if submission is not None
+                            else None
+                        ),
+                        "submission_source": (
+                            submission["submission_source"]
+                            if submission is not None
+                            else None
+                        ),
+                        "block_number": None,
+                        "block_hash": None,
+                        "confirmation_count": None,
+                    }
+                )
+                return self._settlement_public(value)
+
+    async def record_chain_confirmation(
+        self,
+        *,
+        settlement_intent_id: str,
+        confirmation: ChainConfirmation,
+    ) -> dict[str, object]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT i.*, s.tx_hash, s.submission_source
+                    FROM arena402.settlement_intents AS i
+                    JOIN arena402.settlement_submissions AS s
+                      ON s.settlement_intent_id = i.settlement_intent_id
+                    WHERE i.settlement_intent_id = $1
+                    FOR UPDATE OF i
+                    """,
+                    settlement_intent_id,
+                )
+                if row is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_submission_not_found"
+                    )
+                intent = self._intent_from_row(row)
+                if confirmation.tx_hash != row["tx_hash"]:
+                    raise PawnhouseRepositoryError(
+                        "confirmation_transaction_mismatch"
+                    )
+                try:
+                    validate_chain_confirmation(intent, confirmation)
+                except SettlementError as exc:
+                    raise PawnhouseRepositoryError(str(exc)) from None
+                existing = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.settlement_confirmations
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                if existing is not None:
+                    if existing["evidence_hash"] != confirmation.evidence_hash:
+                        raise PawnhouseRepositoryError(
+                            "chain_confirmation_conflict"
+                        )
+                else:
+                    if row["status"] not in (
+                        "submitted",
+                        "confirmation_timeout",
+                    ):
+                        raise PawnhouseRepositoryError(
+                            "settlement_not_confirmable"
+                        )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.settlement_confirmations (
+                            settlement_intent_id, tx_hash, chain_id,
+                            token_address, from_account, to_account,
+                            amount_atomic, block_number, block_hash,
+                            confirmation_count, evidence_hash
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                        )
+                        """,
+                        settlement_intent_id,
+                        confirmation.tx_hash,
+                        confirmation.chain_id,
+                        confirmation.token_address,
+                        confirmation.from_account,
+                        confirmation.to_account,
+                        confirmation.amount_atomic,
+                        confirmation.block_number,
+                        confirmation.block_hash,
+                        confirmation.confirmation_count,
+                        confirmation.evidence_hash,
+                    )
+                    await connection.execute(
+                        """
+                        UPDATE arena402.settlement_intents
+                        SET status = 'chain_confirmed_uncommitted',
+                            chain_confirmed_at = clock_timestamp(),
+                            safe_error_code = NULL
+                        WHERE settlement_intent_id = $1
+                        """,
+                        settlement_intent_id,
+                    )
+                    await self._event(
+                        connection,
+                        game_id=row["game_id"],
+                        round_id=row["round_id"],
+                        event_type="settlement.chain_confirmed",
+                        source_key=(
+                            f"{settlement_intent_id}:"
+                            f"{confirmation.evidence_hash}"
+                        ),
+                        public_payload={
+                            "settlementIntentId": settlement_intent_id,
+                            "txHash": confirmation.tx_hash,
+                            "blockNumber": confirmation.block_number,
+                            "confirmationCount": (
+                                confirmation.confirmation_count
+                            ),
+                            "status": "chain_confirmed_uncommitted",
+                        },
+                    )
+                value = dict(row)
+                value.update(
+                    {
+                        "status": (
+                            "inventory_committed"
+                            if row["status"] == "inventory_committed"
+                            else "chain_confirmed_uncommitted"
+                        ),
+                        "block_number": confirmation.block_number,
+                        "block_hash": confirmation.block_hash,
+                        "confirmation_count": (
+                            confirmation.confirmation_count
+                        ),
+                    }
+                )
+                return self._settlement_public(value)
+
+    async def settlement_confirmation_target(
+        self,
+        *,
+        settlement_intent_id: str,
+    ) -> tuple[SettlementIntent, str]:
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT i.*, s.tx_hash
+            FROM arena402.settlement_intents AS i
+            JOIN arena402.settlement_submissions AS s
+              ON s.settlement_intent_id = i.settlement_intent_id
+            WHERE i.settlement_intent_id = $1
+            """,
+            settlement_intent_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError(
+                "settlement_submission_not_found"
+            )
+        if row["status"] not in (
+            "submitted",
+            "confirmation_timeout",
+            "chain_confirmed_uncommitted",
+            "inventory_committed",
+        ):
+            raise PawnhouseRepositoryError("settlement_not_recoverable")
+        return self._intent_from_row(row), row["tx_hash"]
+
+    async def record_chain_reverted(
+        self,
+        *,
+        settlement_intent_id: str,
+        tx_hash: str,
+    ) -> dict[str, object]:
+        normalized_tx = normalize_tx_hash(tx_hash)
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT i.*, s.tx_hash, s.submission_source
+                    FROM arena402.settlement_intents AS i
+                    JOIN arena402.settlement_submissions AS s
+                      ON s.settlement_intent_id = i.settlement_intent_id
+                    WHERE i.settlement_intent_id = $1
+                    FOR UPDATE OF i
+                    """,
+                    settlement_intent_id,
+                )
+                if row is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_submission_not_found"
+                    )
+                if row["tx_hash"] != normalized_tx:
+                    raise PawnhouseRepositoryError(
+                        "confirmation_transaction_mismatch"
+                    )
+                if row["status"] == "reverted":
+                    value = dict(row)
+                    value.update(
+                        {
+                            "block_number": None,
+                            "block_hash": None,
+                            "confirmation_count": None,
+                        }
+                    )
+                    return self._settlement_public(value)
+                if row["status"] not in (
+                    "submitted",
+                    "confirmation_timeout",
+                ):
+                    raise PawnhouseRepositoryError(
+                        "settlement_not_revertible"
+                    )
+                await connection.execute(
+                    """
+                    UPDATE arena402.settlement_intents
+                    SET status = 'reverted',
+                        safe_error_code = 'chain_transaction_reverted',
+                        completed_at = clock_timestamp()
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.pairings
+                    SET status = 'settlement_failed',
+                        completed_at = clock_timestamp()
+                    WHERE pairing_id = $1
+                    """,
+                    row["pairing_id"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.game_participants
+                    SET status = 'active'
+                    WHERE game_participant_id = ANY($1::text[])
+                      AND status = 'settling'
+                    """,
+                    [
+                        row["buyer_participant_id"],
+                        row["seller_participant_id"],
+                    ],
+                )
+                await self._event(
+                    connection,
+                    game_id=row["game_id"],
+                    round_id=row["round_id"],
+                    event_type="settlement.reverted",
+                    source_key=f"{settlement_intent_id}:reverted",
+                    public_payload={
+                        "settlementIntentId": settlement_intent_id,
+                        "txHash": normalized_tx,
+                        "status": "reverted",
+                    },
+                )
+                value = dict(row)
+                value.update(
+                    {
+                        "status": "reverted",
+                        "safe_error_code": "chain_transaction_reverted",
+                        "block_number": None,
+                        "block_hash": None,
+                        "confirmation_count": None,
+                    }
+                )
+                return self._settlement_public(value)
+
+    async def commit_confirmed_inventory(
+        self,
+        *,
+        settlement_intent_id: str,
+    ) -> dict[str, object]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                intent = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.settlement_intents
+                    WHERE settlement_intent_id = $1
+                    FOR UPDATE
+                    """,
+                    settlement_intent_id,
+                )
+                if intent is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_intent_not_found"
+                    )
+                existing = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.inventory_commits
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                if existing is not None:
+                    return self._inventory_commit_public(
+                        intent=intent,
+                        commit=existing,
+                    )
+                if intent["status"] != "chain_confirmed_uncommitted":
+                    raise PawnhouseRepositoryError(
+                        "chain_confirmation_required"
+                    )
+                confirmed = await connection.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM arena402.settlement_confirmations
+                        WHERE settlement_intent_id = $1
+                    )
+                    """,
+                    settlement_intent_id,
+                )
+                if not confirmed:
+                    raise PawnhouseRepositoryError(
+                        "chain_confirmation_required"
+                    )
+                participant_ids = sorted(
+                    [
+                        intent["buyer_participant_id"],
+                        intent["seller_participant_id"],
+                    ]
+                )
+                balance_rows = await connection.fetch(
+                    """
+                    SELECT game_participant_id, cash_atomic
+                    FROM arena402.balances
+                    WHERE game_participant_id = ANY($1::text[])
+                    ORDER BY game_participant_id
+                    FOR UPDATE
+                    """,
+                    participant_ids,
+                )
+                holding_rows = await connection.fetch(
+                    """
+                    SELECT game_participant_id, quantity
+                    FROM arena402.holdings
+                    WHERE game_participant_id = ANY($1::text[])
+                      AND good_id = $2
+                    ORDER BY game_participant_id
+                    FOR UPDATE
+                    """,
+                    participant_ids,
+                    intent["good_id"],
+                )
+                balances = {
+                    row["game_participant_id"]: int(row["cash_atomic"])
+                    for row in balance_rows
+                }
+                holdings = {
+                    row["game_participant_id"]: int(row["quantity"])
+                    for row in holding_rows
+                }
+                buyer_id = intent["buyer_participant_id"]
+                seller_id = intent["seller_participant_id"]
+                if set(balances) != {buyer_id, seller_id}:
+                    raise PawnhouseRepositoryError(
+                        "settlement_balance_projection_missing"
+                    )
+                if set(holdings) != {buyer_id, seller_id}:
+                    raise PawnhouseRepositoryError(
+                        "settlement_holding_projection_missing"
+                    )
+                amount = int(intent["amount_atomic"])
+                buyer_cash_before = balances[buyer_id]
+                seller_cash_before = balances[seller_id]
+                buyer_holding_before = holdings[buyer_id]
+                seller_holding_before = holdings[seller_id]
+                if buyer_cash_before < amount:
+                    raise PawnhouseRepositoryError(
+                        "buyer_cash_changed_before_commit"
+                    )
+                if seller_holding_before < 1:
+                    raise PawnhouseRepositoryError(
+                        "seller_inventory_changed_before_commit"
+                    )
+                buyer_cash_after = buyer_cash_before - amount
+                seller_cash_after = seller_cash_before + amount
+                buyer_holding_after = buyer_holding_before + 1
+                seller_holding_after = seller_holding_before - 1
+                await connection.execute(
+                    """
+                    UPDATE arena402.balances
+                    SET cash_atomic = (
+                            CASE
+                                WHEN game_participant_id = $1
+                                THEN $3::numeric
+                                WHEN game_participant_id = $2
+                                THEN $4::numeric
+                            END
+                        ),
+                        version = version + 1,
+                        updated_at = clock_timestamp()
+                    WHERE game_participant_id = ANY($5::text[])
+                    """,
+                    buyer_id,
+                    seller_id,
+                    buyer_cash_after,
+                    seller_cash_after,
+                    participant_ids,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.holdings
+                    SET quantity = (
+                            CASE
+                                WHEN game_participant_id = $1
+                                THEN $3::bigint
+                                WHEN game_participant_id = $2
+                                THEN $4::bigint
+                            END
+                        ),
+                        version = version + 1,
+                        updated_at = clock_timestamp()
+                    WHERE game_participant_id = ANY($5::text[])
+                      AND good_id = $6
+                    """,
+                    buyer_id,
+                    seller_id,
+                    buyer_holding_after,
+                    seller_holding_after,
+                    participant_ids,
+                    intent["good_id"],
+                )
+                commit_id = f"inventory-commit:{settlement_intent_id}"
+                commit = await connection.fetchrow(
+                    """
+                    INSERT INTO arena402.inventory_commits (
+                        inventory_commit_id, settlement_intent_id,
+                        buyer_cash_before_atomic, buyer_cash_after_atomic,
+                        seller_cash_before_atomic, seller_cash_after_atomic,
+                        buyer_holding_before, buyer_holding_after,
+                        seller_holding_before, seller_holding_after
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+                    )
+                    RETURNING *
+                    """,
+                    commit_id,
+                    settlement_intent_id,
+                    buyer_cash_before,
+                    buyer_cash_after,
+                    seller_cash_before,
+                    seller_cash_after,
+                    buyer_holding_before,
+                    buyer_holding_after,
+                    seller_holding_before,
+                    seller_holding_after,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.settlement_intents
+                    SET status = 'inventory_committed',
+                        inventory_committed_at = clock_timestamp(),
+                        completed_at = clock_timestamp()
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.pairings
+                    SET status = 'settled',
+                        completed_at = clock_timestamp()
+                    WHERE pairing_id = $1
+                    """,
+                    intent["pairing_id"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.game_participants
+                    SET status = 'active'
+                    WHERE game_participant_id = ANY($1::text[])
+                      AND status = 'settling'
+                    """,
+                    participant_ids,
+                )
+                await self._event(
+                    connection,
+                    game_id=intent["game_id"],
+                    round_id=intent["round_id"],
+                    event_type="settlement.inventory_committed",
+                    source_key=f"{settlement_intent_id}:inventory_committed",
+                    public_payload={
+                        "settlementIntentId": settlement_intent_id,
+                        "pairingId": intent["pairing_id"],
+                        "good": intent["good_id"],
+                        "quantity": int(intent["quantity"]),
+                        "amountAtomic": str(intent["amount_atomic"]),
+                        "status": "inventory_committed",
+                    },
+                )
+                updated_intent = dict(intent)
+                updated_intent["status"] = "inventory_committed"
+                return self._inventory_commit_public(
+                    intent=updated_intent,
+                    commit=commit,
+                )
 
     async def game_state(self, game_id: str) -> dict[str, object]:
         pool = self._require_pool()
@@ -1954,6 +2718,14 @@ class PostgresPawnhouseRepository:
                 pairing_status,
                 completed_at,
             )
+            if (
+                negotiation.status
+                is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
+            ):
+                await self._freeze_settlement_intent(
+                    connection,
+                    negotiation_id=negotiation.negotiation_id,
+                )
             outputs.append(
                 {
                     "negotiationId": negotiation.negotiation_id,
@@ -1967,6 +2739,373 @@ class PostgresPawnhouseRepository:
                 }
             )
         return outputs
+
+    async def _freeze_settlement_intent(
+        self,
+        connection: Any,
+        *,
+        negotiation_id: str,
+    ) -> SettlementIntent | None:
+        row = await connection.fetchrow(
+            """
+            SELECT
+                n.negotiation_id,
+                n.pairing_id,
+                n.game_id,
+                n.round_id,
+                n.buyer_participant_id,
+                n.seller_participant_id,
+                n.accepted_price_atomic,
+                p.good_id,
+                g.config_snapshot,
+                buyer.agent_id AS buyer_agent_id,
+                seller.agent_id AS seller_agent_id,
+                buyer_account.chain_id AS buyer_chain_id,
+                buyer_account.account_address AS buyer_account,
+                seller_account.chain_id AS seller_chain_id,
+                seller_account.account_address AS seller_account,
+                buyer_balance.cash_atomic AS buyer_cash_atomic,
+                seller_holding.quantity AS seller_quantity
+            FROM arena402.negotiations AS n
+            JOIN arena402.pairings AS p
+              ON p.pairing_id = n.pairing_id
+             AND p.game_id = n.game_id
+             AND p.round_id = n.round_id
+            JOIN arena402.games AS g
+              ON g.game_id = n.game_id
+            JOIN arena402.game_participants AS buyer
+              ON buyer.game_participant_id = n.buyer_participant_id
+             AND buyer.game_id = n.game_id
+            JOIN arena402.game_participants AS seller
+              ON seller.game_participant_id = n.seller_participant_id
+             AND seller.game_id = n.game_id
+            LEFT JOIN arena402.participant_settlement_accounts AS buyer_account
+              ON buyer_account.game_participant_id =
+                 n.buyer_participant_id
+            LEFT JOIN arena402.participant_settlement_accounts AS seller_account
+              ON seller_account.game_participant_id =
+                 n.seller_participant_id
+            JOIN arena402.balances AS buyer_balance
+              ON buyer_balance.game_participant_id =
+                 n.buyer_participant_id
+            JOIN arena402.holdings AS seller_holding
+              ON seller_holding.game_participant_id =
+                 n.seller_participant_id
+             AND seller_holding.good_id = p.good_id
+            WHERE n.negotiation_id = $1
+            FOR SHARE OF n, p, g, buyer, seller,
+                buyer_balance, seller_holding
+            """,
+            negotiation_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError("negotiation_not_found")
+        game_config = (
+            json.loads(row["config_snapshot"])
+            if isinstance(row["config_snapshot"], str)
+            else dict(row["config_snapshot"])
+        )
+        settlement_config = self._settlement_config(game_config)
+        if settlement_config.authorization_mode == "none":
+            return None
+        if row["accepted_price_atomic"] is None:
+            raise PawnhouseRepositoryError(
+                "accepted_negotiation_has_no_price"
+            )
+        if row["buyer_account"] is None or row["seller_account"] is None:
+            raise PawnhouseRepositoryError("settlement_account_missing")
+        assert settlement_config.chain_id is not None
+        assert settlement_config.token_address is not None
+        assert settlement_config.token_symbol is not None
+        assert settlement_config.token_decimals is not None
+        if (
+            int(row["buyer_chain_id"]) != settlement_config.chain_id
+            or int(row["seller_chain_id"]) != settlement_config.chain_id
+        ):
+            raise PawnhouseRepositoryError(
+                "settlement_account_chain_mismatch"
+            )
+        accepted_price = int(row["accepted_price_atomic"])
+        if int(row["buyer_cash_atomic"]) < accepted_price:
+            raise PawnhouseRepositoryError(
+                "buyer_has_insufficient_cash_for_settlement"
+            )
+        if int(row["seller_quantity"]) < 1:
+            raise PawnhouseRepositoryError(
+                "seller_has_no_inventory_for_settlement"
+            )
+        intent_id = f"settlement:{negotiation_id}"
+        intent = SettlementIntent(
+            settlement_intent_id=intent_id,
+            game_id=row["game_id"],
+            round_id=row["round_id"],
+            pairing_id=row["pairing_id"],
+            negotiation_id=row["negotiation_id"],
+            buyer_participant_id=row["buyer_participant_id"],
+            seller_participant_id=row["seller_participant_id"],
+            buyer_agent_id=row["buyer_agent_id"],
+            seller_agent_id=row["seller_agent_id"],
+            buyer_account=row["buyer_account"],
+            seller_account=row["seller_account"],
+            good=row["good_id"],
+            quantity=1,
+            unit_price_atomic=accepted_price,
+            amount_atomic=accepted_price,
+            chain_id=settlement_config.chain_id,
+            token_address=settlement_config.token_address,
+            token_symbol=settlement_config.token_symbol,
+            token_decimals=settlement_config.token_decimals,
+            required_confirmations=(
+                settlement_config.required_confirmations
+            ),
+            authorization_mode="single_eip3009",
+            idempotency_key=(
+                f"{row['game_id']}:{row['round_id']}:"
+                f"{row['negotiation_id']}"
+            ),
+        )
+        inserted = await connection.fetchrow(
+            """
+            INSERT INTO arena402.settlement_intents (
+                settlement_intent_id, game_id, round_id, pairing_id,
+                negotiation_id, buyer_participant_id,
+                seller_participant_id, buyer_agent_id, seller_agent_id,
+                buyer_account, seller_account, good_id, quantity,
+                unit_price_atomic, amount_atomic, chain_id, token_address,
+                token_symbol, token_decimals, required_confirmations,
+                authorization_mode, idempotency_key, intent_snapshot,
+                intent_hash
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+                $23::jsonb, $24
+            )
+            ON CONFLICT (negotiation_id) DO NOTHING
+            RETURNING settlement_intent_id
+            """,
+            intent.settlement_intent_id,
+            intent.game_id,
+            intent.round_id,
+            intent.pairing_id,
+            intent.negotiation_id,
+            intent.buyer_participant_id,
+            intent.seller_participant_id,
+            intent.buyer_agent_id,
+            intent.seller_agent_id,
+            intent.buyer_account,
+            intent.seller_account,
+            intent.good,
+            intent.quantity,
+            intent.unit_price_atomic,
+            intent.amount_atomic,
+            intent.chain_id,
+            intent.token_address,
+            intent.token_symbol,
+            intent.token_decimals,
+            intent.required_confirmations,
+            intent.authorization_mode,
+            intent.idempotency_key,
+            _json(intent.to_snapshot()),
+            intent.intent_hash,
+        )
+        if inserted is None:
+            existing = await connection.fetchrow(
+                """
+                SELECT intent_hash
+                FROM arena402.settlement_intents
+                WHERE negotiation_id = $1
+                """,
+                negotiation_id,
+            )
+            if (
+                existing is None
+                or existing["intent_hash"] != intent.intent_hash
+            ):
+                raise PawnhouseRepositoryError(
+                    "settlement_intent_conflict"
+                )
+            return intent
+        await connection.execute(
+            """
+            UPDATE arena402.game_participants
+            SET status = 'settling'
+            WHERE game_participant_id = ANY($1::text[])
+              AND status = 'active'
+            """,
+            [
+                intent.buyer_participant_id,
+                intent.seller_participant_id,
+            ],
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.pairings
+            SET status = 'settling'
+            WHERE pairing_id = $1
+              AND status = 'accepted_pending_settlement'
+            """,
+            intent.pairing_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.rounds
+            SET phase = 'settle',
+                phase_deadline_at = NULL
+            WHERE round_id = $1
+              AND phase = 'negotiate'
+            """,
+            intent.round_id,
+        )
+        await self._event(
+            connection,
+            game_id=intent.game_id,
+            round_id=intent.round_id,
+            event_type="settlement.intent_frozen",
+            source_key=f"{intent.settlement_intent_id}:frozen",
+            public_payload={
+                "settlementIntentId": intent.settlement_intent_id,
+                "pairingId": intent.pairing_id,
+                "negotiationId": intent.negotiation_id,
+                "good": intent.good,
+                "quantity": intent.quantity,
+                "amountAtomic": str(intent.amount_atomic),
+                "chainId": intent.chain_id,
+                "tokenAddress": intent.token_address,
+                "sellerAccount": intent.seller_account,
+                "authorizationMode": intent.authorization_mode,
+                "status": "authorization_requested",
+            },
+        )
+        return intent
+
+    @staticmethod
+    def _settlement_config(
+        game_config: Mapping[str, object],
+    ) -> SettlementConfig:
+        raw = game_config.get("settlement")
+        if raw is None:
+            return SettlementConfig()
+        if not isinstance(raw, Mapping):
+            raise PawnhouseRepositoryError("invalid_settlement_config")
+        try:
+            mode = str(raw.get("authorizationMode", "none"))
+            if mode == "none":
+                return SettlementConfig()
+            return SettlementConfig(
+                authorization_mode=mode,  # type: ignore[arg-type]
+                chain_id=int(raw["chainId"]),
+                token_address=str(raw["tokenAddress"]),
+                token_symbol=str(raw["tokenSymbol"]),
+                token_decimals=int(raw["tokenDecimals"]),
+                required_confirmations=int(
+                    raw.get("requiredConfirmations", 1)
+                ),
+            )
+        except (KeyError, TypeError, ValueError, SettlementError):
+            raise PawnhouseRepositoryError(
+                "invalid_settlement_config"
+            ) from None
+
+    @staticmethod
+    def _intent_from_row(row: Mapping[str, object]) -> SettlementIntent:
+        intent = SettlementIntent(
+            settlement_intent_id=str(row["settlement_intent_id"]),
+            game_id=str(row["game_id"]),
+            round_id=str(row["round_id"]),
+            pairing_id=str(row["pairing_id"]),
+            negotiation_id=str(row["negotiation_id"]),
+            buyer_participant_id=str(row["buyer_participant_id"]),
+            seller_participant_id=str(row["seller_participant_id"]),
+            buyer_agent_id=str(row["buyer_agent_id"]),
+            seller_agent_id=str(row["seller_agent_id"]),
+            buyer_account=str(row["buyer_account"]),
+            seller_account=str(row["seller_account"]),
+            good=str(row["good_id"]),
+            quantity=int(row["quantity"]),
+            unit_price_atomic=int(row["unit_price_atomic"]),
+            amount_atomic=int(row["amount_atomic"]),
+            chain_id=int(row["chain_id"]),
+            token_address=str(row["token_address"]),
+            token_symbol=str(row["token_symbol"]),
+            token_decimals=int(row["token_decimals"]),
+            required_confirmations=int(row["required_confirmations"]),
+            authorization_mode=str(  # type: ignore[arg-type]
+                row["authorization_mode"]
+            ),
+            idempotency_key=str(row["idempotency_key"]),
+        )
+        if intent.intent_hash != row["intent_hash"]:
+            raise PawnhouseRepositoryError(
+                "settlement_intent_integrity_failure"
+            )
+        return intent
+
+    @staticmethod
+    def _settlement_public(
+        row: Mapping[str, object],
+    ) -> dict[str, object]:
+        raw_snapshot = row["intent_snapshot"]
+        snapshot = (
+            json.loads(raw_snapshot)
+            if isinstance(raw_snapshot, str)
+            else dict(raw_snapshot)
+        )
+        snapshot.update(
+            {
+                "status": row["status"],
+                "safeErrorCode": row.get("safe_error_code"),
+                "txHash": row.get("tx_hash"),
+                "submissionSource": row.get("submission_source"),
+                "blockNumber": (
+                    int(row["block_number"])
+                    if row.get("block_number") is not None
+                    else None
+                ),
+                "blockHash": row.get("block_hash"),
+                "confirmationCount": row.get("confirmation_count"),
+                "createdAt": (
+                    row["created_at"].isoformat()
+                    if hasattr(row["created_at"], "isoformat")
+                    else row["created_at"]
+                ),
+            }
+        )
+        return snapshot
+
+    @staticmethod
+    def _inventory_commit_public(
+        *,
+        intent: Mapping[str, object],
+        commit: Mapping[str, object],
+    ) -> dict[str, object]:
+        return {
+            "settlementIntentId": intent["settlement_intent_id"],
+            "status": "inventory_committed",
+            "inventoryCommitId": commit["inventory_commit_id"],
+            "buyerCashBeforeAtomic": str(
+                int(commit["buyer_cash_before_atomic"])
+            ),
+            "buyerCashAfterAtomic": str(
+                int(commit["buyer_cash_after_atomic"])
+            ),
+            "sellerCashBeforeAtomic": str(
+                int(commit["seller_cash_before_atomic"])
+            ),
+            "sellerCashAfterAtomic": str(
+                int(commit["seller_cash_after_atomic"])
+            ),
+            "buyerHoldingBefore": int(commit["buyer_holding_before"]),
+            "buyerHoldingAfter": int(commit["buyer_holding_after"]),
+            "sellerHoldingBefore": int(commit["seller_holding_before"]),
+            "sellerHoldingAfter": int(commit["seller_holding_after"]),
+            "committedAt": (
+                commit["committed_at"].isoformat()
+                if hasattr(commit["committed_at"], "isoformat")
+                else commit["committed_at"]
+            ),
+            "schemaVersion": "arena402.inventory-commit.v1",
+        }
 
     async def _persist_world_snapshot(
         self,

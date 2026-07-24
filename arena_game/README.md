@@ -13,12 +13,15 @@ It owns:
 - game and round state transitions;
 - terminal valuation and pawn-promotion ranking.
 - PostgreSQL-backed pool entry, FCFS pairing, and bounded negotiation state.
+- immutable single-payment SettlementIntent snapshots;
+- read-only EVM confirmation validation;
+- confirmation-gated, idempotent cash and inventory commit.
 
 It does not own:
 
 - Provider invocation or model credentials;
 - Connector device/runtime state;
-- settlement submission;
+- wallet signing or settlement submission;
 - payment finality;
 - frontend presentation.
 
@@ -50,5 +53,7 @@ python scripts/run_rule_pawnhouse_demo.py
 The script creates a game, joins one deterministic buyer and one deterministic
 seller, starts round one, records their decisions, pairs them by database
 `result_received_at`, performs a bounded public negotiation, and prints the
-persisted public timeline. An accepted negotiation remains
-`accepted_pending_settlement`; it does not move cash or inventory.
+persisted public timeline. A Game without settlement configuration remains at
+`accepted_pending_settlement`. A Game using `single_eip3009` freezes an
+immutable intent at `authorization_requested`; neither path moves cash or
+inventory until Arena has persisted and checked the exact chain confirmation.

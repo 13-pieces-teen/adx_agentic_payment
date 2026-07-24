@@ -10,6 +10,7 @@ class _Repository:
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
         self.participants: list[dict[str, object]] = []
+        self.submissions: list[dict[str, object]] = []
 
     async def create_game(self, **values):
         self.created.append(values)
@@ -75,6 +76,22 @@ class _Repository:
             "created_at": now,
             "started_at": now,
             "completed_at": now,
+        }
+
+    async def settlement_intents_for_game(self, *, game_id):
+        return [
+            {
+                "settlementIntentId": f"settlement:{game_id}:1",
+                "status": "authorization_requested",
+            }
+        ]
+
+    async def record_settlement_submission(self, **values):
+        self.submissions.append(values)
+        return {
+            "settlementIntentId": values["settlement_intent_id"],
+            "status": "submitted",
+            "txHash": values["tx_hash"],
         }
 
 
@@ -146,6 +163,31 @@ def test_create_game_and_add_twenty_gold_rule_participant() -> None:
     assert len(repository.participants) == 1
 
 
+def test_create_game_freezes_explicit_eip3009_settlement_config() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "settlement-game",
+            "eventSeed": "fixed-settlement-seed",
+            "settlement": {
+                "authorizationMode": "single_eip3009",
+                "chainId": 1439,
+                "tokenAddress": "0x" + "11" * 20,
+                "tokenSymbol": "mUSDC",
+                "tokenDecimals": 6,
+                "requiredConfirmations": 2,
+            },
+        },
+    )
+    assert created.status_code == 201
+    config = repository.created[0]["settlement_config"]
+    assert config.authorization_mode == "single_eip3009"
+    assert config.chain_id == 1439
+    assert config.required_confirmations == 2
+
+
 def test_invalid_initial_portfolio_is_rejected_before_repository_write() -> None:
     client, repository = _client()
     response = client.post(
@@ -198,3 +240,49 @@ def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:
     assert queued.json()["status"] == "queued"
     assert status.status_code == 200
     assert status.json()["status"] == "completed"
+
+
+def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -> None:
+    client, repository = _client()
+    intent_id = "settlement:neg:1"
+    path = (
+        f"/api/dev/pawnhouse/settlement-intents/{intent_id}/submission"
+    )
+    body = {
+        "txHash": "0x" + "44" * 32,
+        "authorizationNonce": "0x" + "55" * 32,
+        "submissionSource": "wallet",
+        "humanConfirmed": False,
+    }
+    denied = client.post(
+        path,
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json=body,
+    )
+    assert denied.status_code == 422
+    assert denied.json()["detail"]["code"] == "human_confirmation_required"
+    assert repository.submissions == []
+
+    body["humanConfirmed"] = True
+    accepted = client.post(
+        path,
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json=body,
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "submitted"
+    assert body["authorizationNonce"] not in accepted.text
+    assert len(repository.submissions) == 1
+
+
+def test_settlement_intent_projection_is_public_and_read_only() -> None:
+    client, _ = _client()
+    response = client.get(
+        "/api/v1/pawnhouse/games/game_1/settlement-intents"
+    )
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert (
+        response.json()["settlementIntents"][0]["status"]
+        == "authorization_requested"
+    )

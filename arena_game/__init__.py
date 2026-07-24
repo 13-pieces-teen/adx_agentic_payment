@@ -10,6 +10,7 @@ from .events import (
     WorldState,
     schedule_commitment,
 )
+from .evm_confirmation import ChainReadError, EvmJsonRpcConfirmationReader
 from .game import (
     GameConfig,
     GameError,
@@ -40,6 +41,17 @@ from .postgres import PawnhouseRepositoryError, PostgresPawnhouseRepository
 from .presets import DEMO_EVENT_IDS, MVP_EVENT_CATALOG, demo_events
 from .ranking import RankingEntry, calculate_rankings, promotion_tier
 from .rule_runtime import RuleDecision, RuleRuntime, RuleStrategy
+from .settlement import (
+    ChainConfirmation,
+    SettlementAccount,
+    SettlementConfig,
+    SettlementError,
+    SettlementIntent,
+    normalize_authorization_nonce,
+    normalize_evm_address,
+    normalize_tx_hash,
+    validate_chain_confirmation,
+)
 
 __all__ = [
     "DEMO_EVENT_IDS",
@@ -80,6 +92,13 @@ __all__ = [
     "RuleStrategy",
     "RoundPhase",
     "RoyalOrder",
+    "ChainConfirmation",
+    "ChainReadError",
+    "EvmJsonRpcConfirmationReader",
+    "SettlementAccount",
+    "SettlementConfig",
+    "SettlementError",
+    "SettlementIntent",
     "WorldEvent",
     "WorldSnapshot",
     "WorldState",
@@ -89,8 +108,12 @@ __all__ = [
     "format_gold",
     "fcfs_pair",
     "gold",
+    "normalize_authorization_nonce",
+    "normalize_evm_address",
+    "normalize_tx_hash",
     "normalize_holdings",
     "portfolio_value",
     "promotion_tier",
     "schedule_commitment",
+    "validate_chain_confirmation",
 ]

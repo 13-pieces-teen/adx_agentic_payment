@@ -50,7 +50,10 @@ from connector_gateway import (
 )
 from connector_gateway.auth import AuthError, AuthPrincipal
 from arena_core import PostgresArenaParticipationRepository
-from arena_game import PostgresPawnhouseRepository
+from arena_game import (
+    EvmJsonRpcConfirmationReader,
+    PostgresPawnhouseRepository,
+)
 from arena_game import PawnhouseHostedCoordinator
 from arena_core import PostgresArenaCoreRepository
 from hosted_agent_control_plane import (
@@ -314,6 +317,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
     pawnhouse_coordinator: PawnhouseHostedCoordinator | None = None
     pawnhouse_coordinator_task: asyncio.Task[None] | None = None
+    settlement_confirmation_reader: EvmJsonRpcConfirmationReader | None = None
     pawnhouse_dev_token = ""
     if _pawnhouse_dev_requested():
         pawnhouse_dsn = os.getenv(
@@ -329,6 +333,37 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "",
         ).strip()
         pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
+        settlement_rpc_url = os.getenv(
+            "ADX_ARENA_SETTLEMENT_RPC_URL",
+            "",
+        ).strip()
+        if settlement_rpc_url:
+            blockscout_url = os.getenv(
+                "ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL",
+                "",
+            ).strip()
+            if (
+                os.getenv("ADX_ENV", "development").strip().lower()
+                == "production"
+                and (
+                    not settlement_rpc_url.lower().startswith("https://")
+                    or (
+                        blockscout_url
+                        and not blockscout_url.lower().startswith(
+                            "https://"
+                        )
+                    )
+                )
+            ):
+                raise RuntimeError(
+                    "Production settlement readers must use HTTPS"
+                )
+            settlement_confirmation_reader = (
+                EvmJsonRpcConfirmationReader(
+                    settlement_rpc_url,
+                    blockscout_base_url=blockscout_url or None,
+                )
+            )
         if hosted_bundle is not None and _hosted_local_dev_requested():
             pawnhouse_coordinator = PawnhouseHostedCoordinator(
                 pawnhouse=pawnhouse_repository,
@@ -450,6 +485,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                     if connector_bundle is not None
                     else None
                 ),
+                confirmation_reader=settlement_confirmation_reader,
             )
         )
 

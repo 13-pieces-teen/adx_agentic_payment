@@ -27,8 +27,20 @@ python scripts/run_dual_hosted_pawnhouse_demo.py
 The script prints only a safe public summary. It uses the deterministic
 `arena-scripted` Provider, which is available only when
 `ADX_HOSTED_LOCAL_DEV=true`; it is not a production model fallback. Both
-demonstrations deliberately avoid moving cash or inventory until the
-settlement milestone confirms an Injective testnet payment.
+demonstrations deliberately avoid moving cash or inventory before a verified
+Injective testnet payment. To exercise the accepted-deal boundary without
+signing or broadcasting a transaction, run:
+
+```powershell
+python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
+```
+
+This freezes one public `SettlementIntent` at
+`authorization_requested`. The local settlement bridge can sign and submit
+that exact intent, but refuses to broadcast unless the operator supplies the
+explicit `--confirm-testnet-transfer` flag. Wallet private keys remain in the
+local settlement process and never enter Arena, PostgreSQL, logs, or API
+responses.
 
 **Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
 真实结算的回合制交易竞技游戏。**

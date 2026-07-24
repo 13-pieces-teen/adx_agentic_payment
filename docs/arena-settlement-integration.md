@@ -1,5 +1,40 @@
 # Arena 402 游戏结算集成契约
 
+## 2026-07-25 implementation update
+
+The following single-payment foundation is now implemented:
+
+- an accepted negotiation can freeze exactly one immutable
+  `arena402.settlement-intent.v1` when the Game explicitly selects
+  `authorizationMode="single_eip3009"`;
+- chain, token, token decimals, payer, payee, amount, expiry, participants,
+  pairing, round, and negotiation are frozen and hash-bound;
+- the local TypeScript bridge checks the frozen intent, signs locally, calls
+  the project Facilitator, and refuses to broadcast without the operator's
+  explicit `--confirm-testnet-transfer` flag;
+- Arena persists only the transaction hash and a nonce digest, never a wallet
+  private key, raw signature, or raw nonce;
+- read-only recovery verifies chain ID, successful receipt, confirmation depth,
+  and the exact ERC-20 `Transfer` before recording a confirmation;
+- cash and holdings move in one idempotent PostgreSQL transaction only after
+  that persisted confirmation.
+
+The no-broadcast dual Hosted Agent demonstration reaches
+`authorization_requested`. A rollback-only integration verifier has exercised
+the confirmation and inventory-commit transaction, and a historical Injective
+testnet transfer has been matched through the read-only recovery path. No new
+state-changing transaction was broadcast as part of this milestone.
+
+The following remain outside the implemented foundation:
+
+- a bounded, revocable multi-payment `PaymentMandate` with
+  `reserve / consume / release`;
+- an unattended isolated guest signer and its production IAM boundary;
+- standard HTTP x402 challenge, headers, paid retry, or public Facilitator
+  compatibility;
+- a newly approved live testnet transaction proving the complete path against
+  the current deployed services.
+
 > 状态：目标集成契约；当前仓库尚未完成端到端接线。
 >
 > 本文取代已归档的 RFQ/数字交付结算方案，只定义“协商被接受”到“链上确认后

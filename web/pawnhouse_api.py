@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from connector_gateway.auth import AuthError, ConnectorAuth
@@ -14,6 +14,11 @@ from arena_game import (
     PortfolioError,
     PostgresPawnhouseRepository,
     RuleStrategy,
+    ChainReadError,
+    EvmJsonRpcConfirmationReader,
+    SettlementAccount,
+    SettlementConfig,
+    SettlementError,
     demo_events,
     gold,
 )
@@ -25,6 +30,14 @@ _Id = Annotated[
         min_length=1,
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+    ),
+]
+_OpaqueId = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=512,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$",
     ),
 ]
 
@@ -44,6 +57,7 @@ class CreateGameBody(_Body):
         le=900_000,
         alias="actionTimeoutMs",
     )
+    settlement: "SettlementConfigBody | None" = None
 
 
 class PortfolioBody(_Body):
@@ -72,6 +86,53 @@ class AddRuleParticipantBody(_Body):
 class AddHostedParticipantBody(_Body):
     agent_id: _Id = Field(alias="agentId")
     portfolio: PortfolioBody
+    settlement_account: "SettlementAccountBody | None" = Field(
+        default=None,
+        alias="settlementAccount",
+    )
+
+
+class SettlementConfigBody(_Body):
+    authorization_mode: Literal["none", "single_eip3009"] = Field(
+        default="none",
+        alias="authorizationMode",
+    )
+    chain_id: int | None = Field(default=None, ge=1, alias="chainId")
+    token_address: str | None = Field(default=None, alias="tokenAddress")
+    token_symbol: str | None = Field(default=None, alias="tokenSymbol")
+    token_decimals: int | None = Field(
+        default=None,
+        ge=0,
+        le=18,
+        alias="tokenDecimals",
+    )
+    required_confirmations: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        alias="requiredConfirmations",
+    )
+
+
+class SettlementAccountBody(_Body):
+    chain_id: int = Field(ge=1, alias="chainId")
+    address: str
+    custody_mode: Literal["wallet", "sandbox_guest"] = Field(
+        alias="custodyMode",
+    )
+
+
+class RecordSettlementSubmissionBody(_Body):
+    tx_hash: str = Field(alias="txHash")
+    authorization_nonce: str = Field(alias="authorizationNonce")
+    submission_source: Literal["wallet", "sandbox_guest"] = Field(
+        alias="submissionSource",
+    )
+    human_confirmed: bool = Field(alias="humanConfirmed")
+
+
+CreateGameBody.model_rebuild()
+AddHostedParticipantBody.model_rebuild()
 
 
 def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
@@ -85,6 +146,7 @@ def create_pawnhouse_router(
     repository: PostgresPawnhouseRepository,
     dev_token: str,
     auth: ConnectorAuth | None = None,
+    confirmation_reader: EvmJsonRpcConfirmationReader | None = None,
 ) -> APIRouter:
     if len(dev_token) < 16:
         raise RuntimeError("ADX_ARENA_DEV_TOKEN must contain at least 16 characters")
@@ -105,12 +167,34 @@ def create_pawnhouse_router(
     ) -> dict[str, object]:
         authorize(x_arena_dev_token)
         try:
+            settlement_config = (
+                SettlementConfig()
+                if body.settlement is None
+                else SettlementConfig(
+                    authorization_mode=(
+                        body.settlement.authorization_mode
+                    ),
+                    chain_id=body.settlement.chain_id,
+                    token_address=body.settlement.token_address,
+                    token_symbol=body.settlement.token_symbol,
+                    token_decimals=body.settlement.token_decimals,
+                    required_confirmations=(
+                        body.settlement.required_confirmations
+                    ),
+                )
+            )
             return await repository.create_game(
                 game_id=body.game_id,
                 events=demo_events(),
                 event_seed=body.event_seed,
                 action_timeout_ms=body.action_timeout_ms,
+                settlement_config=settlement_config,
             )
+        except SettlementError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": str(exc)},
+            ) from None
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
@@ -180,6 +264,17 @@ def create_pawnhouse_router(
                     detail=exc.detail,
                 ) from None
             try:
+                settlement_account = (
+                    None
+                    if body.settlement_account is None
+                    else SettlementAccount(
+                        chain_id=body.settlement_account.chain_id,
+                        address=body.settlement_account.address,
+                        custody_mode=(
+                            body.settlement_account.custody_mode
+                        ),
+                    )
+                )
                 portfolio = Portfolio.initial(
                     cash_atomic=gold(body.portfolio.cash),
                     holdings=body.portfolio.holdings,
@@ -189,11 +284,18 @@ def create_pawnhouse_router(
                     user_id=principal.user_id,
                     agent_id=body.agent_id,
                     portfolio=portfolio,
+                    settlement_account=settlement_account,
                 )
-            except PortfolioError as exc:
+            except (PortfolioError, SettlementError) as exc:
                 raise HTTPException(
                     status_code=422,
-                    detail={"code": "invalid_portfolio"},
+                    detail={
+                        "code": (
+                            "invalid_portfolio"
+                            if isinstance(exc, PortfolioError)
+                            else str(exc)
+                        )
+                    },
                 ) from exc
             except PawnhouseRepositoryError as exc:
                 raise _repository_error(exc) from None
@@ -282,6 +384,105 @@ def create_pawnhouse_router(
             "completedAt": value["completed_at"],
             "schemaVersion": "arena.pawnhouse-runtime-run.v1",
         }
+
+    @router.get(
+        "/api/v1/pawnhouse/games/{game_id}/settlement-intents"
+    )
+    async def settlement_intents(game_id: _Id) -> dict[str, object]:
+        values = await repository.settlement_intents_for_game(
+            game_id=game_id
+        )
+        return {
+            "gameId": game_id,
+            "settlementIntents": values,
+            "total": len(values),
+            "schemaVersion": "arena402.settlement-intent-list.v1",
+        }
+
+    @router.post(
+        "/api/dev/pawnhouse/settlement-intents/"
+        "{settlement_intent_id}/submission"
+    )
+    async def record_settlement_submission(
+        settlement_intent_id: _OpaqueId,
+        body: RecordSettlementSubmissionBody,
+        x_arena_dev_token: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        authorize(x_arena_dev_token)
+        if body.human_confirmed is not True:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "human_confirmation_required"},
+            )
+        try:
+            return await repository.record_settlement_submission(
+                settlement_intent_id=settlement_intent_id,
+                tx_hash=body.tx_hash,
+                authorization_nonce=body.authorization_nonce,
+                submission_source=body.submission_source,
+            )
+        except (SettlementError, PawnhouseRepositoryError) as exc:
+            if isinstance(exc, PawnhouseRepositoryError):
+                raise _repository_error(exc) from None
+            raise HTTPException(
+                status_code=422,
+                detail={"code": str(exc)},
+            ) from None
+
+    @router.post(
+        "/api/dev/pawnhouse/settlement-intents/"
+        "{settlement_intent_id}/recover-confirmation"
+    )
+    async def recover_settlement_confirmation(
+        settlement_intent_id: _OpaqueId,
+        response: Response,
+        x_arena_dev_token: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        authorize(x_arena_dev_token)
+        if confirmation_reader is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "settlement_confirmation_unavailable"},
+            )
+        try:
+            intent, tx_hash = (
+                await repository.settlement_confirmation_target(
+                    settlement_intent_id=settlement_intent_id
+                )
+            )
+            confirmation = await confirmation_reader.read(intent, tx_hash)
+            if confirmation is None:
+                response.status_code = 202
+                return await repository.mark_confirmation_timeout(
+                    settlement_intent_id=settlement_intent_id
+                )
+            if confirmation.success is False:
+                return await repository.record_chain_reverted(
+                    settlement_intent_id=settlement_intent_id,
+                    tx_hash=tx_hash,
+                )
+            if (
+                confirmation.confirmation_count
+                < intent.required_confirmations
+            ):
+                response.status_code = 202
+                return await repository.mark_confirmation_timeout(
+                    settlement_intent_id=settlement_intent_id
+                )
+            await repository.record_chain_confirmation(
+                settlement_intent_id=settlement_intent_id,
+                confirmation=confirmation,
+            )
+            return await repository.commit_confirmed_inventory(
+                settlement_intent_id=settlement_intent_id
+            )
+        except ChainReadError:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "settlement_chain_read_failed"},
+            ) from None
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
 
     return router
 

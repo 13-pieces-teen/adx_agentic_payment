@@ -26,6 +26,36 @@ The SDK does not implement a complete HTTP x402 client:
 `src/x402.ts` is currently an EIP-3009 signing helper named for the intended
 future integration.
 
+## Arena SettlementIntent bridge
+
+`scripts/settle-arena-intent.ts` bridges one frozen Arena
+`SettlementIntent` to the existing EIP-3009 custom relay. It:
+
+- loads the intent from Arena and checks chain, token, decimals, payer, payee,
+  and amount against `deployments.json`;
+- signs only inside the local settlement process;
+- verifies the authorization locally and through Facilitator `/verify`;
+- requires `--confirm-testnet-transfer` before calling Facilitator `/settle`;
+- sends only the transaction hash and raw nonce to Arena, where Arena stores a
+  nonce digest rather than the nonce;
+- asks Arena's read-only recovery endpoint to verify the exact on-chain
+  transfer and commit inventory.
+
+The buyer private key is read by this local process only. It must not be sent
+to Arena, embedded in command arguments, printed, or committed.
+
+Example, after an accepted Arena deal has frozen an intent:
+
+```powershell
+$env:ARENA_API_URL="http://127.0.0.1:8000"
+$env:ARENA_SETTLEMENT_DEV_TOKEN="<local dev token>"
+$env:FACILITATOR_URL="http://127.0.0.1:4021"
+npm run arena:settle -- --intent-id "<intent id>" --confirm-testnet-transfer
+```
+
+This command is state-changing on Injective testnet. Run it only after a human
+has checked the exact intent and explicitly approved that transfer.
+
 ## Produce an authorization
 
 ```typescript

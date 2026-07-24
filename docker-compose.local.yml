@@ -93,6 +93,8 @@ services:
       ADX_ARENA_PARTICIPATION_ENABLED: "true"
       ADX_ARENA_DEV_CONTROL: "true"
       ADX_ARENA_DEV_TOKEN: arena402-local-development-control-token
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:-https://k8s.testnet.json-rpc.injective.network/}
+      ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: ${ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL:-https://testnet.blockscout-api.injective.network/api/v2}
       ADX_HOSTED_FINGERPRINT_PEPPER_B64: YXJlbmE0MDItbG9jYWwtZmluZ2VycHJpbnQtcGVwcGVyLTMyYnl0ZXMhIQ==
       ADX_HOSTED_WORKER_POLL_SECONDS: "0.25"
       ADX_OPENAI_COMPATIBLE_ENDPOINT: ${ADX_OPENAI_COMPATIBLE_ENDPOINT:-}

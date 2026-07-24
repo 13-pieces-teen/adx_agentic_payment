@@ -10,8 +10,13 @@
 - [x] Milestone 3: two isolated users and two Hosted Agents through the
   durable validation worker, immutable AgentTask/Result path, Result Sink,
   database-clock FCFS pairing, and sequential public negotiation.
-- [ ] Milestone 4: accepted negotiation to testnet settlement and
-  confirmation-gated inventory commit.
+- [x] Milestone 4 foundation: accepted negotiation freezes a single-payment
+  testnet SettlementIntent; a local EIP-3009 bridge has an explicit human
+  confirmation gate; read-only chain recovery verifies the exact ERC-20
+  transfer; Arena commits cash and inventory exactly once only after a
+  persisted confirmation.
+- [ ] Milestone 4 live acceptance: explicitly approved fresh testnet transfer,
+  public transaction evidence, and recovery-driven inventory commit.
 - [ ] Milestone 5: production worker/Secret Manager boundaries and operating
   guide.
 
@@ -42,6 +47,20 @@ not production Secret Manager, a real external model, or chain settlement.
 An accepted negotiation is deliberately terminal only at
 `accepted_pending_settlement`; no balance or holding changes before confirmed
 settlement.
+
+The Milestone 4 no-broadcast demonstration is:
+
+```powershell
+python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
+```
+
+Verified local evidence on 2026-07-25: the dual Hosted Agent flow froze one
+immutable intent at `authorization_requested`; balances and holdings were
+unchanged, and there were no submission, confirmation, or inventory-commit
+records. A rollback-only PostgreSQL verifier proved the confirmation-gated
+cash/holding deltas and replay idempotency. A read-only Injective testnet
+recovery check also matched a historical successful ERC-20 transfer. No fresh
+transaction was signed or broadcast.
 
 > 状态：当前跨模块实施状态与建议顺序。
 

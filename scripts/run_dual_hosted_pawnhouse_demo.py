@@ -186,6 +186,14 @@ def main() -> int:
             "arena402-local-development-control-token",
         ),
     )
+    parser.add_argument(
+        "--with-settlement-intent",
+        action="store_true",
+        help=(
+            "freeze an Injective testnet EIP-3009 SettlementIntent after "
+            "acceptance; this never signs or submits a transaction"
+        ),
+    )
     args = parser.parse_args()
     buyer_invite = os.environ.get("ARENA_BUYER_INVITE")
     seller_invite = os.environ.get("ARENA_SELLER_INVITE")
@@ -211,48 +219,80 @@ def main() -> int:
 
     game_id = f"hosted-duel-{int(time.time())}-{secrets.token_hex(3)}"
     game_path = f"/api/dev/pawnhouse/games/{game_id}"
+    create_body: dict[str, Any] = {
+        "gameId": game_id,
+        "eventSeed": f"local-dual-hosted-{secrets.token_hex(8)}",
+        "actionTimeoutMs": 120_000,
+    }
+    if args.with_settlement_intent:
+        create_body["settlement"] = {
+            "authorizationMode": "single_eip3009",
+            "chainId": 1439,
+            "tokenAddress": os.environ.get(
+                "ARENA_SETTLEMENT_TOKEN",
+                "0x06D223D12774386A96D33863D9106A800e52BDeD",
+            ),
+            "tokenSymbol": "mUSDC",
+            "tokenDecimals": 6,
+            "requiredConfirmations": 2,
+        }
     _public_request(
         base_url,
         "POST",
         "/api/dev/pawnhouse/games",
         dev_token=args.dev_token,
-        body={
-            "gameId": game_id,
-            "eventSeed": f"local-dual-hosted-{secrets.token_hex(8)}",
-            "actionTimeoutMs": 120_000,
-        },
+        body=create_body,
     )
+    buyer_join: dict[str, Any] = {
+        "agentId": buyer_agent_id,
+        "portfolio": {
+            "cash": "20",
+            "holdings": {
+                "grain": 0,
+                "iron": 0,
+                "warhorse": 0,
+                "gems": 0,
+            },
+        },
+    }
+    seller_join: dict[str, Any] = {
+        "agentId": seller_agent_id,
+        "portfolio": {
+            "cash": "15",
+            "holdings": {
+                "grain": 0,
+                "iron": 1,
+                "warhorse": 0,
+                "gems": 0,
+            },
+        },
+    }
+    if args.with_settlement_intent:
+        buyer_join["settlementAccount"] = {
+            "chainId": 1439,
+            "address": os.environ.get(
+                "ARENA_BUYER_ACCOUNT",
+                "0x07900F7f7C5E3d92BB0Eeea43981050605e1aB25",
+            ),
+            "custodyMode": "wallet",
+        }
+        seller_join["settlementAccount"] = {
+            "chainId": 1439,
+            "address": os.environ.get(
+                "ARENA_SELLER_ACCOUNT",
+                "0x93Dafa6bFa2428CA033e8d6Fe9C94e40d1AC8754",
+            ),
+            "custodyMode": "wallet",
+        }
     buyer_session.request(
         "POST",
         f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
-        body={
-            "agentId": buyer_agent_id,
-            "portfolio": {
-                "cash": "20",
-                "holdings": {
-                    "grain": 0,
-                    "iron": 0,
-                    "warhorse": 0,
-                    "gems": 0,
-                },
-            },
-        },
+        body=buyer_join,
     )
     seller_session.request(
         "POST",
         f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
-        body={
-            "agentId": seller_agent_id,
-            "portfolio": {
-                "cash": "15",
-                "holdings": {
-                    "grain": 0,
-                    "iron": 1,
-                    "warhorse": 0,
-                    "gems": 0,
-                },
-            },
-        },
+        body=seller_join,
     )
     _public_request(
         base_url,
@@ -290,6 +330,17 @@ def main() -> int:
     event_types = [
         item.get("type") for item in events if isinstance(item, dict)
     ]
+    settlement_intents: list[dict[str, Any]] = []
+    if args.with_settlement_intent:
+        settlement_projection = _public_request(
+            base_url,
+            "GET",
+            f"/api/v1/pawnhouse/games/{game_id}/settlement-intents",
+        )
+        raw_intents = settlement_projection.get("settlementIntents", [])
+        settlement_intents = [
+            item for item in raw_intents if isinstance(item, dict)
+        ]
     summary = {
         "gameId": game_id,
         "runtimeRunId": queued.get("runtimeRunId"),
@@ -301,6 +352,17 @@ def main() -> int:
         "pairingCount": event_types.count("pairing.created"),
         "negotiationMessageCount": event_types.count(
             "negotiation.message"
+        ),
+        "settlementIntentCount": len(settlement_intents),
+        "settlementStatus": (
+            settlement_intents[0].get("status")
+            if len(settlement_intents) == 1
+            else None
+        ),
+        "settlementAmountAtomic": (
+            settlement_intents[0].get("amountAtomic")
+            if len(settlement_intents) == 1
+            else None
         ),
         "eventTypes": event_types,
     }
