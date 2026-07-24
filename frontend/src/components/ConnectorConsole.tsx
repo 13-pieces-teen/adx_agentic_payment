@@ -749,7 +749,7 @@ export default function ConnectorConsole() {
             Bring a runtime into the Arena.
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-400 sm:text-base">
-            Pair a Connector running on your computer, or start with a platform template.
+            Pair a Connector running on your computer, or create a Hosted Agent below.
             Local runtimes keep their own configuration while ADX receives a controlled,
             auditable event stream.
           </p>

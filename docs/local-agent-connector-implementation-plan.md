@@ -4,6 +4,7 @@
 > 最后更新：2026-07-24
 > 对应规格：[`local-agent-connector-spec.md`](./local-agent-connector-spec.md)
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
+> 统一 Runtime 计划：[`hosted-arena-agent-implementation-plan.md`](./hosted-arena-agent-implementation-plan.md)
 
 ## 1. 交付策略
 
@@ -32,6 +33,7 @@ Deploy Caddy + Next.js + FastAPI + PostgreSQL
 - 把进程内 Arena 状态当作金融生产数据；
 - 默认开启 Codex/Claude task execution；
 - 把 Connector Command 成功当作游戏成交或支付确认；
+- 把现有自由 prompt `task.dispatch` 当作已经完成版本化 Arena Task/Result 接线；
 - 宣称安装包已经签名或具有 SBOM；
 - 在没有真实公网验证时宣称云主机部署和外部 E2E 已完成。
 
@@ -40,7 +42,8 @@ Deploy Caddy + Next.js + FastAPI + PostgreSQL
 - 安全默认：未定义 command 一律拒绝；无 ownership 的 session 一律不接管。
 - 数据先持久化：Command 必须先通过 PostgreSQL durable barrier，才能通过 WSS 下发。
 - 身份来自 Session：生产路由不信任客户端 `owner_id`。
-- 本地凭据本地使用：平台不接收原始模型凭据或钱包密钥。
+- 本地凭据本地使用：Connector 路径不上传原始模型凭据或钱包密钥。Hosted BYOK
+  是独立 write-only ingress + 外部 Secret Manager 路径，不经过 Connector。
 - 状态分层：Connector control state、Arena business state、payment finality 分开。
 - 单 worker 明示：不通过增加 Uvicorn worker 伪装水平扩展。
 - 能力声明：Runtime task 默认 detection-only，平台按 inventory capability 执行。
@@ -144,6 +147,26 @@ WSS Device token 只允许放在 `Authorization: Device <token>`，不进入 que
 - 任意 secret value、模型凭据或钱包密钥；
 - 任意文件读取/上传。
 
+上表是当前已实现的 v1 控制协议。Arena 接线新增同一个顶层
+`task.dispatch` 的严格 payload variant：
+
+```text
+task.dispatch Arena branch
+  -> embedded arena.agent-task.v1
+  -> explicit terminal arena.agent-result.v1
+```
+
+统一业务 action：
+
+- Decide：`action=buy|sell|pass`；
+- Negotiate：`action=propose|accept|reject`。
+
+实现时必须把 Command persisted/delivered ACK、terminal Result 和 Arena
+applied/rejected ACK 建模为三个可独立恢复的状态。不得从 stdout、
+`runtime.message`、普通 Event 或 Command `succeeded` 推断 Arena action。完整
+payload 见 [`local-agent-connector-spec.md`](./local-agent-connector-spec.md)；
+当前代码尚未实现该 variant。
+
 ### 3.4 投递与幂等
 
 - Pairing exchange 一次性；
@@ -155,6 +178,13 @@ WSS Device token 只允许放在 `Authorization: Device <token>`，不进入 que
 - Runtime Event 以 Device sequence 去重并累计 ACK；
 - Connector 本地 receipt/outbox 写入失败时锁存 persistence-degraded，拒绝新任务并退出；
 - Gateway replacement/revoke 后旧连接不能继续提交 ACK、Event 或 Inventory。
+- Arena route 只引用 `connector_binding_id + binding_epoch`；旧 epoch 的 terminal
+  Result 也不得被接受。
+- 相同 Arena Task 的重连与重投复用原 `taskId + idempotencyKey`。
+- Arena Result Sink 使用数据库 `result_received_at`，Local Runtime 自报时间不参与
+  FCFS。
+- Connector offline 的重连窗口为 30 秒与行动剩余时间中的较短者；超时由
+  Arena Finalizer 收敛为 `pass` 或 negotiation timeout。
 
 ## 4. 分阶段实施状态
 
@@ -168,7 +198,8 @@ WSS Device token 只允许放在 `Authorization: Device <token>`，不进入 que
 | Phase 5A：Self-hosted persistence/auth | 已完成 beta | PostgreSQL、Auth、CSRF、owner scope、rate limit、bounded Pairing 和 durable barrier 已实现 |
 | Phase 5B：Single-host deployment assets | 已完成代码 | Docker/Caddy、domain/IP TLS、artifact 与运维脚本已实现；真实服务器部署待验收 |
 | Phase 5C：GA/HA hardening | 未完成 | signed release、SBOM、共享限流、multi-worker ownership、隐私治理和容量测试待实现 |
-| Phase 6：Native A2A Endpoint | 未开始 | 保持独立入口，不混入本地 Device 模型 |
+| Phase 6：Arena typed Runtime Adapter | 未开始 | 统一 Task/Result、binding epoch、Result Sink/Finalizer |
+| Phase 7：Native A2A Endpoint | 未开始 | 保持独立入口，不混入本地 Device 模型 |
 
 ## 5. 已完成的安全加固
 
@@ -288,6 +319,19 @@ Public 80/443
 
 “已覆盖”表示仓库存在并曾执行相应自动化测试，不替代提交前重新运行，也不等同于真实服务器 E2E。
 
+Arena typed adapter 落地后追加：
+
+| 区域 | 必须覆盖 |
+|---|---|
+| Contract | strict `action` union、extra fields、定点金额、schema version |
+| Binding | route 只接受当前 binding epoch，撤销/替换后 stale Result 无效 |
+| Delivery | duplicate dispatch 复用 Task/key；ACK 不产生业务动作 |
+| Result | 显式 terminal Result、late/duplicate、Result Sink/Consumer crash recovery |
+| Deadline | 同局统一可校准时间窗；Connector offline 后 Finalizer 唯一 default |
+| FCFS | 只使用 Result Sink 数据库 `result_received_at` |
+| Participation | 并发 join 仍只有一个 `(game_id, user_id)` Game Agent |
+| Privacy | stdout/Event/CoT/本地凭据不进入 Arena Result 或公开时间线 |
+
 ### 7.2 提交前验证命令
 
 ```powershell
@@ -364,10 +408,23 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 ### P1：业务持久化边界
 
 - 将真实 Arena 402 Agent registry 与 Connector Binding 对接；
-- 持久化 Game、Game Agent、Round、Pool、Pairing、Negotiation、Inventory 与业务 Audit；
+- Arena route 只引用 Connector-owned `connector_binding_id + binding_epoch`，
+  不复制 Device/Runtime/Session 权威；
+- 数据库原子保证一名 User 每局只有一个 Game Agent，并在入局时冻结 binding epoch；
+- 持久化 Game、Game Agent、Round、AgentTask/Result/Attempt、Pool、Pairing、
+  Negotiation、Inventory 与业务 Audit；
 - 保持 Runtime telemetry、Business Event 和 Payment finality 三类权威来源分离；
-- 定义版本化 `arena.decide` / `arena.negotiate` payload；Connector 只负责
-  有界投递和结构化结果，不解释游戏规则；
+- 实现版本化 `arena.decide` / `arena.negotiate` payload 和统一 `action` union；
+- 增加显式 terminal AgentTaskResult；Connector 只负责有界投递和结构化结果，
+  不解释游戏规则；
+- 接入 Arena Result Sink/Consumer：过滤公开 message、数据库生成接收时间、
+  唯一 Result 与最多一次业务 apply；
+- 接入独立 Deadline Finalizer；Connector 整体离线时 Decide 收敛为唯一 `pass`，
+  Negotiate 收敛为唯一 timeout；
+- 同一 Game 的 Hosted/Local/rule Runtime 使用同一、经真实 P95/P99 和负载测试
+  校准的 `action_timeout_ms`；每个逻辑 AgentTask 最多一次重试；
+- `accept` 只进入 pending settlement；PaymentMandate/链上确认与库存提交仍由
+  Settlement/Arena 负责；
 - 未完成前禁止真实资金或不可逆金融动作。
 
 ### P1：隐私与审计
@@ -406,7 +463,8 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 3. 小范围邀请用户：观测安装成功率、WSS 稳定性和支持成本。
 4. 完成签名/SBOM后扩大安装范围。
 5. 完成业务持久化和金融安全评审后，再讨论交易链路。
-6. Runtime task 必须独立灰度，不随 Connector online 自动开启。
+6. Arena typed task/result 必须先以 rule/fake Runtime 验证，再灰度本地 Runtime。
+7. Runtime task 必须独立灰度，不随 Connector online 自动开启。
 
 ### 9.2 回滚
 
@@ -427,6 +485,7 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 业务侧：
 
 - Connector 不可用只应把 execution 标记为 unknown/degraded；
+- Arena-owned Finalizer 仍必须为每个到期逻辑行动写出确定性 default；
 - 不得自动把支付、成交或交付状态回滚；
 - 重试必须保持业务 idempotency key，避免重复交付或付款。
 
@@ -437,7 +496,7 @@ Native A2A Endpoint 适合已经运行在公网或可被平台代理访问、并
 可复用：
 
 - Arena 402 Agent identity 与 ownership；
-- task/correlation/idempotency/audit；
+- versioned AgentTask/Result、correlation/idempotency/Result Sink/audit；
 - capability 与 event projection；
 - matching/negotiation/payment 的业务边界。
 
@@ -457,3 +516,6 @@ Native A2A Endpoint 适合已经运行在公网或可被平台代理访问、并
 - `a2a_ingress/events.py`
 
 Native A2A 的主要风险是 SSRF、Endpoint ownership、Agent Card 恶意内容、协议版本语义差异和远端审计粒度不足。它不得复用 Device token，也不得假装拥有本地 session 级控制。
+
+Native A2A 仍由 Arena Gateway 调用远端 Endpoint，不能允许 Agent 绕过 Arena 直接
+通信。远端 Task success 只是一条候选 Result，不是合法交易或支付证明。

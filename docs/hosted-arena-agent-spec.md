@@ -1,6 +1,6 @@
 # Arena 402 Hosted Arena Agent 产品与技术规格
 
-> 文档状态：候选设计规格，待用户确认与 Phase 0 权威文档同步；尚未进入代码实现
+> 文档状态：已批准实施；Phase 0/1 已完成，Phase 2 端口/能力注册表与 Phase 3 Fake Provider/PromptBuilder/DirectModelDriver 测试基础已落地；真实 Secret Manager、真实 Provider 与 durable Worker 尚未接入
 > 最后更新：2026-07-24
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
@@ -87,9 +87,8 @@ Task 或 Worker。创建完成后，同一个 Agent 可以继续参加后续比�
 
 ### 2.4 治理前置条件与残余风险
 
-当前仓库 `AGENTS.md` 仍以绝对语义禁止平台请求或存储模型 API Key。该规则与已经
-选定的 Hosted BYOK 产品方向冲突。开始 Phase 1 前，必须由项目负责人批准并把它同步为
-一条严格限定的例外：
+项目负责人已批准 Hosted BYOK 产品方向，仓库 `AGENTS.md` 已同步为以下严格限定的
+模型凭据例外：
 
 - 原始模型 Key 只允许通过专用 write-only credential ingress 接收；
 - 只允许持久化到批准的外部 Secret Manager；
@@ -433,6 +432,7 @@ Negotiate:
 {
   "resultId": "result_01...",
   "taskId": "task_01...",
+  "schemaVersion": "arena.agent-result.v1",
   "status": "succeeded",
   "action": {
     "action": "propose",
@@ -700,9 +700,12 @@ Connector 或部署凭据。
   API 只接受 `credential_id`；
 - 请求体、Pydantic validation repr、Caddy/APM/OpenTelemetry capture、异常和
   HTTP client debug log 均不得记录 Key；
-- API 先在数据库事务中建立 `pending_write` credential row、幂等记录和预生成的
-  opaque `secret_ref`，再把 Secret 写入该确定名称，最后 CAS 到 `stored`；未绑定
-  Credential 有短 TTL，可被相同幂等流程复用，过期后由 Controller 撤销；
+- API 先在同一数据库事务中建立 `pending_write` credential row、幂等记录、预生成的
+  opaque `secret_ref`，并把 `credential_id` attach 到幂等记录；再把 Secret 写入该
+  确定名称，最后在一个事务中 CAS 到 `stored` 并完成同一幂等记录。重放中的
+  `reserved` 记录必须返回已 attach 的 owner-scoped resource ref，不能只返回
+  `in_progress`；未绑定 Credential 有短 TTL，可被相同幂等流程复用，过期后由
+  Controller 撤销；
 - Agent create 事务把一个 `stored` Credential 1:1 绑定到 Hosted Config/Model，
   将其切为 `pending_validation`，创建独立 credential validation job，并把 job id
   写入 Agent 的 `runtime_update_job_id`；
@@ -775,12 +778,15 @@ Hosted Agent 的“记忆”由 Arena 数据库重建，而不是 Provider sessi
 
 每个 AgentTask 最多两个 Attempt，即最多重试一次：
 
-- 可重试：429、明确 5xx、transport failure、结构化输出校验失败；
+- 可重试：429、明确 5xx、Adapter 能证明请求尚未发出的 transport failure、
+  结构化输出校验失败；
 - 不重试：认证失败、模型不存在、无权限、永久 4xx、用户主动撤销；
 - 只有剩余时间足以完成下一次调用时才重试；
 - 两次 Attempt 使用相同 Task id 和 Arena idempotency key；
 - 不自动切换 Provider、Model、thinking 或 Runtime；
 - Provider 不支持请求幂等时，平台只能保证 Arena 业务不重复，不能保证 Provider 不重复计费。
+- read timeout、连接中断或任何“可能已被 Provider 接收”的状态一律归为
+  `request_outcome_unknown`，不得用 pre-send transport 分类触发重放。
 
 ### 10.3 默认收敛
 
@@ -1125,6 +1131,8 @@ hash；使用排除 Key 的 canonical request metadata 与独立 pepper HMAC fin
   - 接受 name、template/strategy、Provider、Model、thinking 和当前 owner 未绑定的
     `credential_id`；
   - 不接受原始 API Key；
+  - 相同 owner/key/request digest 的已完成 replay 必须先返回当前 owner-scoped
+    Agent 投影；只有 fresh create 才重新校验当前 Credential 与 capability；
   - 一次响应返回 Agent、Binding 和 provisioning 状态；
   - 服务端强制 Credential 与 Hosted Config 为 MVP 1:1。
 - `GET /api/hosted-agents?scope=mine`
@@ -1179,7 +1187,7 @@ Task create/claim/complete 是内部 Service，不向浏览器开放。
 
 | 风险 | 首版控制 |
 |---|---|
-| API Key 泄漏 | 专用 write-only ingress、SSM/KMS、三类 IAM 身份、不记录 body、响应不回显、托管残余风险提示 |
+| API Key 泄漏 | 专用 write-only ingress、SSM/KMS、三类 IAM 身份、不记录 body、响应不回显、边缘 access log 不记录原始 URI/query、托管残余风险提示 |
 | 跨用户访问 | Session ownership、CSRF、对象级过滤、跨 owner 返回 404 |
 | SSRF / 内网探测 | 代码固定 Provider host、TLS、no redirect/no env proxy、egress allowlist；不接受自定义 endpoint/header |
 | Prompt injection | 平台规则优先；公开消息按数据编码；严格结构化输出和 Arena 二次校验 |
@@ -1278,17 +1286,18 @@ External:
 | 能力 | 当前状态 | 说明 |
 |---|---|---|
 | Agent 静态注册 | 原型存在 | `matching/agent.py` 与 `/api/agents/register`，生产仍为内存 |
-| Hosted Agent 创建 UI | 未实现 | `/agents` 只有列表与 Connector 区域 |
-| Provider Adapter | 未实现 | 当前没有真实 LLM 调用路径 |
-| 用户 API Key ingress | 未实现 | 当前只有不可用于调用的 legacy HMAC 字段 |
-| Tencent Secret Manager | 未实现 | 生产依赖和 IAM 尚未接入 |
-| thinking 配置 | 未实现 | 无 capability registry 或 Provider 映射 |
-| usage/latency/attempt | 未实现 | 无 Hosted invocation 表 |
-| Persistent AgentTask | 未实现 | Connector Command 不能直接替代 Arena Task |
-| Result Sink/Consumer/Finalizer | 未实现 | 当前没有 durable candidate result 与独立 deadline 收敛 |
-| Credential validation/lifecycle jobs | 未实现 | 当前没有 Hosted provisioning queue |
+| Hosted Agent 创建 UI | 最小功能壳已实现 | `/agents` 保留 Local Connector，并提供受 readiness/auth 控制的两阶段 Hosted 创建与状态列表；后续可重写视觉设计 |
+| Provider contract/Fake Provider/PromptBuilder/DirectModelDriver | 测试基础已实现 | 已覆盖安全边界、结构化动作、deadline 和 retry；没有真实 LLM 网络调用，AttemptRecorder 仍为测试内存实现 |
+| 真实 Provider Adapter | 未实现 | 当前没有真实 LLM 网络调用路径 |
+| 用户 API Key ingress | 测试控制面已实现，生产关闭 | write-only service、严格 HTTP body、摘要幂等与无回显测试已存在；尚无生产 PostgreSQL repository/真实 SSM 组合 |
+| Tencent Secret Manager | 未实现 | 只有始终 fail-closed 的未验证 adapter 骨架；生产依赖、地域和 CAM 尚未接入 |
+| thinking 配置 | 基础与 UI 已实现 | capability registry 与创建表单已表达 unsupported/optional/always-on 和 Provider 默认强度；真实 Provider 映射未实现 |
+| usage/latency/attempt | 持久化与纯执行基础已实现 | Attempt/usage 表与受限函数已存在，Driver 单测写入 MemoryAttemptRecorder；Hosted Worker 尚未 durable 写入 |
+| Persistent AgentTask | Phase 1 已实现 | 有版本化契约、Memory/PostgreSQL repository、lease/CAS；尚未接入 Game Core/Connector |
+| Result Sink/Consumer/Finalizer | Phase 1 已实现 | durable terminal Result、数据库权威时间、默认收敛和 exactly-once 投影已实现；尚未接入完整游戏 |
+| Credential validation/lifecycle jobs | 持久化与 create service 基础已实现 | 表、claim/CAS、数据库权限和原子 create repository contract 已存在；生产 repository/Controller/Worker 未实现 |
 | Hosted Worker | 未实现 | Compose 中没有独立 Worker |
-| Game Agent 单局唯一 | 未实现 | 缺少持久化 Game/Participant 表 |
+| Game Agent 单局唯一 | Phase 1 已实现 | 最小 Game/Round/Game Agent 表和唯一约束已实现；完整游戏状态仍缺 |
 | Arena `decide`/`negotiate` adapter | 未实现 | 当前 matching schema 与新游戏契约不一致 |
 | Local Connector 控制面 | Self-hosted beta 已实现 | 仍缺 Arena typed task/result 适配 |
 | Native A2A Endpoint | 未实现 | 作为后续第三 Adapter |

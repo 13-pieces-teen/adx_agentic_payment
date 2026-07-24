@@ -1,29 +1,59 @@
-"""Apply only Connector-owned PostgreSQL migrations, once and in order."""
+"""Apply approved PostgreSQL migration scopes once and in deterministic order."""
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import hashlib
 import os
 import re
 from pathlib import Path
+from typing import Literal, cast
 
 import asyncpg
 
 
-MIGRATION_NAME = re.compile(r"^\d+_connector(?:_gateway)?(?:_[a-z0-9_]+)?\.sql$")
-LOCK_NAME = "adx_connector_schema_migrations"
+MigrationScope = Literal["connector", "arena", "all"]
+
+MIGRATION_PATTERNS: dict[str, re.Pattern[str]] = {
+    "connector": re.compile(
+        r"^\d+_connector(?:_gateway)?(?:_[a-z0-9_]+)?\.sql$"
+    ),
+    "arena": re.compile(
+        r"^\d+_(?:arena|hosted_agent)(?:_[a-z0-9_]+)+\.sql$"
+    ),
+}
+LOCK_NAME = "adx_schema_migrations"
+DEFAULT_SCOPE: MigrationScope = "connector"
 
 
-def migration_files() -> list[Path]:
+def _migration_sort_key(path: Path) -> tuple[int, str]:
+    sequence, _, _ = path.name.partition("_")
+    return int(sequence), path.name
+
+
+def migration_files(scope: MigrationScope = DEFAULT_SCOPE) -> list[Path]:
+    if scope not in ("connector", "arena", "all"):
+        raise ValueError(f"Unsupported migration scope: {scope}")
     root = Path(os.getenv("ADX_CONNECTOR_MIGRATIONS_DIR", "/app/db/migrations"))
     if not root.is_dir():
         raise RuntimeError(f"Migration directory does not exist: {root}")
+
+    selected_patterns = (
+        tuple(MIGRATION_PATTERNS.values())
+        if scope == "all"
+        else (MIGRATION_PATTERNS[scope],)
+    )
     files = sorted(
-        path for path in root.glob("*.sql") if MIGRATION_NAME.match(path.name)
+        (
+            path
+            for path in root.glob("*.sql")
+            if any(pattern.fullmatch(path.name) for pattern in selected_patterns)
+        ),
+        key=_migration_sort_key,
     )
     if not files:
-        raise RuntimeError(f"No Connector migrations found in {root}")
+        raise RuntimeError(f"No {scope} migrations found in {root}")
     return files
 
 
@@ -40,7 +70,7 @@ async def connect_with_retry(dsn: str) -> asyncpg.Connection:
     raise AssertionError("unreachable")
 
 
-async def migrate() -> None:
+async def migrate(scope: MigrationScope = DEFAULT_SCOPE) -> None:
     dsn = os.getenv("ADX_CONNECTOR_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not dsn:
         raise RuntimeError("ADX_CONNECTOR_DATABASE_URL or DATABASE_URL is required")
@@ -58,7 +88,7 @@ async def migrate() -> None:
             """
         )
 
-        for path in migration_files():
+        for path in migration_files(scope):
             sql = path.read_text(encoding="utf-8")
             checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
             # SQL files remain independently runnable with psql and may include
@@ -98,5 +128,22 @@ async def migrate() -> None:
             await connection.close()
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Apply approved Arena 402 PostgreSQL migrations."
+    )
+    parser.add_argument(
+        "--scope",
+        choices=("connector", "arena", "all"),
+        default=os.getenv("ADX_MIGRATION_SCOPE", DEFAULT_SCOPE),
+        help=(
+            "Migration family to apply. Defaults to connector for backward "
+            "compatibility; production composition should use all."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    asyncio.run(migrate())
+    arguments = parse_args()
+    asyncio.run(migrate(cast(MigrationScope, arguments.scope)))

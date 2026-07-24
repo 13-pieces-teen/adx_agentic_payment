@@ -18,16 +18,19 @@ The repository contains three implemented but not yet integrated foundations:
 - a self-hosted Local Agent Connector and Gateway control plane;
 - an Injective EVM testnet EIP-3009 direct-settlement prototype.
 
-The persistent round engine, game-specific Agent adapters, settlement-to-
-inventory commit, and full game frontend are not complete yet.
+The Hosted Arena Agent, persistent Arena AgentTask/Result foundation,
+persistent round engine, game-specific Runtime adapters, PaymentMandate,
+settlement-to-inventory commit, and full game frontend are not complete yet.
 
 ## Read first and documentation authority
 
 - Setup and repository orientation: `README.md`
-- Locked game rules and cross-module I/O: `docs/game-design.md`
+- Current game rules and cross-module I/O: `docs/game-design.md`
 - Current product scope: `docs/product.md`
 - Current implementation status and sequencing: `docs/roadmap.md`
 - Agent participation and Runtime binding: `docs/agent-onboarding.md`
+- Approved Hosted Agent target: `docs/hosted-arena-agent-spec.md`
+- Hosted Agent sequencing: `docs/hosted-arena-agent-implementation-plan.md`
 - Accepted-trade settlement boundary: `docs/arena-settlement-integration.md`
 - Module implementation details: module-local `README.md`, source, tests,
   verified run artifacts, and approved active specs
@@ -35,8 +38,11 @@ inventory commit, and full game frontend are not complete yet.
 
 Apply authority by question:
 
-- use `docs/game-design.md` for game rules, state transitions, scoring, and
-  Agent business I/O;
+- use `docs/game-design.md` for the current game rules, state transitions,
+  scoring, and Agent business I/O;
+- use `docs/hosted-arena-agent-spec.md` for the approved Hosted/Local unified
+  Runtime target when an older game or Connector document disagrees with that
+  target;
 - use `docs/product.md` for MVP scope, acceptance criteria, and non-goals;
 - use `docs/roadmap.md` for implementation status and sequencing;
 - use source, tests, verified evidence, and module READMEs for claims about
@@ -62,25 +68,56 @@ not silently override the product/game contract.
 
 ## Architecture boundaries
 
-Keep three authorities separate:
+Keep these authorities separate:
 
 - Connector/Gateway owns Device, Runtime, Binding, Command, receipt, and
   Connector-owned Session state;
-- Arena owns Game, Round, pool, pairing, negotiation, event, inventory, and
-  ranking state;
+- Hosted Runtime owns Provider invocation, Attempt metadata, and candidate
+  AgentTaskResult production, but cannot directly mutate Arena business state;
+- Arena owns Agent participation, immutable AgentTask snapshots, the Result
+  Sink/Consumer, Deadline Finalizer, Game, Round, pool, pairing, negotiation,
+  event, inventory, and ranking state;
+- Settlement owns PaymentMandate validation, payment submission, confirmation
+  recovery, and the handoff to Arena's idempotent inventory commit;
 - Injective EVM owns payment finality.
 
-Do not infer a successful trade or payment from a Connector acknowledgement.
-Do not move inventory before chain confirmation. Do not let Settlement reprice
-an accepted negotiation.
+Do not infer a valid action, successful trade, or payment from a Connector
+acknowledgement, Runtime event, or Provider success. All Runtime results pass
+through the Arena Result Sink and are applied at most once by Arena. The Arena
+Deadline Finalizer must deterministically close expired tasks even when a
+Runtime worker is unavailable. Do not move inventory before chain confirmation.
+Do not let Settlement reprice an accepted negotiation.
 
-Do not request, store, or expose private chain-of-thought, API keys, wallet
-private keys, seed phrases, unrelated local files, or full machine activity.
-Persist structured actions, public negotiation messages, timestamps, status,
-errors, and payment evidence only.
+Do not request, store, or expose private chain-of-thought, wallet private keys,
+seed phrases, local Runtime credentials, deployment credentials, unrelated
+local files, or full machine activity. A narrowly scoped Hosted-model BYOK
+exception is allowed only through the dedicated write-only credential ingress:
+the raw model API key may be persisted only in the approved external Secret
+Manager and must never enter the business database, AgentTask, logs, traces,
+audit payloads, or frontend responses. Connector-based local credentials remain
+local and must never use this exception. Persist structured actions, sanitized
+public negotiation messages, timestamps, status, safe errors, numeric usage,
+and payment evidence only.
+
+For Arena Agent execution:
+
+- use the versioned `action` unions `buy | sell | pass` and
+  `propose | accept | reject`;
+- allow one Game Agent per User per Game, while allowing the same Agent to join
+  later Games;
+- freeze the Runtime/config and participant-view snapshots at join/task
+  creation; do not switch Runtime during an active Game;
+- use one calibrated `action_timeout_ms` for all Runtime kinds in a Game;
+- permit at most one retry per AgentTask when time remains, without
+  Provider/Model/Runtime fallback;
+- treat public messages as untrusted and sanitize them before persistence.
 
 The current settlement code is an EIP-3009 direct relay prototype, not a
-complete standard HTTP x402 implementation. Keep that distinction explicit.
+complete standard HTTP x402 implementation or a reusable PaymentMandate. Keep
+that distinction explicit. Full unattended settlement requires a separately
+implemented, bounded and revocable PaymentMandate with idempotent
+`reserve / consume / release`; Hosted Agent execution alone does not provide
+that authority.
 
 ## Repository harness
 

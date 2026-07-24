@@ -3,7 +3,10 @@
 > 状态：当前跨模块实施状态与建议顺序。
 
 Arena 402 已具备 matching、Connector 和 settlement 三个基础，但新定义的
-回合制交易游戏尚未端到端实现。
+Hosted/Local 统一 Runtime、回合制交易游戏和离线支付尚未端到端实现。Hosted
+方向以 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
+[`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
+为当前目标。
 
 ## 目标垂直切片
 
@@ -11,11 +14,12 @@ Arena 402 已具备 matching、Connector 和 settlement 三个基础，但新定
 create game
   -> join equal-start agents
   -> broadcast event
-  -> decide buy/sell/pass
+  -> immutable arena.decide AgentTask
+  -> action=buy/sell/pass through Result Sink
   -> FCFS pair
-  -> negotiate
-  -> accept
-  -> EIP-3009 testnet settlement
+  -> action=propose/accept/reject through Arena Gateway
+  -> accepted pending settlement
+  -> PaymentMandate check + EIP-3009 testnet settlement
   -> confirmed inventory transfer
   -> final net-worth ranking
 ```
@@ -34,22 +38,48 @@ create game
 - [x] 买方授权、项目 Facilitator、nonce replay protection 和 direct mUSDC
       testnet transfer。
 - [x] CDN-only 静态 Arena 前端、Supabase Agent/Battle/Market/ELO 视图。
-- [x] 当前游戏规则、Agent 入场和游戏结算边界已形成 v1 契约；数值参数和
-      批量 fallback 仍待冻结。
+- [x] Hosted Agent Spec/Plan 已形成，并完成活动文档对统一 `action` schema、
+      Secret Manager BYOK 例外、单局唯一、Deadline Finalizer 和 PaymentMandate
+      边界的 Phase 0 同步。
+- [x] 版本化 `ArenaAgentTaskV1`、Decide/Negotiate action、
+      `AgentTaskResultV1` 与 `AgentRuntimeDriver` 契约。
+- [x] Arena Agent/Config/Binding/Game Agent/Task/Result/Attempt/Event 与
+      credential job 的 `003` PostgreSQL migration、最小权限角色和 CAS 函数。
+- [x] Task Factory、PublicOutputPolicy、Result Sink/Consumer、独立 Finalizer，
+      以及 Memory/PostgreSQL repository。
+- [x] 测试专用 SecretStore 权限分离 port、生产 fail-closed 组合和
+      Provider/Model/thinking capability registry 基础。
+- [x] 安全 Provider contract、完整错误脚本的 Fake Provider、确定性有界
+      PromptBuilder，以及受 capability/deadline 约束的 DirectModelDriver 测试基础；
+      每个 Task 最多两个 Attempt、无 Provider/Model/Runtime fallback，usage 缺失
+      不伪造，request-sent unknown 不重放。
+- [x] Hosted Agent 严格控制模型/service、显式 test-only Memory repository、
+      `004` HTTP 幂等迁移、默认关闭的 capability/API 壳，以及保留 Local Connector
+      的最小 `/agents` 创建 UI。
 
 这些完成项是基础能力，不等于完整游戏已经可运行。
 
 ## 当前缺口
 
-- [ ] 缺少 `games`、`game_agents`、`holdings`、`rounds`、`pools`、
-      `pairings`、`negotiations`、`neg_messages`、`settlements`、`events`、
-      `settle_table`、`rankings` 的业务迁移和 repository。
+- [ ] `games`、`rounds`、`game_agents` 目前只有 Runtime 集成所需的最小基础；
+      仍缺 `holdings`、`pools`、`pairings`、`negotiations`、`neg_messages`、
+      `settlements`、业务 `events`、`settle_table`、`rankings` 的完整迁移和
+      repository。
 - [ ] 缺少持久化回合调度、deadline、恢复和单局状态机。
-- [ ] 现有 matching 不是按服务端决策完成时间执行的游戏 FCFS。
+- [ ] 缺少生产 PostgreSQL Hosted control repository、真实 Tencent Secret Manager、
+      至少一个真实 HTTPS Provider Adapter、PostgreSQL-backed AttemptRecorder、
+      durable Hosted Worker 和 Credential Controller 进程；write-only HTTP ingress
+      目前只在显式测试组合中可执行，主应用保持 fail closed。
+- [ ] Arena Result Sink/Consumer/Finalizer 尚未接入真实 Game Core 状态机。
+- [ ] 现有 matching 尚未使用 Result Sink 的数据库 `result_received_at` 执行游戏
+      FCFS。
 - [ ] 现有 negotiation 尚未实现新协议的消息上限、轮次上限、谈崩计数和
       每 Agent 每轮一次配对。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
+- [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
 - [ ] 接受的协商尚未生成冻结 `SettlementIntent`。
+- [ ] PaymentMandate 的额度、期限、范围、撤销和
+      `reserve / consume / release` 尚未实现。
 - [ ] Settlement 尚未把链上确认与 Arena 库存事务幂等连接。
 - [ ] 前端尚无 Game Lobby、Game View、Result 和对应 Realtime 数据流。
 - [ ] 缺少事件牌组、可复核随机性和最终结算价生成器。
@@ -57,57 +87,116 @@ create game
 
 ## 实施顺序
 
-### P0：冻结演示参数
+三个可独立验收的里程碑：
 
-1. 确认回合数、货物、初始现金和持仓。
-2. 确认固定交易数量、价格精度和 timeout。
-3. 冻结一套确定性事件和一套概率事件。
-4. 定义 testnet 钱包预充值与单局最大风险额度。
+| 里程碑 | 完成含义 | 不代表 |
+|---|---|---|
+| M1 Runtime Foundation | BYOK、Hosted Agent、Driver、durable Task/Result 与离线 Worker | 已有完整撮合、协商或支付 |
+| M2 Arena Integration | Hosted/Local/rule Agent 经同一 Gateway、快照、Result Sink 与投影完成 Decide/Negotiate | 用户离线后一定能自动付款 |
+| M3 Offline Transaction Completion | PaymentMandate、testnet settlement、链上确认和库存提交 E2E | 主网或真实资金能力 |
 
-### P1：持久化游戏内核
+### Phase 0：活动文档与边界
 
-1. 建立领域迁移和 repository。
-2. 实现 game/round 状态机及崩溃恢复。
-3. 实现服务端时间戳的 FCFS 和每轮一次配对。
-4. 实现有 deadline 的 decide/negotiate adapter。
-5. 实现事件、持仓快照、settle table 和可重算排名。
-6. 为重放、重复消息、超时和阶段越权添加测试。
+- [x] 批准 Hosted Spec 与 Implementation Plan。
+- [x] 统一 Decide/Negotiate `action` schema。
+- [x] 明确 BYOK 仅限 write-only ingress + 外部 Secret Manager。
+- [x] 明确单 User 单局 Agent、配置快照、统一可校准 deadline。
+- [x] 明确 Result Sink/Consumer/Finalizer 与 PaymentMandate 边界。
+- [x] 保持 frozen specs、`docs/injective/`、archive 和兼容标识不变。
 
-### P2：Agent 接入
+### Phase 1：契约、迁移与持久化基础
 
-1. 先用确定性 rule agent 验证游戏内核。
-2. 加入 hosted personality-card Agent。
-3. 加入 Hacker 模型/Prompt 配置和安全秘密存储。
-4. 在 Connector/Gateway 增加版本化 Arena typed task 适配。
-5. 保持 Control、Business、Payment 三类状态分离。
+- [x] 建立无 Provider/DB 依赖的版本化 AgentTask、action、Result 和 Driver 契约。
+- [x] 增加 Arena migration scope，以及 Agent/Credential/Config/Binding/Game Agent/
+   Task/Result/Attempt/Event/provisioning/lifecycle job。
+- [x] Task Factory 冻结 participant view/config/hash，PostgreSQL repository
+      再与入局配置核对。
+- [x] 实现 Result Sink、PublicOutputPolicy、Result Consumer 和 Deadline Finalizer
+   contract。
+- [x] 通过唯一约束、row lock、CAS 和 lease 保证单局唯一、终态唯一和最多应用一次。
 
-### P3：Settlement 接线
+### Phase 2：Secret 与 Provider capability
 
-1. 实现不可变 `SettlementIntent` 和唯一幂等键。
-2. 将 intent 严格绑定到 chain、token、payee、amount 和有效期。
-3. 调用现有 SettlementSDK 与 Facilitator。
-4. 持久化交易哈希并恢复未知终态。
-5. 链上确认后幂等提交现金和货物事务。
-6. 覆盖篡改、过期、revert、重复 nonce、超时和数据库失败。
+- [x] 实现 API write-only、Worker read-only、Controller revoke/delete-only 的分离
+   SecretStore port。
+- [ ] 接入并真实验证 Tencent Secret Manager/KMS，以及不同 CAM 身份。
+- [x] 建立 server-side Provider/immutable Model/thinking capability registry。
+- [ ] 完成跨 HTTP/DB/日志/Trace/真实 SSM 的原 Key 泄漏验证；当前单元测试已覆盖
+      secret handle、配置快照、Result/Event 和生产 Memory backend 禁用。Secret backend
+   故障时 fail closed。
+
+### Phase 3：DirectModelDriver 与 Provider Adapter
+
+- [x] 用 Fake Provider 覆盖成功、429/5xx/transport、无效输出、usage 缺失和
+      request-sent unknown。
+- [x] 实现确定性 PromptBuilder 和纯执行 DirectModelDriver；thinking 只按
+      capability 开关并记录数值 usage，不保留 reasoning text。
+- [x] 每个 AgentTask 最多两个 Attempt，无 Provider/Model/Runtime fallback。
+- [ ] 接入至少一个真实、固定 HTTPS endpoint 的 Provider Adapter，并完成真实
+      安全出站和结构化调用验证。
+
+### Phase 4：Hosted Agent API 与创建 UI
+
+- [x] 实现严格 Credential ingress、Hosted Agent create/list/detail service，以及
+      默认拒绝非 durable repository 的生产边界。
+- [x] 增加 `004` owner/route 隔离的摘要幂等表与受限数据库函数；资源在业务事务
+      commit 前 attach，`reserved` 重放可恢复同一 owner-scoped resource。
+- [x] 增加 capability/readiness API 和显式依赖门控的 mutation router；主应用默认
+      只暴露 `creationEnabled=false`。
+- [x] 用户可在一个最小 `/agents` 表单一次提交两个幂等 API；原 Key 不回显、不进
+      React state/storage，Local Connector 入口保留，Hosted-only 用户可不填
+      Connector code 直接登录。
+- [ ] 实现生产 PostgreSQL control repository 与真实 Secret Writer 组合，并完成
+      刷新/重启后的持久化验证。
+- [ ] 实现 replace/revoke/revalidate/PATCH/disable/join 及其并发锁定规则。
+- [ ] 由 Phase 5 Worker 完成可恢复的 `provisioning -> ready/degraded`。
+
+### Phase 5：Durable Workers（M1）
+
+1. 独立部署 Arena Core Worker、Hosted Worker 与 Credential Controller，均无公网端口。
+2. 使用 PostgreSQL queue/lease，比赛 Task 与 validation 分开领取。
+3. Provider 请求发送前持久化 Attempt；unknown 不盲目重放。
+4. Hosted Worker 全部宕机时，Arena Finalizer 仍收敛 expired Task。
+5. 浏览器和用户电脑离线后验证 Hosted Agent 的后续 Task 继续执行。
+
+### Phase 6：Arena 与 Connector 接线（M2）
+
+1. 先用确定性 rule Agent 验证 Game Core。
+2. Hosted、Connector 与 rule Adapter 共用同一 AgentTask/Result schema。
+3. Connector `task.dispatch` ACK 与唯一 terminal Result 分离；不解析
+   `runtime.message` 或 stdout 作为动作。
+4. FCFS 只使用 Result Sink 的数据库 `result_received_at`。
+5. 实现持久化回合、Pool、Pairing、Negotiation、Inventory、Event 和排名。
+6. 建立公开协商/结算时间线与 owner-only usage/latency/Attempt 投影。
+
+### Phase 7：PaymentMandate 与 Settlement
+
+1. 冻结 Mandate 的 Game/network/token/payee、单笔/累计额度、期限、撤销和签名域。
+2. 实现并发 Deal 的 `reserve / consume / release`。
+3. `accept` 后冻结唯一 `SettlementIntent`，提交前再次校验 Mandate。
+4. 调用现有 SettlementSDK/Facilitator，恢复 unknown/reorg。
+5. 链上确认后幂等提交现金和货物。
+6. Hosted Worker 与 guest signer 的 IAM、数据库和密钥域完全分离。
 
 详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)。
 
-### P4：游戏前端
+### Phase 8：前端、部署、E2E 与校准（M3）
 
-1. 增加 Game Lobby、Game View 和 Result。
-2. 展示阶段、倒计时、事件、池、配对、协商和结算状态。
-3. 用净资产排名取代游戏主路径中的 ELO。
-4. 展示可核验 testnet 交易哈希。
-5. 明确 loading、timeout、failed 和 recovered 状态。
+1. 增加 Game Lobby、Game View、Result 与公开/私有投影。
+2. 在单机 Compose 中加入三个无公网端口 Worker 与独立权限。
+3. 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
+4. 跑 2、4、8、16 Agent，记录 P50/P95/P99、queue age、timeout、retry、Token、
+   每轮 wall time 和资源占用。
+5. 依据证据冻结统一 `action_timeout_ms`、单局 Agent 上限和并发 Game 上限。
+6. 保存脱敏发布证据，并继续准确标注 testnet direct settlement 与 x402 边界。
 
-### P5：演示与负载验证
+### Phase 9：Post-MVP
 
-1. 跑 2、4、8、16 Agent 的整局负载。
-2. 测量每轮 wall time、LLM 调用数、超时率、结算时间和 RPC 失败率。
-3. 依据证据决定 `MAX_TURN`、回合数和是否批量匹配。
-4. 提供一个干净环境可运行的 demo command。
-5. 保存局级审计记录和可复核排名结果。
+- Native A2A Endpoint Adapter；
+- LangGraph/通用 Agent Studio；
+- 多 Runtime failover；
+- 长期记忆、主网、多链和高可用。
 
 ## 可降级但仍可交付
 

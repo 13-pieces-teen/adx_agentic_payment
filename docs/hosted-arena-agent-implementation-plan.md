@@ -1,6 +1,7 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：候选设计与实施计划，待用户确认；代码实施尚未开始
+> 文档状态：已批准实施；Phase 0–3 基础与 Phase 4 控制面/UI 测试壳已完成，
+> 生产 PostgreSQL 控制仓库、真实 SSM/Provider 与 Durable Worker 待实现
 > 最后更新：2026-07-24
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
@@ -231,6 +232,7 @@ hosted_agent_runtime/
 ├── worker.py
 ├── credential_controller.py
 ├── capabilities.py
+├── prompt_builder.py
 ├── direct_model_driver.py
 ├── providers/
 │   ├── base.py
@@ -259,9 +261,10 @@ hosted_agent_runtime/
 | `hosted_agent_runtime/queue.py` | Task/Provisioning Job lease、claim、recovery |
 | `hosted_agent_runtime/worker.py` | 无公网端口的 Hosted Worker |
 | `credential_controller.py` | 独立权限执行 revoke/delete lifecycle job |
-| `direct_model_driver.py` | 当前一次逻辑 Task、最多两次 Provider Attempt 的 Driver |
+| `prompt_builder.py` | 从冻结 Task 和有界私有策略确定性构造版本化 Prompt，并隔离 untrusted Arena data |
+| `direct_model_driver.py` | 当前一次逻辑 Task、最多两次 Provider Attempt 的纯执行 Driver |
 | `capabilities.py` | Provider/Model/thinking allowlist |
-| `providers/*` | 固定 endpoint 的 Provider request/response、usage 与错误归一 |
+| `providers/*` | 安全 Provider contract、Fake Provider、usage 与错误归一；真实固定 endpoint Adapter 待实现 |
 | `secrets/*` | Secret write/read/revoke port 与生产实现 |
 
 其他计划文件：
@@ -288,11 +291,12 @@ Connector-owned `connector_binding_id + binding_epoch`，不复制其权威。
 
 ## 5. Migration 策略
 
-当前 `deploy/scripts/migrate.py` 只选择 Connector 命名的 migration，
-`001_initial_schema.sql` 也不在 self-hosted production 中执行。实施时：
+`deploy/scripts/migrate.py` 现已支持显式 scope；默认仍只选择 Connector migration，
+生产 Compose 显式使用 `--scope all`，而 `001_initial_schema.sql` 不会在 self-hosted
+production 中执行。已落地的规则是：
 
 1. 保留当前默认 Connector scope，避免升级时意外执行 legacy `001`；
-2. 为 migration runner 增加显式 `--scope connector|arena|all`；
+2. migration runner 提供显式 `--scope connector|arena|all`；
 3. Arena scope 只匹配经过批准的 `*_arena_*.sql`；
 4. `--scope all` 使用一个全局 advisory lock，并按 migration 数字/文件名确定性排序；
 5. Connector `002` 必须先于引用共享 User 的 Arena `003`；
@@ -308,8 +312,8 @@ Connector 对 Arena User 的业务所有权。Arena 表以外键引用它。未�
 
 ### 5.1 最小 Arena participation foundation
 
-Hosted Runtime 最终需要真实 Game/Participant/Round 外键。若完整持久化 Game Core
-尚未开工，第一条 migration 可以同时建立仅供集成所需的最小基础：
+Hosted Runtime 最终需要真实 Game/Participant/Round 外键。当前 Phase 1 migration
+先建立仅供集成所需的最小持久化基础：
 
 - `games`：id、status、统一 `action_timeout_ms` 和配置；
 - `rounds`：game、round index、phase、deadline；
@@ -334,11 +338,11 @@ Hosted Runtime 最终需要真实 Game/Participant/Round 外键。若完整持�
 
 | 阶段 | 目标 | 状态 |
 |---|---|---|
-| Phase 0 | Spec、Plan、边界与威胁模型 | 本文完成，待用户确认 |
-| Phase 1 | 契约、迁移与持久化 identity/binding/task foundation | 未开始 |
-| Phase 2 | SecretStore、Tencent SSM 与 Provider capability | 未开始 |
-| Phase 3 | Fake/真实 Provider Adapter 与结构化输出 | 未开始 |
-| Phase 4 | Hosted Agent API、创建 UI 与 readiness | 未开始 |
+| Phase 0 | Spec、Plan、边界与威胁模型 | 已完成 |
+| Phase 1 | 契约、迁移与持久化 identity/binding/task foundation | 基础实现完成；共享 repository contract suite 待补 |
+| Phase 2 | SecretStore、Tencent SSM 与 Provider capability | Port/registry 已实现；真实 Tencent SSM/CAM 未完成 |
+| Phase 3 | Fake/真实 Provider Adapter 与结构化输出 | Fake Provider、PromptBuilder 与 DirectModelDriver 测试基础已实现；真实 Provider Adapter 与 durable Worker 接线未完成 |
+| Phase 4 | Hosted Agent API、创建 UI 与 readiness | 控制面、幂等迁移、受门控 API 与最小 UI 壳已实现；生产组合仍关闭 |
 | Phase 5 | Durable Worker、deadline、retry 与恢复 | 未开始 |
 | Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | 未开始 |
 | Phase 7 | PaymentMandate/Settlement 接线 | 独立依赖，未开始 |
@@ -421,11 +425,11 @@ Phase 9 never blocks M1/M2/M3
 
 ### 7.3 退出门槛
 
-- [ ] 用户确认本 Spec/Plan；
-- [ ] 没有把“设计”写成“已实现”；
-- [ ] `game-design.md` 已同步到本规格冻结的统一 `action` schema 和结算边界；
-- [ ] 与 Local Connector 的 authority 不重叠。
-- [ ] 上述全部活动权威文档已同步；未完成前禁止开始 Phase 1。
+- [x] 用户确认本 Spec/Plan；
+- [x] 没有把“设计”写成“已实现”；
+- [x] `game-design.md` 已同步到本规格冻结的统一 `action` schema 和结算边界；
+- [x] 与 Local Connector 的 authority 不重叠。
+- [x] 上述全部活动权威文档已同步。
 
 ## 8. Phase 1：契约、迁移与持久化基础
 
@@ -515,11 +519,11 @@ Credential validation job 对 `create | update | replace` 保存私有
 ### 8.4 退出门槛
 
 - [ ] Memory 与 PostgreSQL repository 通过同一 contract suite；
-- [ ] 真实 PostgreSQL 中并发唯一性由 DB 保证；
-- [ ] legacy `001` 未被意外应用；
+- [x] 真实 PostgreSQL 中并发唯一性由 DB 保证；
+- [x] legacy `001` 未被意外应用；
 - [ ] AgentTask 可以重启恢复且不会重复完成。
-- [ ] Worker 不读取实时 Arena 状态，只能读取冻结 execution view；
-- [ ] Worker 全部宕机时 Arena Finalizer 仍生成唯一 default。
+- [x] Worker 数据库角色只能读取冻结 execution view；
+- [x] 不依赖 Hosted Worker 的 Arena Finalizer 可生成唯一 default。
 
 ## 9. Phase 2：SecretStore 与 Provider Capability
 
@@ -695,14 +699,14 @@ Credential validation 状态机：
 
 ### 10.4 退出门槛
 
-- [ ] Fake Provider 全错误矩阵通过；
+- [x] Fake Provider 全错误矩阵通过；
 - [ ] 真实 Adapter 完成最小 structured action；
-- [ ] thinking 开/关或 always-on 行为与 registry 一致；
+- [x] thinking 开/关或 always-on 行为与 registry 一致；
 - [ ] reasoning text 不进入 persistence/API；
 - [ ] redirect 到 loopback/RFC1918/link-local/cloud metadata 被拒绝；
 - [ ] 恶意 proxy env 不生效，超大/压缩炸弹响应被拒绝；
-- [ ] usage 缺失时 `usage_complete=false`；
-- [ ] 无任何 Provider/Model fallback。
+- [x] usage 缺失时 `usage_complete=false`；
+- [x] 无任何 Provider/Model fallback。
 - [ ] transient validation 可在重启后按 `next_attempt_at` 恢复；
 - [ ] permanent validation 不自动重试，revalidate 受限流且不重复建 job。
 
@@ -711,6 +715,35 @@ Credential validation 状态机：
 本阶段先交付 creation/control surface，feature flag 仍保持关闭。创建请求可以持久化为
 `provisioning` 并排入独立 credential validation job；只有 Phase 5 的 Durable Worker
 完成并通过 E2E 后，才允许 Binding 实际进入 `ready` 并对外开放 Hosted 创建入口。
+
+截至 2026-07-24，已经落地的是安全、可测试的 Phase 4 壳：
+
+- `hosted_agent_control_plane/` 提供严格 domain model、capability/readiness、
+  write-only Credential ingress、Hosted Agent create/list/detail service 和显式
+  test-only Memory repository；
+- `004_hosted_agent_api.sql` 提供 owner/route 隔离、只接收摘要、带 TTL/数量上限的
+  HTTP 幂等记录与受限数据库函数；重放通过安全 resource reference 重新读取当前
+  owner-scoped 投影，不缓存 Credential、Strategy 或完整响应；
+- `web/hosted_agent_api.py` 提供安全 body 解析、Session/CSRF/owner scope、
+  capability route，以及只有显式传入完整依赖时才会挂载的 create/list/detail 路由；
+- production Caddy access log 将完整 request URI 替换为固定占位符，Uvicorn access
+  log 在反向代理后关闭，避免误贴到 query 的 Key 进入双重 access log；业务审计继续
+  使用结构化 Arena/Connector Event，而不是原始 URL；
+- `/agents` 保留 Local Connector，并新增最小 Hosted 创建表单与状态列表。原 Key
+  不进入 React state/storage，Credential 成功后立即清空；第二阶段失败只重试
+  Agent create；
+- `/connect` 支持不填写 Connector code 的纯登录/注册路径，Hosted-only 用户不需要
+  先运行本地 Connector；
+- `web/api.py` 只挂载 `creationEnabled=false` 的 capability envelope。即使设置
+  `ADX_HOSTED_AGENTS_ENABLED=true`，在生产依赖尚未组成时也会启动失败，而不会
+  回退到 Memory/Fake。
+
+尚未完成生产 PostgreSQL control repository、真实 Tencent Secret Manager、
+Credential validation/Hosted Worker，以及 replace/revoke/revalidate/PATCH/disable/
+join 路由。最小 UI 的两阶段恢复上下文只在当前页面内存中；刷新发生在 Credential
+成功、Agent create 前时，仍依赖未来的 unbound Credential TTL/Controller 或服务端
+resume 流程。当前 UI 也未实现“暂停新建但仍管理已有 Agent”的独立 readiness。
+因此当前 UI 是功能壳，不代表 Hosted Agent 已能持续离线运行。
 
 ### 11.1 Backend API
 
@@ -736,7 +769,7 @@ Credential validation 状态机：
 - 验证 CSRF；
 - 不信任 body 中的 `owner_id`；
 - 使用对象级 owner scope；
-- 接受并持久化 `Idempotency-Key`；
+- 校验原始 `Idempotency-Key`，只把 `sha256:` 摘要传入并持久化到 repository；
 - 按 `user + route` 隔离 idempotency，并限制 key 长度、记录数量和 TTL；
 - 跨 owner 返回 404；
 - 请求体不进入 access/APM/Trace/validation/error log；
@@ -754,9 +787,11 @@ transaction:
   reserve idempotency record
   + create pending_write credential row
   + pre-generate opaque secret_ref
+  + attach credential_id to the reservation
 commit
   -> write Secret to exact ref
-  -> CAS credential to stored
+  -> transaction: CAS credential to stored
+                  + complete the same idempotency record
 ```
 
 前端随后调用 Agent create：
@@ -793,7 +828,11 @@ credential_id
 - active Game 时 replace 返回 409；紧急 revoke 允许但令当前 Game 后续行动 default；
 - revoke 先阻止新 claim，再排入 Credential Controller job；
 - request digest 排除原 Key；Key 只参与独立 pepper HMAC fingerprint；
-- 相同 idempotency key + 相同 canonical metadata/fingerprint：返回原结果；
+- 相同 idempotency key + 相同 canonical metadata/fingerprint：返回同一资源的
+  当前 owner-scoped 投影；
+- 已完成 replay 的 owner/key/request digest 查询先于当前 Credential 状态与
+  capability catalogue 校验；只有 fresh create 才按当前依赖重新校验，事务内仍需
+  再次检查 replay 以关闭并发窗口；
 - 相同 key + 不同 digest：`409`。
 
 ### 11.3 Frontend
@@ -845,15 +884,15 @@ credential_id
 
 ### 11.5 退出门槛
 
-- [ ] 用户在一个页面一次提交创建；
-- [ ] HTTP 层是两个独立幂等 API，Agent request 不含原 Key；
+- [x] 最小 UI 壳允许用户在一个页面一次提交创建；生产能力仍由 readiness 关闭；
+- [x] HTTP 层是两个独立幂等 API，Agent request 不含原 Key；
 - [ ] 刷新页面后 Agent 与 Binding 仍存在；
-- [ ] Runtime 未 ready 不显示 online；
+- [x] Runtime 未 ready 不显示 online；
 - [ ] join 与异步 Runtime 更新竞态在真实 PostgreSQL 中线性化；
 - [ ] transient validation 可恢复，revalidate 不会并发创建重复 job；
 - [ ] candidate validation 失败不覆盖当前 Config，成功只产生一次完整 CAS；
 - [ ] 浏览器不能覆盖内部 endpoint、系统规则或 Secret reference；
-- [ ] Local Connector 入口未被破坏。
+- [x] Local Connector 入口未被破坏。
 
 ## 12. Phase 5：Durable Hosted Worker
 
@@ -921,7 +960,8 @@ Worker 使用数据库 leader/lease，确保未来误启动多个副本时仍只
 - deadline 来自 Task；
 - Worker 只读取 Task 创建事务冻结的 snapshot/config ref，不实时查询 Arena 状态；
 - 每次调用前计算剩余时间；
-- 只对定义的 transient/invalid-output 错误重试；
+- 只对定义的 transient/invalid-output 错误重试；transport 只有在 Adapter
+  能证明请求尚未发送时才可重试，read/ambiguous timeout 必须标为 unknown；
 - 最多两个 Attempt；
 - 重试前必须保留安全缓冲；
 - Decide default 一次 `pass`；

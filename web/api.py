@@ -48,6 +48,17 @@ from connector_gateway import (
     create_connector_router,
 )
 from connector_gateway.auth import AuthError, AuthPrincipal
+from arena_core import PostgresArenaParticipationRepository
+from hosted_agent_control_plane import (
+    CapabilityCatalogService,
+    LocalHostedControlBundle,
+    ProductionHostedControlBundle,
+    build_local_hosted_control,
+    build_production_hosted_control,
+)
+from hosted_agent_runtime import CapabilityRegistry
+from web.hosted_agent_api import create_hosted_agent_router
+from web.arena_participation_api import create_arena_participation_router
 
 
 # ============================================================
@@ -193,6 +204,27 @@ def _production_connector_enabled(
     return connector_mode == "production" or environment == "production"
 
 
+def _hosted_agents_requested() -> bool:
+    return os.getenv(
+        "ADX_HOSTED_AGENTS_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
+def _hosted_local_dev_requested() -> bool:
+    return os.getenv(
+        "ADX_HOSTED_LOCAL_DEV",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
+def _arena_participation_requested() -> bool:
+    return os.getenv(
+        "ADX_ARENA_PARTICIPATION_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _allowed_origins(production: bool) -> list[str]:
     configured = [
         value.strip().rstrip("/")
@@ -218,19 +250,66 @@ def _allowed_origins(production: bool) -> list[str]:
 
 def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     production_connector = _production_connector_enabled(connector_demo_enabled)
+    if _hosted_local_dev_requested() and not _hosted_agents_requested():
+        raise RuntimeError(
+            "ADX_HOSTED_LOCAL_DEV requires ADX_HOSTED_AGENTS_ENABLED=true"
+        )
     connector_bundle: ProductionConnectorBundle | None = None
     if production_connector:
         # This validates every security-sensitive production setting before
         # the process starts accepting traffic.
         connector_bundle = build_production_connector()
+    hosted_bundle: (
+        ProductionHostedControlBundle
+        | LocalHostedControlBundle
+        | None
+    ) = None
+    if _hosted_agents_requested():
+        if connector_bundle is None:
+            raise RuntimeError(
+                "Hosted Agent creation requires the authenticated production "
+                "Connector control plane"
+            )
+        if _hosted_local_dev_requested():
+            hosted_bundle = build_local_hosted_control(
+                connector_bundle.auth
+            )
+        else:
+            hosted_bundle = build_production_hosted_control(
+                connector_bundle.auth
+            )
+    arena_participation: PostgresArenaParticipationRepository | None = None
+    if _arena_participation_requested():
+        if connector_bundle is None:
+            raise RuntimeError(
+                "Arena participation requires the authenticated production "
+                "control plane"
+            )
+        arena_participation_dsn = (
+            os.getenv("ADX_ARENA_API_DATABASE_URL")
+            or os.getenv("ADX_HOSTED_CONTROL_DATABASE_URL")
+            or os.getenv("ADX_CONNECTOR_DATABASE_URL")
+            or ""
+        ).strip()
+        arena_participation = PostgresArenaParticipationRepository(
+            arena_participation_dsn
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if connector_bundle is not None:
             await connector_bundle.initialize()
+        if hosted_bundle is not None:
+            await hosted_bundle.initialize()
+        if arena_participation is not None:
+            await arena_participation.initialize()
         try:
             yield
         finally:
+            if arena_participation is not None:
+                await arena_participation.close()
+            if hosted_bundle is not None:
+                await hosted_bundle.close()
             if connector_bundle is not None:
                 await connector_bundle.close()
 
@@ -245,8 +324,14 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=_allowed_origins(production_connector),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Accept", "Authorization", "Content-Type", "X-CSRF-Token"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=[
+            "Accept",
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-CSRF-Token",
+        ],
     )
 
     if connector_bundle is not None:
@@ -259,6 +344,39 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         _mount_connector_gateway(app, connector_demo_enabled)
         app.state.connector_gateway_mode = (
             "demo" if app.state.connector_gateway_enabled else "off"
+        )
+
+    if hosted_bundle is None:
+        hosted_catalog = CapabilityCatalogService(
+            CapabilityRegistry(),
+            hosted_agents_enabled=False,
+            credential_ingress_configured=False,
+        )
+        app.state.hosted_agents_creation_enabled = False
+        app.include_router(
+            create_hosted_agent_router(catalog=hosted_catalog)
+        )
+    else:
+        app.state.hosted_agents_creation_enabled = True
+        app.state.hosted_control = hosted_bundle
+        app.include_router(
+            create_hosted_agent_router(
+                catalog=hosted_bundle.catalog,
+                auth=hosted_bundle.auth,
+                credential_service=hosted_bundle.credential_service,
+                agent_service=hosted_bundle.agent_service,
+                enable_mutations=True,
+            )
+        )
+
+    if arena_participation is not None:
+        assert connector_bundle is not None
+        app.state.arena_participation = arena_participation
+        app.include_router(
+            create_arena_participation_router(
+                auth=connector_bundle.auth,
+                repository=arena_participation,
+            )
         )
 
     # ---- Singletons (in production: proper DI container) ----
@@ -753,8 +871,14 @@ def create_app_with_db(db=None, connector_demo_enabled: Optional[bool] = None):
         CORSMiddleware,
         allow_origins=_allowed_origins(False),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Accept", "Authorization", "Content-Type", "X-CSRF-Token"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=[
+            "Accept",
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-CSRF-Token",
+        ],
     )
 
     _mount_connector_gateway(app, connector_demo_enabled)

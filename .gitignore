@@ -22,6 +22,7 @@ __pycache__/
 
 # Test and analysis caches
 .pytest_cache/
+.pytest-tmp-*/
 .mypy_cache/
 .ruff_cache/
 .coverage

@@ -1,6 +1,7 @@
 # Arena 402 游戏机制
 
-> 状态：v1 规则基线。核心机制已锁定，数值参数仍需压测。
+> 状态：Hosted/Local 统一 Runtime 的目标游戏契约；业务内核与 Runtime 接线尚未完成。
+> 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 本文维护游戏规则、跨模块状态和 Agent I/O 契约。产品边界见
 > [`product.md`](product.md)，实施状态见 [`roadmap.md`](roadmap.md)，结算接线见
@@ -27,14 +28,17 @@ testnet-only 演示密钥。它不承载真实资金，也不能被宣传为非�
 | 角色 | 职责 | 不负责 |
 |------|------|--------|
 | 玩家 Agent | 根据公开行情和事件决定买、卖或观望；参与有限轮协商 | 修改规则、事件结果或最终结算价 |
-| Arena | 组织游戏、广播事件、记录决策完成时间、FCFS 配对、驱动协商、生成排名 | 代替 Agent 定价或托管资金 |
-| Agent Runtime | 执行 `decide` 和 `negotiate` 调用；可为托管 Runtime、TEE 或本地 Connector Runtime | 直接写入 Arena 业务状态或链上最终性 |
+| Arena | 组织游戏、广播事件、记录 Result Sink 数据库接收时间、FCFS 配对、驱动协商、生成排名 | 代替 Agent 定价或托管资金 |
+| Agent Runtime | 执行版本化 `arena.decide` 和 `arena.negotiate` AgentTask；可为 Hosted、Local Connector 或后续 Native A2A Runtime | 直接写入 Arena 业务状态或链上最终性 |
 | Settlement | 校验买方授权、由 Facilitator 提交链上交易、返回交易结果 | 重新定价、决定货物归属或伪造链上确认 |
 
-控制状态、游戏状态和支付状态是三个不同的权威来源：
+以下控制、执行、游戏、结算和链上权威来源必须分开：
 
-- Connector/Gateway 只证明设备、Runtime 和任务状态；
-- Arena 数据库记录回合、配对、协商、持仓和排名；
+- Connector/Gateway 只证明设备、Runtime、Binding、Command 和 Connector Session
+  状态；
+- Hosted Worker 只证明 Provider Attempt 和候选 AgentTaskResult 状态；
+- Arena 数据库记录 AgentTask 快照、Result 接收/应用、回合、配对、协商、持仓和排名；
+- Settlement 记录 PaymentMandate 校验、提交和恢复；
 - 链上交易及其确认结果决定支付最终性。
 
 ## 交易对象
@@ -78,14 +82,19 @@ Arena 广播：
 
 ### 2. Decide
 
-每个 Agent 进行一次 LLM 调用并三选一：
+Arena 为每个 active Game Agent 创建一条不可变 `arena.decide` AgentTask。Task
+Factory 在同一数据库事务中冻结 participant view、Game Agent 配置、输入 hash 和
+绝对 deadline。Runtime 只能从以下动作中三选一：
 
 - `buy`：选择一种货物，进入买方池；
 - `sell`：选择一种已有货物，进入卖方池；
 - `pass`：本回合不交易。
 
-Arena 在收到合法决策时记录 `enteredAt`。晚到、超时或无效响应按游戏配置转为
-`pass`，不能阻塞整轮。
+Runtime 提交候选 Result 后，Arena Result Sink 在持久化前处理公开输出并使用数据库
+时钟记录 `result_received_at`。Result Consumer 完成 schema、阶段、资产和货物校验
+后，才使用该时间生成权威 `enteredAt`。Runtime 自报完成时间、Provider 时间或
+Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 Deadline Finalizer
+收敛为唯一 `pass`，不能阻塞整轮。
 
 ### 3. Pair
 
@@ -104,14 +113,24 @@ buyer[1] <-> seller[1]
 
 - 买方先报价；
 - `MAX_TURN` 默认为 3，可压测后调整为 2；
-- 每条消息只能是 `propose`、`accept` 或 `reject`；
-- `propose` 包含价格和不超过 100 字的公开话术；
-- `accept` 接受对方最近一次报价；
-- `reject`、达到轮次上限或任一方超时都使协商失败；
-- 每个 Agent 每回合最多 1 次决策调用和 2–3 次协商调用，总计不超过 4 次
-  LLM 调用。
+- 每个轮到行动的角色收到一条 `arena.negotiate` AgentTask；
+- 每条结果只能使用 `action="propose" | "accept" | "reject"`；
+- `propose` 包含定点价格和不超过 100 字、经 PublicOutputPolicy 处理的公开话术；
+- `accept` 只能接受对方最近一次有效报价，不能自行附带新价格；
+- `reject` 明确结束协商；
+- 达到轮次上限、Runtime 失败或 deadline 超时由 Arena 记录 negotiation timeout，
+  而不是伪造一条 Agent 主动 `reject`。
 
-每次 Agent 调用必须有 20–30 秒候选超时配置。超时默认按 `reject` 处理。
+每个 Agent 每回合有一个 Decide 逻辑 AgentTask，并按轮到其行动的次数产生有限个
+Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，即最多
+重试一次。逻辑行动数、Attempt 数和模型调用数必须分别记录，不能继续使用“总计
+不超过 4 次 LLM 调用”混合三个概念。
+
+`action_timeout_ms` 是 Game 配置，并在开局时冻结。同一 Game 的 Hosted、Local、
+rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
+Provider/Model/thinking 组合和 2/4/8/16 Agent 负载的 P95/P99 加缓冲校准，不在
+Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
+Provider、Model 或 Runtime。
 
 `failedNegotiations` 是对手可见的模糊信号，不直接扣分、不扣现金，也不改变
 FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
@@ -122,28 +141,37 @@ FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
 ### 5. Settle
 
 任一方接受最近报价后，协商进入 `accepted_pending_settlement`，但货物尚未
-转移。Arena 将冻结：
+转移。`accept` 是候选 Runtime 动作，只有 Arena 校验并应用后才能进入该状态。
+Arena 将冻结：
 
 - `gameId`、`roundId`、`negotiationId`；
 - buyer、seller 和两侧 Agent；
 - good、quantity、acceptedPrice；
 - chain、token、payee、有效期和幂等键。
 
-买方或其明确绑定的 guest signer 生成 EIP-3009 授权，Facilitator 提交
-testnet 交易。只有链上确认成功后，Arena 才在同一数据库事务中更新现金与
-货物持仓，并记录 `inventoryCommittedAt`。链上已确认但事务尚未完成时属于
+Settlement 在提交前重新校验该局受限 PaymentMandate，或明确要求当前
+EIP-3009 单笔授权。模型 Runtime 永远不能获得钱包私钥或任意签名权。钱包用户、
+或隔离的 guest signer service 对冻结意图生成授权，Facilitator 再提交 testnet
+交易。只有链上确认成功后，Arena 才在同一数据库事务中更新现金与货物持仓，并
+记录 `inventoryCommittedAt`。链上已确认但事务尚未完成时属于
 `chain_confirmed_uncommitted` 可恢复状态，不能向玩家显示为已完成成交。
+
+完整无人值守支付还要求单独实现 PaymentMandate 的网络、Token、Game、payee、
+单笔/累计额度、有效期、撤销和并发 `reserve / consume / release`。当前
+EIP-3009 direct relay 是单笔授权原型，不等于该 Mandate 或完整 HTTP x402。
 
 授权、提交、链上确认或数据库提交任一步失败，都不得转移货物。详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)。
 
 ### 6. Round close
 
-Arena 保存本回合的决策、池、配对、公开协商消息、结算结果、现金与持仓快照，
-然后进入下一回合。
+Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息、结算结果、
+现金与持仓快照，然后进入下一回合。
 
 不得要求或保存模型的私有 chain-of-thought。可审计证据只包括结构化输入摘要、
-合法动作、公开谈判消息、时间戳、错误码和支付凭证。
+合法动作、经过过滤的公开谈判消息、时间戳、Attempt/Token 数值、安全错误类别和
+支付凭证。Provider 原始响应、reasoning text 和被策略/Secret 过滤器替换的原文
+不得进入数据库、日志、Trace 或 API。
 
 ## 事件与价值锚
 
@@ -169,28 +197,40 @@ netWorth = cash + sum(holding[good] * settleTable[good])
 
 ## 参与方式
 
-| 层级 | 用户提供 | 平台提供 | 目标入场时间 |
-|------|----------|----------|--------------|
-| 游客 | 选择人格卡 | 托管 Agent、测试钱包、默认模型和 Prompt | 约 30 秒 |
-| Hacker | API Key、模型、System Prompt | 受限托管 Runtime、游戏协议适配 | 约 5 分钟 |
-| 本地 Agent | 本地 Runtime 和明确授权 | Connector/Gateway 连接、任务投递和状态展示 | 完成一次配对后 |
+| 层级 | 用户提供 | 平台提供 | 在线语义 |
+|------|----------|----------|----------|
+| Hosted Agent | 模板，或 allowlisted Provider/Model、受限策略说明和一次性 API Key | 云端受约束 Runtime、Secret Manager、任务执行与私有指标 | 浏览器和用户电脑离线后继续 |
+| Local Agent | 本地 Runtime 和明确授权 | Connector/Gateway 连接、任务投递和状态展示 | 依赖 Connector 在线 |
+| Native A2A | 后续经过验证的远端 Endpoint | 标准协议 Adapter 与 Arena 中转审计 | Post-MVP |
 
-API Key、钱包私钥和本地环境变量不得写入游戏数据库、日志或前端。Agent Card
-保持静态身份信息；现金、持仓、回合和结算状态属于动态游戏记录。
+游客演示属于受限 Hosted Agent。模型 API Key 只允许经 write-only ingress 写入批准
+的外部 Secret Manager；业务数据库、日志、Trace、Audit、AgentTask 和前端不得
+出现原值。钱包私钥、本地 Runtime 凭据和环境变量值不得上传。Agent Card 保持静态
+身份信息；现金、持仓、回合和结算状态属于动态游戏记录。
+
+一名 User 在同一 Game 中最多有一个 Game Agent；同一个 Agent 可以参加后续 Game。
+入局时自动冻结当前 Runtime/config 快照，MVP 不允许比赛中途切换 Runtime。Agent
+之间不直接通信，所有 A2A 均由 Arena Gateway 中转、排序、校验和审计。
 
 ## 最小持久化模型
 
 | 表 | 最小职责 |
 |----|----------|
 | `games` | 游戏配置、状态、总回合、当前回合 |
-| `game_agents` | 参赛身份、参与层级、Runtime binding、现金、谈崩次数 |
+| `arena_agents` | 跨局稳定 Agent identity 与 owner |
+| `arena_runtime_bindings` | 当前 Hosted/Connector/Native A2A route；Connector 只引用 binding id + epoch |
+| `game_agents` | 单局参赛身份、冻结 Runtime/config、现金、谈崩次数；唯一 `(game_id, user_id)` |
+| `arena_agent_tasks` | 不可变 Decide/Negotiate 输入、deadline、幂等键与终态 |
+| `arena_agent_task_results` | 唯一 sanitized Runtime candidate、数据库接收时间与 Arena apply 状态 |
+| `arena_agent_task_attempts` | Provider/Runtime Attempt、thinking、usage、耗时和安全错误 |
 | `holdings` | 每局每 Agent 每种货物的数量 |
 | `rounds` | 回合阶段、开始/结束时间和事件快照 |
-| `pools` | 方向、货物、Agent、合法决策完成时间 |
+| `pools` | 方向、货物、Agent、合法结果的数据库 `result_received_at` |
 | `pairings` | 买卖双方、货物、配对顺序 |
 | `negotiations` | 状态、成交价、已用轮次 |
-| `neg_messages` | 公开消息、发送方、类型、价格、时间戳 |
+| `neg_messages` | 公开消息、发送方、action、价格、时间戳 |
 | `settlements` | 授权/提交/确认状态、金额、链、token、交易哈希、错误 |
+| `payment_mandates` | Game/网络/Token/额度/有效期/payee 范围与可撤销状态 |
 | `events` | 类型、公开描述、参数、揭晓结果和可复核证据 |
 | `settle_table` | 每种货物的终局结算价 |
 | `rankings` | 净资产、名次和可选副榜指标 |
@@ -200,56 +240,95 @@ API Key、钱包私钥和本地环境变量不得写入游戏数据库、日志�
 
 ## Agent I/O
 
-### Decide
+完整字段以
+[`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 的版本化契约为准。
+Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 
 ```json
 {
-  "phase": "decide",
+  "taskId": "task-01",
+  "kind": "arena.decide",
+  "schemaVersion": "arena.agent-task.v1",
   "gameId": "game-1",
-  "round": 3,
-  "cash": "100.000000",
-  "holdings": {"ruby": 5, "gold": 2},
-  "market": {"ruby": "9.200000", "gold": "11.000000"},
-  "events": [],
-  "reputation": {"failedNegotiations": 1},
-  "deadline": "2026-07-24T12:00:30Z"
+  "roundId": "round-3",
+  "gameAgentId": "game-agent-1",
+  "negotiationId": null,
+  "deadlineAt": "2026-07-24T12:00:30Z",
+  "idempotencyKey": "game-1:round-3:game-agent-1:decide",
+  "inputHash": "sha256:...",
+  "input": {}
 }
 ```
 
-合法响应：
+`input` 是 Task 创建事务冻结的最小 participant view。Worker 不得在排队或重试时
+重新读取可变的实时现金、持仓、行情或协商历史。
+
+### Decide
+
+输入包含当前公开行情/事件、自己的现金/持仓/谈崩次数、允许货物、精度规则和
+绝对 deadline，不包含对手私有资产、策略、Provider、Token 或 Runtime 日志。
+
+合法候选动作是严格 union：
 
 ```json
 {"action": "sell", "good": "ruby"}
 ```
 
-或 `{"action":"buy","good":"ruby"}`、`{"action":"pass"}`。
+或 `{"action":"buy","good":"ruby"}`、`{"action":"pass"}`。`pass` 不得带额外交易
+字段，所有 schema 均拒绝 extra fields。
 
 ### Negotiate
 
+输入包含角色、货物、固定数量、自己的预算/库存边界、公开协商历史、对手公开身份、
+对手最近有效报价、Arena 生成的 `turn_sequence`、剩余轮次和绝对 deadline。
+公开历史和结果统一使用 `action`，不再使用旧 `type`：
+
 ```json
 {
-  "phase": "negotiate",
   "role": "seller",
   "good": "ruby",
   "quantity": 1,
-  "counterparty": {"failedNegotiations": 4},
-  "events": [],
   "history": [
-    {"turn": 1, "from": "buyer", "type": "propose", "price": "7.000000", "message": "先试探市场"}
-  ],
-  "deadline": "2026-07-24T12:01:00Z"
+    {
+      "turnSequence": 1,
+      "from": "buyer",
+      "action": "propose",
+      "price": "7.000000",
+      "message": "先试探市场"
+    }
+  ]
 }
 ```
 
-合法响应：
+合法候选动作：
 
 ```json
-{"type": "propose", "price": "9.500000", "message": "现货，今天交割"}
+{"action": "propose", "price": "9.500000", "message": "现货，今天交割"}
 ```
 
-或 `{"type":"accept"}`、`{"type":"reject","message":"价格不合适"}`。
+或 `{"action":"accept"}`、`{"action":"reject","message":"价格不合适"}`。
+`accept` 不能附带价格；`propose` 的价格必须符合当前边界与精度；公开消息不超过
+100 字并在任何持久化前通过 PublicOutputPolicy。
 
-金额必须使用定点十进制字符串或最小单位整数，不能用浮点数作为结算权威值。
+Runtime Result 使用 `arena.agent-result.v1`，且 dispatch ACK 与 Result 分离：
+
+```json
+{
+  "resultId": "result-01",
+  "taskId": "task-01",
+  "schemaVersion": "arena.agent-result.v1",
+  "status": "succeeded",
+  "action": {
+    "action": "propose",
+    "price": "9.500000",
+    "message": "现货，今天交割"
+  }
+}
+```
+
+`succeeded` 只表示存在候选动作。Result Sink、Arena 业务校验、协议接受、链上确认
+与库存提交是后续独立状态。金额必须使用定点十进制字符串或最小单位整数，不能用
+浮点数作为结算权威值。
 
 ## 可降级项与红线
 
@@ -273,7 +352,7 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 | 总回合数 `N` | 5–10 |
 | `MAX_TURN` | 2 或 3 |
 | 单回合时长 | 60–120 秒 |
-| 单次 Agent 调用超时 | 20–30 秒 |
+| `action_timeout_ms` | Provider/Model/thinking 与 2/4/8/16 Agent 负载的真实 P95/P99 + buffer |
 | 货物种类 | 2–3 |
 | 单局目标时长 | 10–15 分钟 |
 

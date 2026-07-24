@@ -5,6 +5,7 @@
 > 适用范围：用户本地 Agent Runtime 接入 Arena 402 的出站 Connector
 > 对应计划：[`local-agent-connector-implementation-plan.md`](./local-agent-connector-implementation-plan.md)
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
+> 统一 Runtime 目标：[`hosted-arena-agent-spec.md`](./hosted-arena-agent-spec.md)
 
 ## 1. 核心结论
 
@@ -20,21 +21,25 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 - Command 在任何 WSS 下发前先跨越 PostgreSQL durable pre-delivery barrier；
 - `adx-connector connect --server https://...`、浏览器授权、凭据保存和系统自启动；
 - Docker Compose + PostgreSQL + FastAPI + Next.js + Caddy 部署栈，支持域名 TLS 和短期 IPv4 TLS；
+- Windows/Linux AMD64/ARM64 安装包、SHA-256 校验和与一行安装脚本。
 
 这条路径当前只实现 Device/Runtime 控制面，尚未实现
 [`game-design.md`](game-design.md) 定义的 `arena.decide`、`arena.negotiate`
-业务适配。Connector 的成功回执不能证明 Agent 已成交或链上支付已确认。
-- Windows/Linux AMD64/ARM64 安装包、SHA-256 校验和与一行安装脚本。
+业务适配，也没有把 dispatch ACK 与唯一 terminal `AgentTaskResult` 分开的 Arena
+结果通道。Connector 的成功回执不能证明候选动作合法、Agent 已成交或链上支付已
+确认。
 
 这表示“控制面代码与单机部署路径已具备”，不表示某台真实服务器已经部署完成，也不表示已经通过外部网络端到端验收。
 
-当前实现仍有四个明确边界：
+当前实现仍有五个明确边界：
 
 1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
 2. `matching/`、Arena 和 Negotiation 的业务状态仍是进程内状态，不能作为
    Game/Round/Inventory 的可靠账本或结算权威来源。
 3. Runtime task 默认 detection-only；fixed-argv Codex/Claude runner 不具备完整的平台审批闭环。
 4. 安装包目前有 HTTPS 传输与 SHA-256 校验，但签名发布、SBOM、独立信任根和安全自动更新仍是后续。
+5. Connector WSS 尚未实现版本化 `arena.agent-task.v1` /
+   `arena.agent-result.v1` 映射、Arena Result Sink 与统一 Deadline Finalizer 接线。
 
 ## 2. 产品边界
 
@@ -53,11 +58,18 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 - 注入、抓取或复用任意外部进程的 stdin/stdout；
 - 任意 shell、任意 argv、远程桌面或任意文件浏览；
 - 撮合、定价、谈判、付款、托管、链上签名或争议解决；
-- 保存模型 API key、OAuth token、钱包私钥或助记词；
+- 保存或上传本地模型 API key、OAuth token、钱包私钥或助记词；Hosted Agent
+  的模型 BYOK 是独立 write-only ingress + 外部 Secret Manager 路径，不经过
+  Connector；
 - 把 Runtime 输出当作成交、支付或交付的最终证明；
 - 对 Connector 之外的本地 Agent 活动做“完整监控”。
 
 MCP 可以作为某个 Runtime driver 的内部能力，但不能替代设备配对、WSS 生命周期、session ownership、命令幂等、断线恢复和跨 Runtime 审计语义。
+
+Arena 级 routing 只引用 Connector-owned
+`connector_binding_id + binding_epoch`。Arena 不复制或接管 Device、Runtime、
+Binding、Command、Receipt、Session 与在线状态的权威；旧 epoch 的 ACK、Event
+和 Result 均不得被当前 Game Agent 接受。
 
 ## 3. “一次安装、一次授权、自动上线”
 
@@ -116,6 +128,16 @@ Internet -> Caddy :80/:443
 
 只有 Caddy 映射宿主机端口。Next.js、FastAPI 和 PostgreSQL 不直接暴露公网端口。Docker Compose 为 2 vCPU / 4 GB RAM 的单机 beta 配置了健康检查、资源上限、只读根文件系统（适用服务）和日志轮转。
 
+目标 Arena 扩展尚未实现，其逻辑边界为：
+
+```text
+Arena Runtime Adapter
+  -> immutable AgentTask through Connector Gateway
+  -> outbound WSS Connector
+  -> explicit terminal AgentTaskResult
+  -> Arena Result Sink / Consumer / Finalizer
+```
+
 ## 5. 身份、会话与对象授权
 
 ### 5.1 Self-hosted beta 身份
@@ -151,6 +173,11 @@ Internet -> Caddy :80/:443
 - Arena 的 Agent 注册、意图和谈判等 mutation 也要求 session、CSRF 和 Agent ownership。
 
 当前 beta 以 `user_id` 作为 tenant-like 隔离键；组织级 tenant、成员关系、RBAC/ABAC 和管理员委托尚未实现，不能把当前模型描述为完整企业多租户。
+
+目标 Arena identity 接线后，`connector_users` 暂时作为共享平台 User 的兼容表名。
+Arena Agent 仍由 Arena identity store 拥有；Arena route 通过 Connector Binding
+引用建立关联。入局事务必须保证一名 User 在同一 Game 中只有一个 Game Agent，
+冻结当时的 `binding_id + binding_epoch`，且活动 Game 不允许中途切换 Runtime。
 
 ### 5.3 开发 demo 与生产 Router
 
@@ -240,7 +267,7 @@ Runtime discovery 只搜索 `PATH` 和少量已知安装目录，执行只读、
 
 Gateway 仍会按 Runtime capabilities 拒绝未声明能力的 command。这个本地开关不等于生产审批或供应商认证通过。
 
-### 8.2 Typed command
+### 8.2 当前 Typed command
 
 允许：
 
@@ -263,7 +290,88 @@ Gateway 仍会按 Runtime capabilities 拒绝未声明能力的 command。这个
 
 `working_directory` 必须位于本机 `--allow-root`；`environment_refs` 只允许名称并受本机 `--allow-env` 二次约束。Session lifecycle command 必须匹配 `binding_id + agent_id + runtime_id + binding_epoch`。
 
-### 8.3 Driver 边界
+### 8.3 目标 Arena typed task/result
+
+Arena 接线保留 Connector 顶层 `task.dispatch` 兼容 action，但新增嵌入严格、
+版本化 `arena.agent-task.v1` 的 payload variant，而不是把自由 `prompt` 当作
+业务权威。外层 Connector transport envelope 继续使用现有兼容协议版本：
+
+```json
+{
+  "session_id": "session-01",
+  "task": {
+    "taskId": "task-01",
+    "kind": "arena.decide",
+    "schemaVersion": "arena.agent-task.v1",
+    "gameId": "game-01",
+    "roundId": "round-03",
+    "gameAgentId": "game-agent-01",
+    "negotiationId": null,
+    "deadlineAt": "2026-07-24T12:00:30Z",
+    "idempotencyKey": "game-01:round-03:game-agent-01:decide",
+    "inputHash": "sha256:...",
+    "input": {}
+  }
+}
+```
+
+Connector 与 Runtime adapter 必须输出一条显式 terminal result：
+
+```json
+{
+  "schemaVersion": "arena.agent-result.v1",
+  "resultId": "result-01",
+  "taskId": "task-01",
+  "status": "succeeded",
+  "action": {
+    "action": "buy",
+    "good": "ruby"
+  }
+}
+```
+
+业务 action 是严格 union：
+
+- Decide：`action="buy" | "sell" | "pass"`；
+- Negotiate：`action="propose" | "accept" | "reject"`；
+- 价格使用定点字符串或最小单位整数，拒绝 extra fields；
+- 公开 `message` 不超过 100 字，并在 Arena Result Sink 的任何持久化前经过统一
+  PublicOutputPolicy。
+
+状态必须分开：
+
+```text
+Command persisted/delivered ACK
+  != Runtime terminal AgentTaskResult
+  != Arena Result applied/rejected ACK
+  != accepted trade
+  != payment confirmed
+```
+
+- Gateway 不能从 stdout、最后一条 `runtime.message`、普通 Event 或 Command
+  `succeeded` 推断业务动作；
+- 相同 Task 的重连/重投使用原 `taskId + idempotencyKey`；每个 Task 最多一个
+  terminal Result；
+- Arena Result Sink 使用数据库时钟生成 `result_received_at`，Local Runtime
+  自报时间不参与 FCFS；
+- Result Sink/Consumer 通过唯一约束与 CAS 最多应用一次；late/duplicate 只追加
+  不含候选原文的诊断 Event；
+- Arena-owned Deadline Finalizer 在 Connector 不可用时也必须关闭过期 Task：
+  Decide 为唯一 `pass`，Negotiate 为唯一 timeout；
+- 同一 Game 的 Hosted、Local、rule 与未来 Native A2A Runtime 使用相同、
+  经真实 P95/P99 与负载测试校准的 `action_timeout_ms`；
+- 每个逻辑 AgentTask 最多两个 Attempt，只在错误可重试且剩余时间足够时重试，
+  不切换 Runtime、Provider 或模型。
+
+Connector 心跳丢失后的重连窗口是 30 秒与当前行动剩余时间中的较短者。窗口内使用
+原 Task/key 恢复；超时后当前 Task 由 Finalizer 收敛，后续回合仍生成 explicit
+default，不留下缺失行动，也不自动切换到 Hosted。
+
+以上是目标契约，当前代码尚未实现；现有 `task.dispatch` v1
+`{session_id, prompt, request_id?}` 继续作为兼容能力，不能被误报为 Arena typed
+adapter 已完成。
+
+### 8.4 Driver 边界
 
 当前 Codex 和 Claude task driver 都是一次 task 一个 Connector-owned child 的固定 argv runner。它们可验证 owned-child、幂等 receipt、cancel/stop 和 resume token 来源，但没有“Runtime 暂停 → 平台展示 approval → 用户批准/拒绝 → Runtime 恢复”的完整闭环。
 
@@ -321,6 +429,20 @@ Gateway 仍会按 Runtime capabilities 拒绝未声明能力的 command。这个
 - 支付、托管与链上服务才可决定资金最终性；
 - Runtime 文本或工具事件只是可观察证据，不能证明支付或交付完成。
 
+Arena 接线后还要增加第四类、由 Arena 拥有的业务结果链：
+
+```text
+AgentTask created
+  -> dispatch ACK
+  -> terminal Result submitted
+  -> Result applied/rejected/defaulted
+```
+
+公开协商时间线只展示经过 Arena 校验和过滤的
+`propose/accept/reject`、价格、服务端时间和 settlement 状态；Connector Event、
+usage、latency 与安全错误只进入 owner/operator 可见投影。任何路径都不采集
+private chain-of-thought。
+
 当前 Runtime Event 会进行本地凭据模式和 secret-key redaction，但尚未完成默认 `metadata_only`、按级别 retention/删除和用户自助数据治理。不得把当前 event store 描述为不可篡改金融审计。
 
 ## 11. 部署形态
@@ -357,6 +479,7 @@ Gateway 仍会按 Runtime capabilities 拒绝未声明能力的 command。这个
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |
 | Signed release / SBOM | `deploy/artifacts/` | 未实现；当前仅 HTTPS + SHA-256 |
 | Native A2A Endpoint | 未接入 | 第二方案，后续独立实现 |
+| Arena typed task/result | `task.dispatch` v1 尚无目标业务 variant | 未实现；缺少统一 `action` schema、terminal Result、Result Sink/Finalizer |
 
 ## 13. 验收门槛
 
@@ -403,13 +526,34 @@ npm run build
 
 在这些项目完成前，文档和发布说明不得声称“已部署到腾讯云”或“真实外部用户 E2E 已通过”。
 
+### 13.4 Arena Runtime 接线验收
+
+- [ ] Arena route 只引用当前 `connector_binding_id + binding_epoch`；
+- [ ] Hosted/Local/rule Agent 接收相同 `arena.agent-task.v1`；
+- [ ] Decide 只返回 `action=buy|sell|pass`；
+- [ ] Negotiate 只返回 `action=propose|accept|reject`；
+- [ ] dispatch ACK、terminal Result 和 Arena apply ACK 可独立恢复；
+- [ ] stdout、`runtime.message` 和普通 Event 不会被解析为业务结果；
+- [ ] FCFS 只使用 Result Sink 数据库时间；
+- [ ] late/duplicate Result 不重复入池或写协商；
+- [ ] Connector 断线超过重连窗口后由 Finalizer 产生明确 default；
+- [ ] 同局各 Runtime 使用相同、经测试校准的 deadline；
+- [ ] 一名 User 每局只有一个 Game Agent，活动 Game 不切换 binding；
+- [ ] Connector 不接收 Hosted BYOK、钱包私钥或 PaymentMandate signer 密钥。
+
 ## 14. 后续优先级
 
 1. 完成目标服务器部署和外部 E2E，收集安装到 online 的耗时与失败点。
 2. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
 3. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。
-4. 将 Connector Binding 与真实、持久化的 Arena 402 Agent registry 对接。
-5. 将 Game/Round/Pool/Pairing/Negotiation/Inventory 从进程内状态迁移到独立业务持久层，并保持与支付最终性解耦。
-6. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository 和多实例 drain 后再扩展 worker。
-7. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
-8. 以独立入口设计 Native A2A Endpoint，复用业务身份、任务关联和审计模型，但不复用 Device pairing 或本地 process supervisor。
+4. 将 Connector Binding 与真实、持久化的 Arena 402 Agent registry 对接，只通过
+   binding id + epoch 路由。
+5. 实现版本化 Arena typed Task、显式 terminal Result、Result Sink/Consumer 和
+   Deadline Finalizer 接线。
+6. 将 Game/Round/Pool/Pairing/Negotiation/Inventory 从进程内状态迁移到独立业务
+   持久层，并保持与支付最终性解耦。
+7. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository
+   和多实例 drain 后再扩展 worker。
+8. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
+9. 以独立入口设计 Native A2A Endpoint，复用业务身份、任务关联和审计模型，但不
+   复用 Device pairing 或本地 process supervisor。

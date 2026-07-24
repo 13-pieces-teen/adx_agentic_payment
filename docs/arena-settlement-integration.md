@@ -5,7 +5,8 @@
 > 本文取代已归档的 RFQ/数字交付结算方案，只定义“协商被接受”到“链上确认后
 > 转移游戏货物”的边界。Settlement 模块当前能力和验证证据仍以
 > [`../agent-arena/settlement/README.md`](../agent-arena/settlement/README.md)
-> 为准。
+> 为准。Hosted/Local Runtime 的上游 Task 契约见
+> [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。
 
 ## 当前能力与目标能力
 
@@ -28,7 +29,11 @@
 当前未实现：
 
 - Arena 游戏协商到 SettlementSDK 的持久化适配器；
+- 可覆盖一局多笔交易的 PaymentMandate，以及额度
+  `reserve / consume / release`；
 - 游戏级幂等、崩溃恢复和数据库原子更新；
+- revoke 与 reserved/submitted 的竞态、chain unknown/reorg 恢复；
+- 与 Hosted Worker 完全隔离的 guest signer service 权限接线；
 - 标准 HTTP `402 Payment Required` challenge/retry/header 流程；
 - 标准公共 x402 Facilitator 兼容；
 - 链上 escrow、退款、争议或生产手续费。
@@ -41,12 +46,53 @@
 | 状态类型 | 权威来源 |
 |----------|----------|
 | 协商是否接受、价格、货物和双方 | Arena 数据库 |
+| PaymentMandate 范围、额度预留/消费/释放和撤销 | Settlement 数据库 |
 | 授权 preflight 与交易是否提交 | Settlement service 记录 |
 | 支付是否最终成功 | Injective EVM 链上交易结果 |
 | 货物和现金余额 | Arena 数据库，仅在链上确认后更新 |
 
 前端、Connector acknowledgement、Facilitator HTTP `200` 或本地 SDK 状态都
-不能单独证明付款成功。
+不能单独证明付款成功。Hosted Provider success、AgentTaskResult
+`action="accept"` 或 Arena `accepted_pending_settlement` 也不能证明支付完成。
+
+## PaymentMandate 目标
+
+为了让 Hosted Agent 在用户关闭网页和电脑后仍能完成整局 testnet 交易，支付主体
+必须在入局前明确确认一份受限、可撤销、可审计的 PaymentMandate。最小范围包括：
+
+- `gameId`、network/chain id、token 与 settlement contract；
+- 允许的 payee 或 payee 规则；
+- 单笔最大金额与本局累计最大金额；
+- 生效时间、到期时间和撤销状态；
+- 防重放 nonce/sequence 与签名域；
+- 并发 Deal 的 `reserve / consume / release` 状态。
+
+建议状态机：
+
+```text
+active
+  -> reserve(deal) -> reserved
+       -> submit -> submitted
+            -> confirm -> consumed
+            -> known failure before transfer -> released
+  -> revoked / expired
+```
+
+额度预留必须在冻结 SettlementIntent 后、链上提交前完成。`reserved` 与
+`submitted` 不能因普通 revoke 被当作从未存在：revoke 阻止新 reserve，而在途
+记录必须按已冻结政策完成查询、确认或安全释放。`confirmation_timeout`、RPC 故障
+或数据库重启时不得盲目再次消费额度或重新付款。
+
+Wallet-backed User 与 Sandbox Guest 的实现可以不同：
+
+- Wallet-backed User 需要用户控制钱包对明确 Mandate 或单笔 intent 授权；
+- Sandbox Guest 由独立、限额、testnet-only signer service 执行；
+- Hosted Worker 无 signer IAM、钱包密钥、Mandate consume 权限或任意签名接口；
+- Local Connector 也不得把钱包私钥上传给平台。
+
+当前 EIP-3009 direct relay 只支持单笔授权原型，不天然实现上述多笔 Mandate。
+在签名域和额度状态机落地前，可以完成 Decide/Negotiate 与手动单笔 testnet
+结算，但不能宣称“Hosted Agent 在用户完全离线后可自动完成全部支付”。
 
 ## 冻结的成交快照
 
@@ -76,10 +122,15 @@ Arena 在 `accept` 后生成不可变的 `SettlementIntent`：
 金额必须通过 token 最小单位或定点十进制转换，禁止二进制浮点。`amount` 必须
 等于 `unitPrice * quantity`，payee 必须是冻结的 seller wallet。
 
+SettlementIntent 还必须引用验证时使用的 `paymentMandateId` 或明确标记
+`authorizationMode="single_eip3009"`。Settlement 不得在 Agent 接受后重新定价、
+更换 payee、token、network 或 quantity。
+
 ## 状态机
 
 ```text
 accepted_pending_settlement
+  -> mandate_reserved
   -> authorization_requested
   -> authorized
   -> submitted
@@ -87,8 +138,12 @@ accepted_pending_settlement
   -> inventory_committed
 ```
 
+`mandate_reserved` 只适用于 PaymentMandate 模式；明确标记的单笔 EIP-3009 模式从
+`accepted_pending_settlement` 直接进入 `authorization_requested`。
+
 失败终态：
 
+- `mandate_rejected`
 - `authorization_failed`
 - `submission_failed`
 - `expired`
@@ -108,20 +163,24 @@ nonce 查链，再决定是否重新提交。唯一成功终态是 `inventory_co
 
 1. Arena 校验双方仍有资格交易，seller 持仓充足，buyer 预算充足。
 2. Arena 原子冻结 `SettlementIntent`，协商不再允许改价。
-3. 自带 Agent 的 Buyer Runtime，或游客 Agent 对应的受限 guest signer，只对
-   该 intent 的 chain、token、payee、amount、有效期和 nonce 生成 EIP-3009
-   授权。
-4. Settlement adapter 校验授权和冻结快照一致。
-5. Facilitator 提交交易并返回交易哈希。
-6. Settlement worker 等待链上成功确认，并核对 token 转账事件；此时进入
+3. Settlement 校验 Mandate 的 Game/network/token/payee、期限、单笔/累计额度和
+   revoke 状态，并原子 reserve 该 Deal 的额度；使用单笔模式时则明确等待对应
+   EIP-3009 授权。
+4. 用户控制的钱包，或隔离的 guest signer service，只对该冻结 intent/Mandate
+   范围生成授权；模型 Runtime 不参与签名。
+5. Settlement adapter 校验授权和冻结快照一致。
+6. Facilitator 提交交易并返回交易哈希；若使用 Mandate，其 reservation 进入
+   submitted，不能被重复消费。
+7. Settlement worker 等待链上成功确认，并核对 token 转账事件；此时进入
    `chain_confirmed_uncommitted`。
-7. Arena 在一个数据库事务中：
+8. 若使用 Mandate，Settlement 将相应 reservation 幂等标记为 consumed；Arena 在
+   一个数据库事务中：
    - 保存链上确认事实；
    - 扣减 seller 货物并增加 buyer 货物；
    - 更新双方现金投影；
    - 写入 `inventoryCommittedAt` 并转为 `inventory_committed`；
    - 写入不可变审计事件。
-8. 前端展示交易哈希和已确认成交。
+9. 前端展示交易哈希和已确认成交。
 
 链上确认前不得转移货物。数据库提交失败时保持
 `chain_confirmed_uncommitted`，不得重新付款；恢复任务应根据已确认交易完成
@@ -131,6 +190,11 @@ nonce 查链，再决定是否重新提交。唯一成功终态是 `inventory_co
 
 - `negotiationId` 只能关联一个冻结成交快照；
 - `idempotencyKey` 在 Arena 与 Settlement 两侧唯一；
+- 一个 SettlementIntent 只能拥有一个 Mandate reservation；
+- Mandate reservation 的 reserve/submit/consume/release 使用唯一 Deal key 和
+  单向 CAS；
+- revoke 后不能创建新 reservation；对已 reserved/submitted 的处理必须遵循冻结
+  策略并可审计；
 - 同一 EIP-3009 nonce 不得被第二次使用；
 - 已有交易哈希时，重试先查询而不是重新授权；
 - `submitted`、`chain_confirmed_uncommitted` 和 `inventory_committed` 只能
@@ -150,13 +214,21 @@ Connector 可向受控 Runtime 投递“为这个 intent 生成授权”的 type
 - Connector 不将链上提交成功投影为最终确认；
 - 支付私钥不得由平台通过命令参数下发。
 
+该命令仅适用于本地钱包在用户设备上的明确授权流程，不得让 Hosted Worker 经
+Connector 代理获取签名权。Connector ACK 与 terminal Runtime Result 仍必须分离，
+且二者都不能替代 Settlement 对 Mandate、授权和链上状态的校验。
+
 ## 演示验收
 
 - 一个被接受的交易产生唯一 `SettlementIntent`；
+- 超出 Mandate 的 Game、network、token、payee、单笔/累计额度或期限时无法提交；
+- revoke 后不能创建新 reserve，reserved/submitted 与 revoke 的竞态可恢复；
+- 同一 Deal 的 `reserve / consume / release` 重试不重复占用或释放额度；
 - 修改价格、payee、token 或 chain 会使授权校验失败；
 - 过期或重复 nonce 不产生第二笔转账；
 - 链上失败不会转移货物；
 - 链上成功后只更新一次货物和现金；
 - 重启后能从持久化状态和链上结果恢复；
+- chain unknown/reorg 不触发盲目重付，Sandbox Signer 与 Hosted Worker 权限隔离；
 - UI 展示可核验的 testnet 交易哈希；
 - 文档和演示明确区分 direct EIP-3009 relay 与标准 HTTP x402。

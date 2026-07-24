@@ -5,7 +5,10 @@
 http://{$ADX_PUBLIC_HOST} {
 	log {
 		output stdout
-		format json
+		format filter {
+			request>uri replace REDACTED
+			wrap json
+		}
 	}
 
 	@acme path /.well-known/acme-challenge/*

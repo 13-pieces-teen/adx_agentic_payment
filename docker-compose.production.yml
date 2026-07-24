@@ -7,8 +7,10 @@ x-logging: &default-logging
     max-file: "3"
 
 x-api-environment: &api-environment
-  ADX_CONNECTOR_DATABASE_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
-  DATABASE_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+  ADX_CONNECTOR_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+  ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+  ADX_ARENA_API_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+  DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
   ADX_CONNECTOR_SESSION_SECRET: ${ADX_CONNECTOR_SESSION_SECRET:?Set ADX_CONNECTOR_SESSION_SECRET in deploy/.env}
   ADX_BOOTSTRAP_INVITE_HASH: ${ADX_BOOTSTRAP_INVITE_HASH:?Set ADX_BOOTSTRAP_INVITE_HASH in deploy/.env}
   ADX_CONNECTOR_SESSION_TTL_SECONDS: ${ADX_CONNECTOR_SESSION_TTL_SECONDS:-604800}
@@ -23,6 +25,16 @@ x-api-environment: &api-environment
   ADX_PUBLIC_APP_URL: ${ADX_PUBLIC_APP_URL:?Set ADX_PUBLIC_APP_URL in deploy/.env}
   ADX_ALLOWED_ORIGINS: ${ADX_PUBLIC_APP_URL:?Set ADX_PUBLIC_APP_URL in deploy/.env}
   ADX_CONNECTOR_MIGRATIONS_DIR: /app/db/migrations
+  ADX_HOSTED_AGENTS_ENABLED: ${ADX_HOSTED_AGENTS_ENABLED:-false}
+  ADX_ARENA_PARTICIPATION_ENABLED: ${ADX_ARENA_PARTICIPATION_ENABLED:-true}
+  ADX_HOSTED_FINGERPRINT_PEPPER_B64: ${ADX_HOSTED_FINGERPRINT_PEPPER_B64:-}
+  ADX_HOSTED_FINGERPRINT_PEPPER_VERSION: ${ADX_HOSTED_FINGERPRINT_PEPPER_VERSION:-1}
+  ADX_TENCENT_SSM_REGION: ${ADX_TENCENT_SSM_REGION:-ap-guangzhou}
+  ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS: ${ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS:-0}
+  ADX_TENCENT_SSM_IAM_VERIFIED: ${ADX_TENCENT_SSM_IAM_VERIFIED:-false}
+  TENCENTCLOUD_SECRET_ID: ${ADX_TENCENT_SSM_WRITER_SECRET_ID:-}
+  TENCENTCLOUD_SECRET_KEY: ${ADX_TENCENT_SSM_WRITER_SECRET_KEY:-}
+  TENCENTCLOUD_TOKEN: ${ADX_TENCENT_SSM_WRITER_TOKEN:-}
   TZ: ${TZ:-Asia/Shanghai}
 
 services:
@@ -73,8 +85,12 @@ services:
       context: .
       dockerfile: deploy/docker/Dockerfile.api
     restart: "no"
-    command: ["python", "/app/deploy/scripts/migrate.py"]
-    environment: *api-environment
+    command:
+      ["python", "/app/deploy/scripts/migrate.py", "--scope", "all"]
+    environment:
+      ADX_CONNECTOR_DATABASE_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_CONNECTOR_MIGRATIONS_DIR: /app/db/migrations
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,6 +105,32 @@ services:
     mem_limit: 512m
     logging: *default-logging
 
+  provision-db-roles:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: "no"
+    command: ["python", "/app/deploy/scripts/provision_db_roles.py"]
+    environment:
+      ADX_DATABASE_ADMIN_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_API_DATABASE_PASSWORD: ${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}
+      ADX_HOSTED_WORKER_DATABASE_PASSWORD: ${ADX_HOSTED_WORKER_DATABASE_PASSWORD:?Set ADX_HOSTED_WORKER_DATABASE_PASSWORD in deploy/.env}
+      ADX_ARENA_CORE_DATABASE_PASSWORD: ${ADX_ARENA_CORE_DATABASE_PASSWORD:?Set ADX_ARENA_CORE_DATABASE_PASSWORD in deploy/.env}
+      ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD: ${ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD:?Set ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD in deploy/.env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.25
+    mem_limit: 256m
+    logging: *default-logging
+
   api:
     build:
       context: .
@@ -100,7 +142,7 @@ services:
       ADX_API_MAX_CONCURRENCY: ${ADX_API_MAX_CONCURRENCY:-256}
       ADX_FORWARDED_ALLOW_IPS: "*"
     depends_on:
-      migrate:
+      provision-db-roles:
         condition: service_completed_successfully
     networks:
       - edge
@@ -127,6 +169,43 @@ services:
     stop_grace_period: 30s
     cpus: 0.75
     mem_limit: 768m
+    logging: *default-logging
+
+  hosted-worker:
+    profiles:
+      - hosted
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "hosted_agent_runtime.production_worker"]
+    environment:
+      ADX_HOSTED_WORKER_DATABASE_URL: postgresql://adx_hosted_worker_login:${ADX_HOSTED_WORKER_DATABASE_PASSWORD:?Set ADX_HOSTED_WORKER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_TENCENT_SSM_REGION: ${ADX_TENCENT_SSM_REGION:-ap-guangzhou}
+      ADX_TENCENT_SSM_IAM_VERIFIED: ${ADX_TENCENT_SSM_IAM_VERIFIED:-false}
+      TENCENTCLOUD_SECRET_ID: ${ADX_TENCENT_SSM_READER_SECRET_ID:-}
+      TENCENTCLOUD_SECRET_KEY: ${ADX_TENCENT_SSM_READER_SECRET_KEY:-}
+      TENCENTCLOUD_TOKEN: ${ADX_TENCENT_SSM_READER_TOKEN:-}
+      ADX_OPENAI_COMPATIBLE_ENDPOINT: ${ADX_OPENAI_COMPATIBLE_ENDPOINT:-}
+      ADX_OPENAI_COMPATIBLE_MODELS: ${ADX_OPENAI_COMPATIBLE_MODELS:-}
+      ADX_HOSTED_WORKER_LEASE_SECONDS: ${ADX_HOSTED_WORKER_LEASE_SECONDS:-600}
+      ADX_HOSTED_WORKER_POLL_SECONDS: ${ADX_HOSTED_WORKER_POLL_SECONDS:-1}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    cpus: 0.50
+    mem_limit: 512m
     logging: *default-logging
 
   web:

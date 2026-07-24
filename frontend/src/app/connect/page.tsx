@@ -22,7 +22,7 @@ import {
 } from '@/lib/connector-api';
 
 type AuthMode = 'invite' | 'login';
-type FlowState = 'ready' | 'working' | 'approved';
+type FlowState = 'ready' | 'working' | 'approved' | 'signed-in';
 
 function normalizeCode(value: string): string {
   return value.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 32);
@@ -54,7 +54,8 @@ export default function ConnectPage() {
   async function authorize(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const code = normalizeCode(userCode);
-    if (code.length < 4) {
+    const pairingRequested = code.length >= 4;
+    if (code.length > 0 && !pairingRequested) {
       setError('Enter the code shown by ADX Connector.');
       return;
     }
@@ -93,6 +94,12 @@ export default function ConnectPage() {
         throw new Error('The authorization session did not include a CSRF token.');
       }
       setSession(activeSession);
+      setInviteCode('');
+      setPassword('');
+      if (!pairingRequested) {
+        setFlowState('signed-in');
+        return;
+      }
       await approvePairingAuthenticated(code, activeSession.csrf_token);
       setUserCode(code);
       setFlowState('approved');
@@ -163,29 +170,34 @@ export default function ConnectPage() {
           </aside>
 
           <section className="p-7 sm:p-10 lg:p-12">
-            {flowState === 'approved' ? (
+            {flowState === 'approved' || flowState === 'signed-in' ? (
               <div className="flex min-h-[480px] flex-col items-center justify-center text-center" aria-live="polite">
                 <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-emerald-300/20 bg-emerald-300/10 text-emerald-300">
                   <Check className="h-8 w-8" strokeWidth={2.5} />
                 </div>
                 <p className="mt-7 font-mono text-xs uppercase tracking-[0.22em] text-emerald-300">
-                  Device approved
+                  {flowState === 'approved' ? 'Device approved' : 'Signed in'}
                 </p>
                 <h2 className="mt-3 text-3xl font-bold tracking-tight text-white">
-                  The Connector is coming online.
+                  {flowState === 'approved'
+                    ? 'The Connector is coming online.'
+                    : 'Your Arena account is ready.'}
                 </h2>
                 <p className="mt-4 max-w-md text-sm leading-6 text-slate-400">
-                  You can close this tab. The local Connector will finish enrollment, store its
-                  device credential, and maintain the Arena connection automatically.
+                  {flowState === 'approved'
+                    ? 'You can close this tab. The local Connector will finish enrollment, store its device credential, and maintain the Arena connection automatically.'
+                    : 'Continue to Agents to use the Hosted path. A local Connector code is not required.'}
                 </p>
-                <div className="mt-8 rounded-lg border border-white/10 bg-black/20 px-5 py-3 font-mono text-sm tracking-[0.16em] text-cyan-200">
-                  {userCode}
-                </div>
+                {flowState === 'approved' && (
+                  <div className="mt-8 rounded-lg border border-white/10 bg-black/20 px-5 py-3 font-mono text-sm tracking-[0.16em] text-cyan-200">
+                    {userCode}
+                  </div>
+                )}
                 <a
-                  href="/agents"
+                  href="/agents#hosted-agents"
                   className="mt-8 inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-cyan-200 focus:outline-none focus:ring-2 focus:ring-cyan-200 focus:ring-offset-2 focus:ring-offset-[#0d1018]"
                 >
-                  View connected agents
+                  View Agents
                   <ArrowRight className="h-4 w-4" />
                 </a>
               </div>
@@ -197,7 +209,7 @@ export default function ConnectPage() {
                       Authorization receipt
                     </p>
                     <h2 className="mt-2 text-2xl font-bold tracking-tight text-white">
-                      Connect this computer
+                      Sign in or connect this computer
                     </h2>
                   </div>
                   <TerminalSquare className="h-6 w-6 text-slate-600" />
@@ -205,7 +217,7 @@ export default function ConnectPage() {
 
                 <form className="mt-8" onSubmit={authorize}>
                   <label htmlFor="device-code" className="text-sm font-medium text-slate-200">
-                    Connector code
+                    Connector code <span className="text-slate-600">(optional)</span>
                   </label>
                   <div className="relative mt-2">
                     <input
@@ -220,7 +232,8 @@ export default function ConnectPage() {
                     <LockKeyhole className="pointer-events-none absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-600" />
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
-                    Filled automatically when the Connector opens this page.
+                    Leave blank to sign in for Hosted Agents only. It is filled automatically
+                    when the Connector opens this page.
                   </p>
 
                   <div className="my-8 border-t border-dashed border-white/10" />
@@ -239,7 +252,7 @@ export default function ConnectPage() {
                         <div>
                           <p className="text-sm font-semibold text-white">{session.user.username}</p>
                           <p className="text-xs text-slate-500">
-                            Arena account · ready to authorize
+                            Arena account · ready to continue
                           </p>
                         </div>
                       </div>
@@ -376,19 +389,21 @@ export default function ConnectPage() {
                     {flowState === 'working' ? (
                       <>
                         <LoaderCircle className="h-4 w-4 animate-spin" />
-                        Authorizing
+                        {normalizeCode(userCode).length >= 4 ? 'Authorizing' : 'Signing in'}
                       </>
                     ) : (
                       <>
                         <ShieldCheck className="h-4 w-4" />
-                        Authorize this computer
+                        {normalizeCode(userCode).length >= 4
+                          ? 'Authorize this computer'
+                          : 'Continue to Arena'}
                       </>
                     )}
                   </button>
 
                   <p className="mt-4 text-center text-xs leading-5 text-slate-600">
-                    Approval grants access only to the Connector capabilities you enable locally.
-                    It does not expose a shell or take over existing terminals.
+                    A Connector approval grants only the capabilities you enable locally. Signing
+                    in without a code does not connect or control this computer.
                   </p>
                 </form>
               </>

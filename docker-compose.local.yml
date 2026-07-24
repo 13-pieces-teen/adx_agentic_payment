@@ -1,0 +1,145 @@
+name: arena402-local
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: deploy/docker/Dockerfile.api
+
+x-local-database: &local-database
+  POSTGRES_DB: arena402
+  POSTGRES_USER: arena402_admin
+  POSTGRES_PASSWORD: arena402-local-admin-password
+
+services:
+  postgres:
+    image: postgres:17-alpine3.22@sha256:b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f
+    restart: unless-stopped
+    environment:
+      <<: *local-database
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - arena402_local_postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    <<: *api-image
+    restart: "no"
+    command:
+      ["python", "/app/deploy/scripts/migrate.py", "--scope", "all"]
+    environment:
+      ADX_CONNECTOR_DATABASE_URL: postgresql://arena402_admin:arena402-local-admin-password@postgres:5432/arena402
+      DATABASE_URL: postgresql://arena402_admin:arena402-local-admin-password@postgres:5432/arena402
+      ADX_CONNECTOR_MIGRATIONS_DIR: /app/db/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  provision-db-roles:
+    <<: *api-image
+    restart: "no"
+    command: ["python", "/app/deploy/scripts/provision_db_roles.py"]
+    environment:
+      ADX_DATABASE_ADMIN_URL: postgresql://arena402_admin:arena402-local-admin-password@postgres:5432/arena402
+      ADX_API_DATABASE_PASSWORD: arena402-local-api-password
+      ADX_HOSTED_WORKER_DATABASE_PASSWORD: arena402-local-worker-password
+      ADX_ARENA_CORE_DATABASE_PASSWORD: arena402-local-core-password
+      ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD: arena402-local-controller-password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    <<: *api-image
+    restart: unless-stopped
+    init: true
+    environment:
+      ADX_ENV: development
+      ADX_CONNECTOR_MODE: production
+      ADX_CONNECTOR_UNSAFE_DEMO: "false"
+      ADX_PUBLIC_APP_URL: http://localhost:3000
+      ADX_ALLOWED_ORIGINS: http://localhost:3000
+      ADX_CONNECTOR_COOKIE_SECURE: "false"
+      ADX_CONNECTOR_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
+      ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
+      ADX_ARENA_API_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
+      ADX_HOSTED_WORKER_DATABASE_URL: postgresql://adx_hosted_worker_login:arena402-local-worker-password@postgres:5432/arena402
+      ADX_CONNECTOR_SESSION_SECRET: arena402-local-session-secret-change-before-sharing
+      ADX_BOOTSTRAP_INVITE_HASH: caf7a298a657faa1c5495eb7adf17a805d17df9e37f27afa53e20c3ca7eef559
+      ADX_HOSTED_AGENTS_ENABLED: "true"
+      ADX_HOSTED_LOCAL_DEV: "true"
+      ADX_ARENA_PARTICIPATION_ENABLED: "true"
+      ADX_HOSTED_FINGERPRINT_PEPPER_B64: YXJlbmE0MDItbG9jYWwtZmluZ2VycHJpbnQtcGVwcGVyLTMyYnl0ZXMhIQ==
+      ADX_HOSTED_WORKER_POLL_SECONDS: "0.25"
+      ADX_OPENAI_COMPATIBLE_ENDPOINT: ${ADX_OPENAI_COMPATIBLE_ENDPOINT:-}
+      ADX_OPENAI_COMPATIBLE_MODELS: ${ADX_OPENAI_COMPATIBLE_MODELS:-}
+      ADX_API_MAX_CONCURRENCY: "64"
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  arena402_local_postgres:
