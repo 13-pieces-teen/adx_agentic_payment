@@ -208,6 +208,78 @@ services:
     mem_limit: 512m
     logging: *default-logging
 
+  credential-controller:
+    profiles:
+      - hosted
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    command:
+      ["python", "-m", "hosted_agent_control_plane.production_controller"]
+    environment:
+      ADX_CREDENTIAL_CONTROLLER_DATABASE_URL: postgresql://adx_credential_controller_login:${ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD:?Set ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_TENCENT_SSM_REGION: ${ADX_TENCENT_SSM_REGION:-ap-guangzhou}
+      ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS: ${ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS:-0}
+      ADX_TENCENT_SSM_IAM_VERIFIED: ${ADX_TENCENT_SSM_IAM_VERIFIED:-false}
+      TENCENTCLOUD_SECRET_ID: ${ADX_TENCENT_SSM_CONTROLLER_SECRET_ID:-}
+      TENCENTCLOUD_SECRET_KEY: ${ADX_TENCENT_SSM_CONTROLLER_SECRET_KEY:-}
+      TENCENTCLOUD_TOKEN: ${ADX_TENCENT_SSM_CONTROLLER_TOKEN:-}
+      ADX_CREDENTIAL_CONTROLLER_LEASE_SECONDS: ${ADX_CREDENTIAL_CONTROLLER_LEASE_SECONDS:-60}
+      ADX_CREDENTIAL_CONTROLLER_POLL_SECONDS: ${ADX_CREDENTIAL_CONTROLLER_POLL_SECONDS:-1}
+      ADX_CREDENTIAL_CONTROLLER_RETRY_SECONDS: ${ADX_CREDENTIAL_CONTROLLER_RETRY_SECONDS:-30}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  arena-worker:
+    profiles:
+      - arena
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "arena_game.production_worker"]
+    environment:
+      ADX_ARENA_CORE_DATABASE_URL: postgresql://adx_arena_core_login:${ADX_ARENA_CORE_DATABASE_PASSWORD:?Set ADX_ARENA_CORE_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
+      ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: ${ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL:-}
+      ADX_ARENA_WORKER_LEASE_SECONDS: ${ADX_ARENA_WORKER_LEASE_SECONDS:-600}
+      ADX_ARENA_WORKER_POLL_SECONDS: ${ADX_ARENA_WORKER_POLL_SECONDS:-0.25}
+      ADX_ARENA_FINALIZER_POLL_SECONDS: ${ADX_ARENA_FINALIZER_POLL_SECONDS:-1}
+      ADX_SETTLEMENT_RECOVERY_POLL_SECONDS: ${ADX_SETTLEMENT_RECOVERY_POLL_SECONDS:-3}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    cpus: 0.40
+    mem_limit: 384m
+    logging: *default-logging
+
   web:
     build:
       context: .

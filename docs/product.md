@@ -129,16 +129,17 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   原型，但不具备新游戏要求的持久化回合、FCFS 池、事件、持仓和终场清算。
 - Connector 已有较完整的设备/Runtime 控制面，但尚未实现 Arena 游戏
   `decide`/`negotiate` 业务适配。
-- Hosted Agent 已具备版本化 Task/Result 契约、Arena migration、
-  Memory/PostgreSQL repository、Result Sink/Consumer/Finalizer、测试专用
-  SecretStore port、Provider capability registry、安全 Provider contract、
-  Fake Provider、PromptBuilder、DirectModelDriver、严格 Hosted control service、
-  HTTP 幂等迁移、受门控 API 和最小创建 UI 壳；这些能力尚未接入完整 Game Core。
-  当前 Credential ingress 只在测试组合可执行，生产入口 fail closed；真实
-  PostgreSQL control repository、Tencent Secret Manager、真实 Provider Adapter、
-  durable Hosted Worker/Attempt 持久化与 validation 仍未实现。
-- Settlement 已验证 testnet EIP-3009 direct relay，但尚未接收游戏冻结快照，
-  尚未实现通用 PaymentMandate，也未驱动持仓的幂等提交。
+- Hosted Agent 已具备 PostgreSQL control repository、write-only Tencent SSM
+  production composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable
+  validation/Task Worker、Attempt 元数据，以及接入 Pawnhouse Game Core 的统一
+  Task/Result/Finalizer 路径。双 Hosted Agent 的本地开发链路已验证；真实 Tencent
+  CAM/SSM 与真实模型 Key 的部署验收仍未完成。
+- Production Compose 已分离 API Writer、Hosted Reader、Credential Controller 和
+  Arena Core 数据库/进程权限；这些边界默认关闭并 fail closed，不代表已在公网
+  服务器完成 CAM 越权测试。
+- Settlement 已验证既有 testnet EIP-3009 direct relay，并已实现游戏冻结快照、
+  只读链上恢复与确认后持仓幂等提交；尚未实现通用 PaymentMandate，也尚未执行
+  当前完整链路的一笔新鲜 testnet 交易。
 - `arena402/index.html` 是现有 Supabase 静态展示页，仍包含旧 ELO/Battle
   视图；新的 Game Lobby、Game View 和 Result 页面尚未实现。
 - 标准 HTTP x402 challenge/retry/header 与公共 Facilitator 兼容尚未实现。

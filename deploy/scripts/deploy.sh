@@ -12,6 +12,36 @@ tls_mode="$(env_value ADX_TLS_MODE)"
 public_host="$(env_value ADX_PUBLIC_HOST)"
 build_connector_artifacts="$(env_value ADX_BUILD_CONNECTOR_ARTIFACTS)"
 [ -n "${build_connector_artifacts}" ] || build_connector_artifacts=true
+enable_hosted_runtime="$(env_value ADX_ENABLE_HOSTED_RUNTIME)"
+[ -n "${enable_hosted_runtime}" ] || enable_hosted_runtime=false
+enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"
+[ -n "${enable_arena_worker}" ] || enable_arena_worker=false
+
+case "${enable_hosted_runtime}" in
+  true|false) ;;
+  *)
+    echo "ADX_ENABLE_HOSTED_RUNTIME must be true or false." >&2
+    exit 1
+    ;;
+esac
+case "${enable_arena_worker}" in
+  true|false) ;;
+  *)
+    echo "ADX_ENABLE_ARENA_WORKER must be true or false." >&2
+    exit 1
+    ;;
+esac
+
+if [ "${enable_hosted_runtime}" = "true" ]; then
+  if [ "$(env_value ADX_HOSTED_AGENTS_ENABLED)" != "true" ]; then
+    echo "Hosted runtime requires ADX_HOSTED_AGENTS_ENABLED=true." >&2
+    exit 1
+  fi
+  if [ "$(env_value ADX_TENCENT_SSM_IAM_VERIFIED)" != "true" ]; then
+    echo "Hosted runtime requires verified writer/reader/controller SSM IAM." >&2
+    exit 1
+  fi
+fi
 
 case "${tls_mode}" in
   domain)
@@ -44,10 +74,22 @@ fi
 
 compose config --quiet
 compose pull postgres caddy certbot
-compose build --pull api web migrate
+compose build --pull api web migrate provision-db-roles
+if [ "${enable_hosted_runtime}" = "true" ]; then
+  compose --profile hosted build --pull hosted-worker credential-controller
+fi
+if [ "${enable_arena_worker}" = "true" ]; then
+  compose --profile arena build --pull arena-worker
+fi
 compose up -d postgres
 compose run --rm migrate
 compose up -d api web caddy
+if [ "${enable_hosted_runtime}" = "true" ]; then
+  compose --profile hosted up -d hosted-worker credential-controller
+fi
+if [ "${enable_arena_worker}" = "true" ]; then
+  compose --profile arena up -d arena-worker
+fi
 
 if [ "${tls_mode}" = "ip" ]; then
   sh "${script_dir}/ensure-ip-certificate.sh"

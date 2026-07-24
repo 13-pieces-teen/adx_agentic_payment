@@ -52,6 +52,7 @@ from .settlement import (
     normalize_tx_hash,
     validate_chain_confirmation,
 )
+from .settlement_worker import SettlementRecoveryWorker
 
 __all__ = [
     "DEMO_EVENT_IDS",
@@ -99,6 +100,7 @@ __all__ = [
     "SettlementConfig",
     "SettlementError",
     "SettlementIntent",
+    "SettlementRecoveryWorker",
     "WorldEvent",
     "WorldSnapshot",
     "WorldState",
