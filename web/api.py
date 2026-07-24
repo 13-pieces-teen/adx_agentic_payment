@@ -8,6 +8,7 @@ Endpoints for the web frontend:
 - Negotiation lifecycle
 """
 
+import asyncio
 import time
 import ipaddress
 import os
@@ -50,6 +51,8 @@ from connector_gateway import (
 from connector_gateway.auth import AuthError, AuthPrincipal
 from arena_core import PostgresArenaParticipationRepository
 from arena_game import PostgresPawnhouseRepository
+from arena_game import PawnhouseHostedCoordinator
+from arena_core import PostgresArenaCoreRepository
 from hosted_agent_control_plane import (
     CapabilityCatalogService,
     LocalHostedControlBundle,
@@ -309,6 +312,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             arena_participation_dsn
         )
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
+    pawnhouse_coordinator: PawnhouseHostedCoordinator | None = None
+    pawnhouse_coordinator_task: asyncio.Task[None] | None = None
     pawnhouse_dev_token = ""
     if _pawnhouse_dev_requested():
         pawnhouse_dsn = os.getenv(
@@ -324,6 +329,13 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "",
         ).strip()
         pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
+        if hosted_bundle is not None and _hosted_local_dev_requested():
+            pawnhouse_coordinator = PawnhouseHostedCoordinator(
+                pawnhouse=pawnhouse_repository,
+                arena_core=PostgresArenaCoreRepository(pawnhouse_dsn),
+                worker_id="pawnhouse-coordinator-local-dev",
+                lease_seconds=600,
+            )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -335,9 +347,22 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await arena_participation.initialize()
         if pawnhouse_repository is not None:
             await pawnhouse_repository.initialize()
+        nonlocal pawnhouse_coordinator_task
+        if pawnhouse_coordinator is not None:
+            await pawnhouse_coordinator.initialize()
+            pawnhouse_coordinator_task = asyncio.create_task(
+                pawnhouse_coordinator.run_forever(poll_seconds=0.1),
+                name="pawnhouse-hosted-coordinator-local-dev",
+            )
         try:
             yield
         finally:
+            if pawnhouse_coordinator is not None:
+                pawnhouse_coordinator.stop()
+                if pawnhouse_coordinator_task is not None:
+                    await pawnhouse_coordinator_task
+                    pawnhouse_coordinator_task = None
+                await pawnhouse_coordinator.close()
             if pawnhouse_repository is not None:
                 await pawnhouse_repository.close()
             if arena_participation is not None:
@@ -420,6 +445,11 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             create_pawnhouse_router(
                 repository=pawnhouse_repository,
                 dev_token=pawnhouse_dev_token,
+                auth=(
+                    connector_bundle.auth
+                    if connector_bundle is not None
+                    else None
+                ),
             )
         )
 

@@ -20,8 +20,7 @@ from hosted_agent_runtime.postgres_worker import (
 )
 from hosted_agent_runtime.production_providers import (
     ProductionProviderBundle,
-    build_production_capability_registry,
-    build_production_provider_bundle,
+    build_local_development_provider_bundle,
 )
 from hosted_agent_runtime.secret_store import MemorySecretStore
 
@@ -117,8 +116,8 @@ def build_local_hosted_control(
         _required("ADX_HOSTED_WORKER_DATABASE_URL")
     )
     secret_ports = MemorySecretStore.for_local_development().ports
-    registry = build_production_capability_registry()
-    providers = build_production_provider_bundle()
+    providers = build_local_development_provider_bundle()
+    registry = providers.registry
     catalog = CapabilityCatalogService(
         registry,
         hosted_agents_enabled=True,

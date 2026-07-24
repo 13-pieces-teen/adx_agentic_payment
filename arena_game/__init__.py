@@ -18,6 +18,7 @@ from .game import (
     PawnhouseGame,
     RoundPhase,
 )
+from .hosted_coordinator import PawnhouseHostedCoordinator
 from .goods import GOODS, GOOD_IDS, INITIAL_PRICES, GoodDefinition, GoodId
 from .money import GOLD_SCALE, MoneyError, apply_basis_points, format_gold, gold
 from .market import MarketError, MarketSide, Pairing, PoolEntry, fcfs_pair
@@ -69,6 +70,7 @@ __all__ = [
     "NegotiationTurn",
     "PawnhouseGame",
     "PawnhouseRepositoryError",
+    "PawnhouseHostedCoordinator",
     "Portfolio",
     "PortfolioError",
     "PostgresPawnhouseRepository",

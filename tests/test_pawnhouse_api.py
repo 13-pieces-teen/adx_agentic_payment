@@ -38,6 +38,14 @@ class _Repository:
             "negotiations": [],
         }
 
+    async def enqueue_hosted_run(self, *, game_id):
+        return {
+            "gameId": game_id,
+            "roundId": f"round:{game_id}:1",
+            "runtimeRunId": f"hosted-run:round:{game_id}:1",
+            "status": "queued",
+        }
+
     async def game_state(self, game_id):
         return {
             "gameId": game_id,
@@ -53,6 +61,21 @@ class _Repository:
                 "data": {},
             }
         ]
+
+    async def hosted_run_status(self, *, game_id):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        return {
+            "runtime_run_id": f"hosted-run:round:{game_id}:1",
+            "round_id": f"round:{game_id}:1",
+            "status": "completed",
+            "stage": "completed",
+            "safe_error_code": None,
+            "created_at": now,
+            "started_at": now,
+            "completed_at": now,
+        }
 
 
 def _client() -> tuple[TestClient, _Repository]:
@@ -157,3 +180,21 @@ def test_read_interfaces_do_not_require_the_development_token() -> None:
     assert timeline.status_code == 200
     assert timeline.json()["nextAfter"] == 5
 
+
+def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:
+    client, _ = _client()
+    denied = client.post(
+        "/api/dev/pawnhouse/games/game_1/run-hosted-market"
+    )
+    queued = client.post(
+        "/api/dev/pawnhouse/games/game_1/run-hosted-market",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+    )
+    status = client.get(
+        "/api/v1/pawnhouse/games/game_1/runtime-run"
+    )
+    assert denied.status_code == 403
+    assert queued.status_code == 202
+    assert queued.json()["status"] == "queued"
+    assert status.status_code == 200
+    assert status.json()["status"] == "completed"

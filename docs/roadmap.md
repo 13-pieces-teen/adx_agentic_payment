@@ -7,7 +7,9 @@
 - [x] Milestone 2: PostgreSQL pool entries, database-clock FCFS pairing,
   three-turn public negotiation, deterministic Rule Runtime, dev HTTP control,
   and public timeline.
-- [ ] Milestone 3: two Hosted Agents through durable AgentTask/Result workers.
+- [x] Milestone 3: two isolated users and two Hosted Agents through the
+  durable validation worker, immutable AgentTask/Result path, Result Sink,
+  database-clock FCFS pairing, and sequential public negotiation.
 - [ ] Milestone 4: accepted negotiation to testnet settlement and
   confirmation-gated inventory commit.
 - [ ] Milestone 5: production worker/Secret Manager boundaries and operating
@@ -19,6 +21,23 @@ The Milestone 2 demonstration is:
 docker compose -f docker-compose.local.yml up --build -d
 python scripts/run_rule_pawnhouse_demo.py
 ```
+
+The Milestone 3 local demonstration uses two fresh one-use invitations and:
+
+```powershell
+$env:ARENA_BUYER_INVITE="<first invite>"
+$env:ARENA_SELLER_INVITE="<second invite>"
+python scripts/run_dual_hosted_pawnhouse_demo.py
+```
+
+Verified local evidence on 2026-07-25: four Hosted tasks completed and were
+applied (`buy`, `sell`, `propose 7.000000`, `accept`); their private Attempt
+records retained provider/model, thinking-enabled, duration, token counts, and
+usage completeness without reasoning text. The public timeline contained two
+decisions, one FCFS pairing, and two negotiation messages. The final pairing
+and negotiation state was `accepted_pending_settlement` at
+`7000000` atomic gold. This verifies the development Runtime/Arena boundary,
+not production Secret Manager, a real external model, or chain settlement.
 
 An accepted negotiation is deliberately terminal only at
 `accepted_pending_settlement`; no balance or holding changes before confirmed

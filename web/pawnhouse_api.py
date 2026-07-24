@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from connector_gateway.auth import AuthError, ConnectorAuth
 from arena_game import (
     PawnhouseRepositoryError,
     Portfolio,
@@ -68,6 +69,11 @@ class AddRuleParticipantBody(_Body):
     strategy: RuleStrategyBody
 
 
+class AddHostedParticipantBody(_Body):
+    agent_id: _Id = Field(alias="agentId")
+    portfolio: PortfolioBody
+
+
 def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
     code = str(exc)
     status = 404 if code in {"game_not_found"} else 409
@@ -78,6 +84,7 @@ def create_pawnhouse_router(
     *,
     repository: PostgresPawnhouseRepository,
     dev_token: str,
+    auth: ConnectorAuth | None = None,
 ) -> APIRouter:
     if len(dev_token) < 16:
         raise RuntimeError("ADX_ARENA_DEV_TOKEN must contain at least 16 characters")
@@ -153,6 +160,49 @@ def create_pawnhouse_router(
             "runtimeKind": "rule",
         }
 
+    if auth is not None:
+
+        @router.post(
+            "/api/v1/pawnhouse/games/{game_id}/hosted-participants",
+            status_code=201,
+        )
+        async def add_hosted_participant(
+            game_id: _Id,
+            body: AddHostedParticipantBody,
+            request: Request,
+        ) -> dict[str, object]:
+            try:
+                principal = await auth.authenticate(request)
+                await auth.require_csrf(request, principal)
+            except AuthError as exc:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail=exc.detail,
+                ) from None
+            try:
+                portfolio = Portfolio.initial(
+                    cash_atomic=gold(body.portfolio.cash),
+                    holdings=body.portfolio.holdings,
+                )
+                participant_id = await repository.add_hosted_participant(
+                    game_id=game_id,
+                    user_id=principal.user_id,
+                    agent_id=body.agent_id,
+                    portfolio=portfolio,
+                )
+            except PortfolioError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "invalid_portfolio"},
+                ) from exc
+            except PawnhouseRepositoryError as exc:
+                raise _repository_error(exc) from None
+            return {
+                "gameId": game_id,
+                "participantId": participant_id,
+                "runtimeKind": "hosted",
+            }
+
     @router.post("/api/dev/pawnhouse/games/{game_id}/start")
     async def start_game(
         game_id: _Id,
@@ -178,6 +228,20 @@ def create_pawnhouse_router(
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
+    @router.post(
+        "/api/dev/pawnhouse/games/{game_id}/run-hosted-market",
+        status_code=202,
+    )
+    async def run_hosted_market(
+        game_id: _Id,
+        x_arena_dev_token: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        authorize(x_arena_dev_token)
+        try:
+            return await repository.enqueue_hosted_run(game_id=game_id)
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+
     @router.get("/api/v1/pawnhouse/games/{game_id}")
     async def game_state(game_id: _Id) -> dict[str, object]:
         try:
@@ -196,6 +260,27 @@ def create_pawnhouse_router(
             "events": events,
             "nextAfter": events[-1]["sequence"] if events else after,
             "schemaVersion": "arena.pawnhouse-timeline.v1",
+        }
+
+    @router.get("/api/v1/pawnhouse/games/{game_id}/runtime-run")
+    async def hosted_runtime_run(game_id: _Id) -> dict[str, object]:
+        value = await repository.hosted_run_status(game_id=game_id)
+        if value is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "runtime_run_not_found"},
+            )
+        return {
+            "gameId": game_id,
+            "runtimeRunId": value["runtime_run_id"],
+            "roundId": value["round_id"],
+            "status": value["status"],
+            "stage": value["stage"],
+            "errorCode": value["safe_error_code"],
+            "createdAt": value["created_at"],
+            "startedAt": value["started_at"],
+            "completedAt": value["completed_at"],
+            "schemaVersion": "arena.pawnhouse-runtime-run.v1",
         }
 
     return router

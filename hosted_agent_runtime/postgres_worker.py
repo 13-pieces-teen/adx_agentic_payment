@@ -272,7 +272,11 @@ class PostgresHostedWorkerRepository:
             sha256_identifier(result),
             result.schema_version,
             result.status,
-            json.dumps(candidate_action) if candidate_action is not None else None,
+            # The pool installs a jsonb codec whose encoder owns JSON
+            # serialization. Passing an already-serialized string would turn
+            # the action into a JSON string, and the Result Sink correctly
+            # rejects it because candidate_action must be an object.
+            candidate_action,
             message_replaced,
             policy_version,
             error_class,
@@ -410,11 +414,12 @@ class DurableHostedWorker:
                 await self._execute_task(task)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 # The lease is the durable recovery boundary. Never log a raw
                 # SDK/database exception because it may contain request data.
                 _LOGGER.error(
-                    "hosted_task_processing_failed",
+                    "hosted_task_processing_failed_%s",
+                    type(exc).__name__,
                     extra={"task_id": task.task.task_id},
                 )
             processed += 1

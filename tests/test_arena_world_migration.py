@@ -8,6 +8,9 @@ SQL_PATH = ROOT / "db" / "migrations" / "006_arena_world_game_core.sql"
 MARKET_SQL_PATH = (
     ROOT / "db" / "migrations" / "007_arena_market_negotiation.sql"
 )
+HOSTED_SQL_PATH = (
+    ROOT / "db" / "migrations" / "008_arena_pawnhouse_hosted_runtime.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -70,3 +73,14 @@ def test_market_migration_defines_fcfs_and_bounded_negotiation_state() -> None:
     assert "fixed_trade_quantity" not in sql
     assert " REAL" not in sql.upper()
     assert "DOUBLE PRECISION" not in sql.upper()
+
+
+def test_hosted_runtime_migration_defines_recoverable_round_run_queue() -> None:
+    sql = HOSTED_SQL_PATH.read_text(encoding="utf-8")
+    assert "CREATE TABLE arena402.runtime_runs" in sql
+    assert "UNIQUE (round_id, runtime_kind)" in sql
+    assert "FOR UPDATE" not in sql
+    assert "lease_expires_at TIMESTAMPTZ" in sql
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON arena402.runtime_runs" in sql
+    assert "TO adx_arena_core" in sql
+    assert "GRANT SELECT ON arena402.runtime_runs TO adx_arena_api" in sql

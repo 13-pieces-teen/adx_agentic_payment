@@ -5,10 +5,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from arena_agent_contracts import (
+    AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+    AgentTaskResultV1,
+    BuyAction,
+)
 from hosted_agent_runtime.capabilities import CapabilityRegistry
 from hosted_agent_runtime.postgres_worker import (
     ClaimedValidation,
     DurableHostedWorker,
+    PostgresHostedWorkerRepository,
 )
 from hosted_agent_runtime.production_providers import ProductionProviderBundle
 from hosted_agent_runtime.providers import (
@@ -186,3 +192,46 @@ def test_worker_prioritizes_arena_tasks_before_validation_jobs() -> None:
 
     assert asyncio.run(worker.run_once()) == 0
     assert repository.claim_order == ["tasks", "validations"]
+
+
+def test_postgres_result_sink_receives_candidate_action_as_json_object() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.parameters: tuple[object, ...] | None = None
+
+        async def fetchrow(
+            self,
+            _: str,
+            *parameters: object,
+        ) -> dict[str, str]:
+            self.parameters = parameters
+            return {"disposition": "accepted"}
+
+    async def scenario() -> None:
+        pool = _Pool()
+        repository = PostgresHostedWorkerRepository(
+            "",
+            pool=pool,
+        )
+        result = AgentTaskResultV1(
+            result_id="result-1",
+            task_id="task-1",
+            schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+            status="succeeded",
+            action=BuyAction(action="buy", good="iron"),
+        )
+
+        assert (
+            await repository.submit_result(
+                "worker-1",
+                result,
+                message_replaced=False,
+                policy_version=None,
+                error_class=None,
+            )
+            == "accepted"
+        )
+        assert pool.parameters is not None
+        assert pool.parameters[6] == {"action": "buy", "good": "iron"}
+
+    asyncio.run(scenario())

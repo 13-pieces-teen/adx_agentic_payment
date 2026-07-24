@@ -2,20 +2,33 @@
 
 ## Current clean-slate path
 
-The maintained King's Pawnhouse path now includes the world/event core plus a
-PostgreSQL-backed Rule Runtime demonstration: two Agents join with equal
-20-gold portfolios, submit `buy`/`sell` decisions, enter database-clock FCFS
-pools, pair, negotiate through the Arena, and finish at
-`accepted_pending_settlement`.
+The maintained King's Pawnhouse path now includes the world/event core,
+PostgreSQL market and negotiation state, and a dual Hosted Agent development
+demonstration. Two isolated users each create and validate one Hosted Agent;
+the durable worker executes `buy`/`sell`, the Arena Result Sink applies each
+result at most once, database-clock FCFS creates the pairing, and two
+`arena.negotiate` tasks finish at `accepted_pending_settlement`.
 
 ```powershell
 docker compose -f docker-compose.local.yml up --build -d
 python scripts/run_rule_pawnhouse_demo.py
 ```
 
-The demonstration prints the public persisted timeline. It intentionally does
-not move cash or inventory until the settlement milestone confirms an
-Injective testnet payment.
+For the dual Hosted Agent path, issue two fresh one-use local invitations:
+
+```powershell
+docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1
+docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1
+$env:ARENA_BUYER_INVITE="<first invite>"
+$env:ARENA_SELLER_INVITE="<second invite>"
+python scripts/run_dual_hosted_pawnhouse_demo.py
+```
+
+The script prints only a safe public summary. It uses the deterministic
+`arena-scripted` Provider, which is available only when
+`ADX_HOSTED_LOCAL_DEV=true`; it is not a production model fallback. Both
+demonstrations deliberately avoid moving cash or inventory until the
+settlement milestone confirms an Injective testnet payment.
 
 **Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
 真实结算的回合制交易竞技游戏。**
