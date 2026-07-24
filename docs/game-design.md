@@ -1,6 +1,7 @@
-# Arena 402 游戏机制
+# Arena 402：王城典当行游戏机制
 
-> 状态：Hosted/Local 统一 Runtime 的目标游戏契约；业务内核与 Runtime 接线尚未完成。
+> 状态：王城典当行新业务内核的当前游戏契约；Milestone 1 已完成世界、事件、
+> 初始组合、回合与排名领域基础，市场和 Runtime 接线尚未完成。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 本文维护游戏规则、跨模块状态和 Agent I/O 契约。产品边界见
@@ -12,8 +13,15 @@
 > 你的 AI 是个倒爷。每回合决定买、卖或观望；进入市场后按先到先得配对，
 > 最多砍价 2–3 轮；N 回合后按最终结算价清算，净资产最高者获胜。
 
-所有 Agent 以相同现金和相同初始持仓开局。最终差异应来自模型、Prompt、
-决策速度和谈判质量，而不是初始资源优势。
+游戏发生在公元 402 年、即将崩塌的奥雷利亚帝国。王城典当行是乱世中唯一仍在
+为粮草、精铁、战马与宝石标价的市场。玩家既是典当商人，也是王国棋盘上的
+Pawn；目标是让自己的 Agent 在事件与恐慌中低买高卖，最终“兵卒封王”。
+
+每名玩家以等值 **20 金**开局，但可在比赛前自由配置现金与四种货物。公平性来自
+相同初始净资产，而不是相同持仓。初始组合锁定后，最终差异来自资产配置、模型、
+Prompt、决策速度和谈判质量。
+
+`Arena 402` 只用于品牌、Logo 和域名；游戏内叙事使用“王城典当行”。
 
 默认模式下，每笔被接受的交易都必须产生一笔点对点的 Injective testnet mock
 USDC（mUSDC）链上结算。平台负责组织回合、配对和记录，不托管用户自带钱包
@@ -43,23 +51,41 @@ testnet-only 演示密钥。它不承载真实资金，也不能被宣传为非�
 
 ## 交易对象
 
-MVP 使用 2–3 种受控总量的符号化货物，例如 `ruby`、`gold`、`spice`。
+MVP 固定使用四种货物：
+
+| good | 游戏名称 | 初始价 | 金融角色 |
+|---|---|---:|---|
+| `grain` | 粮草 | 2 金 | 民生必需品，危机时抗跌 |
+| `iron` | 精铁 | 5 金 | 战争与工业周期品 |
+| `warhorse` | 战马 | 8 金 | 高单价、低流通的稀缺硬资产 |
+| `gems` | 宝石 | 3 金 | 预期驱动的投机与泡沫资产 |
 
 - 每种货物有公开参考价，但最终结算价开局时不公开；
 - 货物总量受控，玩家不能凭空增发；
 - 事件逐步改变玩家对终局价值的判断；
 - 现金零收益，鼓励玩家承担经过判断的市场风险；
-- 单笔交易单位和最小价格精度由游戏配置冻结。
+- 单笔交易固定为 1 单位；
+- 金额使用六位 atomic 定点整数，不使用二进制浮点数。
+
+开局组合必须满足：
+
+```text
+cash + grain*2 + iron*5 + warhorse*8 + gems*3 = 20 gold
+```
 
 结算货币为 Injective EVM testnet 上的 mock USDC。它是测试资产，不应描述为
 Circle USDC 或生产资金。
 
 ## 一局游戏
 
-一局由 `N` 个同步回合构成。每回合最多让每个 Agent 完成一笔交易。
+一局先完成初始资产配置，再进入 `N` 个同步回合。当前演示基线为 5 回合，每回合
+最多让每个 Agent 完成一笔交易。
 
 ```text
-BROADCAST
+REGISTRATION
+  -> PORTFOLIO_SETUP
+  -> PORTFOLIO_LOCKED
+  -> EVENT_REVEAL
   -> DECIDE
   -> PAIR
   -> NEGOTIATE
@@ -70,7 +96,12 @@ BROADCAST
   -> RANKING
 ```
 
-### 1. Broadcast
+### 1. Portfolio setup
+
+每名玩家在开局价格下自由配置等值 20 金的现金和持仓。Arena 校验组合、锁定
+Portfolio，并冻结进 Game Agent 快照。比赛开始后不能重新配置。
+
+### 2. Event reveal
 
 Arena 广播：
 
@@ -80,7 +111,7 @@ Arena 广播：
 - Agent 自己的现金、持仓和 `failedNegotiations`；
 - 本轮允许使用的规则参数。
 
-### 2. Decide
+### 3. Decide
 
 Arena 为每个 active Game Agent 创建一条不可变 `arena.decide` AgentTask。Task
 Factory 在同一数据库事务中冻结 participant view、Game Agent 配置、输入 hash 和
@@ -96,7 +127,7 @@ Runtime 提交候选 Result 后，Arena Result Sink 在持久化前处理公开�
 Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 Deadline Finalizer
 收敛为唯一 `pass`，不能阻塞整轮。
 
-### 3. Pair
+### 4. Pair
 
 每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列：
 
@@ -109,7 +140,7 @@ buyer[1] <-> seller[1]
 这就是 FCFS。未配对 Agent 本回合结束，但不增加 `failedNegotiations`。只有
 真正进入协商后失败的双方才增加该计数。
 
-### 4. Negotiate
+### 5. Negotiate
 
 - 买方先报价；
 - `MAX_TURN` 默认为 3，可压测后调整为 2；
@@ -138,7 +169,7 @@ FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
 支付授权、提交或链上确认失败属于 settlement failure，不增加
 `failedNegotiations`；它必须单独记录，且本回合不得把未付款交易计为成交。
 
-### 5. Settle
+### 6. Settle
 
 任一方接受最近报价后，协商进入 `accepted_pending_settlement`，但货物尚未
 转移。`accept` 是候选 Runtime 动作，只有 Arena 校验并应用后才能进入该状态。
@@ -163,7 +194,7 @@ EIP-3009 direct relay 是单笔授权原型，不等于该 Mandate 或完整 HTT
 授权、提交、链上确认或数据库提交任一步失败，都不得转移货物。详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)。
 
-### 6. Round close
+### 7. Round close
 
 Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息、结算结果、
 现金与持仓快照，然后进入下一回合。
@@ -177,10 +208,17 @@ Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息
 
 最终结算价由平台预先定义的事件系统塑造，玩家不能操纵。
 
+- 每回合只揭晓一个主事件；
+- `marketReferencePrice` 表示本回合公开市场参考价；
+- `finalValuationPrice` 表示终场估值，两者必须分开；
+- 效果使用受限、版本化的整数 basis-point DSL，事件不得执行任意代码；
 - 确定性事件：例如限量收购，制造有上限的套利窗口；
 - 概率性事件：公布概率和影响，随后在指定回合揭晓；
 - 事件只改变规则允许的公开信息、流通量或终局价格参数；
-- 随机事件必须保存 seed 或等价可复核证据。
+- 随机事件必须在开局前提交 schedule commitment，并在结束后公开 seed。
+
+MVP 事件库为：王宫征召、新矿开采、粮仓失火、贵族狂热、加冕取消、蛮族围城和
+议和传闻。先知预言、组合套利、王宫远期契约和密探情报属于后续机制。
 
 终场生成 `settleTable`，每种货物对应唯一最终价格。
 
@@ -271,10 +309,10 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 合法候选动作是严格 union：
 
 ```json
-{"action": "sell", "good": "ruby"}
+{"action": "sell", "good": "grain"}
 ```
 
-或 `{"action":"buy","good":"ruby"}`、`{"action":"pass"}`。`pass` 不得带额外交易
+或 `{"action":"buy","good":"grain"}`、`{"action":"pass"}`。`pass` 不得带额外交易
 字段，所有 schema 均拒绝 extra fields。
 
 ### Negotiate
@@ -286,7 +324,7 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 ```json
 {
   "role": "seller",
-  "good": "ruby",
+  "good": "grain",
   "quantity": 1,
   "history": [
     {
@@ -339,7 +377,7 @@ Runtime Result 使用 `arena.agent-result.v1`，且 dispatch ACK 与 Result 分�
 3. 逐笔链上提交改为一笔包含多笔点对点 transfer 的批量交易；每笔 accepted
    trade 仍须独立映射到该批量交易中的具体 transfer 事件；
 4. LLM Agent 不足时加入明确标注的规则 Agent；
-5. 2–3 种货物降为 1 种。
+5. 演示场景可只激活一种货物，但正式 MVP schema 始终保留四种货物。
 
 不可降级红线：被接受的交易不能只更新数据库。默认 MVP 是一笔 accepted
 trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易仍须可独立映射到

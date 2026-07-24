@@ -8,6 +8,9 @@ Hosted/Local 统一 Runtime、回合制交易游戏和离线支付尚未端到�
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
 
+王城典当行 clean-slate 实现已经开始。`arena_game/` 与 `006` 迁移是新的游戏业务
+内核权威；旧 `matching/` 不再作为目标实现。
+
 ## 目标垂直切片
 
 ```text
@@ -25,6 +28,13 @@ create game
 ```
 
 ## 已完成基础
+
+- [x] 王城典当行 Milestone 1：四种货物、20 金自由初始组合、六位定点金额、
+      受限事件 DSL、5 回合固定演示事件表、事件 schedule commitment、回合状态机、
+      终场估值和兵卒封王排名。
+- [x] 新增隔离的 PostgreSQL `arena402` schema，包含 Game、Good、Participant、
+      Balance、Holding、Event Schedule/Occurrence、Round、Price Snapshot、
+      Game Event 与 Ranking 基础表。
 
 - [x] Python 内存版 Agent、listing/intent、matching、有限 negotiation、
       Arena/ELO 和 FastAPI wrapper。

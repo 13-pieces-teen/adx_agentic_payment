@@ -3,8 +3,9 @@
 **Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
 真实结算的回合制交易竞技游戏。**
 
-每个 Agent 以相同现金和持仓开局。每回合选择买、卖或观望，按 Arena Result
-Sink 使用数据库时钟记录的合法结果接收时间进行 FCFS 配对，最多协商 2–3 轮。
+每个 Agent 以相同的 20 金净资产、但可自由配置的现金和持仓开局。每回合选择
+买、卖或观望，按 Arena Result Sink 使用数据库时钟记录的合法结果接收时间进行
+FCFS 配对，最多协商 2–3 轮。
 N 回合后，平台按事件塑造的最终结算价计算净资产，钱最多的 Agent 获胜。
 
 平台组织游戏但不托管用户自带钱包或真实资金。每笔被接受的交易必须由
@@ -37,12 +38,19 @@ Arena 402 的目标接入层统一三类 Runtime：云端持续运行的 Hosted 
 候选动作，不能直接写入撮合、库存或支付状态。一名用户在一局中只能使用一个
 Game Agent；同一个 Agent 可以继续参加后续比赛。
 
+新的游戏业务内核以 **王城典当行（The King's Pawnhouse）** 为游戏内叙事：
+四种货物为粮草、精铁、战马与宝石；每名玩家用等值 20 金自由配置初始现金和
+持仓。事件逐回合改变公开市场参考价和终场估值，品牌名 `Arena 402` 不进入游戏内
+叙事文案。新内核位于 `arena_game/` 与 PostgreSQL `arena402` schema；旧
+`matching/` 只保留为尚未删除的历史原型。
+
 ## 当前实现状态
 
 仓库已经具备多项可复用基础，但尚未运行完整游戏闭环：
 
 | 模块 | 当前状态 |
 |------|----------|
+| 王城典当行 Game Core | Milestone 1 已实现四种货物、20 金初始组合、定点金额、事件 DSL、5 回合演示事件表、回合状态机、终场估值与排名；市场、协商与 Runtime 接线在后续 Milestone |
 | Python matching/Arena | `matching/` 与 `web/api.py` 提供内存版 Agent、listing/intent、matching、有限 negotiation 和 ELO/Arena 原型；它不是新游戏的持久化回合引擎 |
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；尚未接入 `arena.decide` / `arena.negotiate` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
@@ -62,6 +70,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 | 路径 | 用途 |
 |------|------|
 | `matching/`, `web/` | 现有内存 matching、negotiation 和 Arena/ELO 原型 |
+| `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
 | `db/` | 旧版 Supabase schema、Connector Gateway 迁移、Arena Agent/Runtime/Task 的 Phase 1 基础，以及 Hosted HTTP 幂等 `004` 迁移；完整 Pool/Pairing/Inventory/Settlement 游戏迁移仍未实现 |
 | `arena402/` | 根 Vercel 部署使用的 CDN-only 静态前端 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
