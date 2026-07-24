@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from .repository import DuplicateIdentityError, InvalidInviteError
@@ -14,6 +14,30 @@ def _record(value: Any) -> dict[str, Any]:
     if isinstance(value, str):
         return json.loads(value)
     return dict(value)
+
+
+def _timestamp(value: Any) -> datetime:
+    """Convert the gateway's JSON-safe ISO timestamps for asyncpg."""
+
+    if isinstance(value, datetime):
+        resolved = value
+    elif isinstance(value, str):
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            resolved = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid Connector timestamp: {value!r}") from exc
+    else:
+        raise TypeError(
+            "Connector timestamps must be datetime instances or ISO-8601 strings"
+        )
+    if resolved.tzinfo is None:
+        resolved = resolved.replace(tzinfo=timezone.utc)
+    return resolved
+
+
+def _optional_timestamp(value: Any) -> datetime | None:
+    return None if value is None else _timestamp(value)
 
 
 class PostgresConnectorRepository:
@@ -36,7 +60,7 @@ class PostgresConnectorRepository:
             if self._pool is not None:
                 return
             try:
-                import asyncpg
+                import asyncpg  # type: ignore[import-not-found]
             except ImportError as exc:  # pragma: no cover - deployment dependency
                 raise RuntimeError(
                     "asyncpg is required for PostgreSQL Connector persistence"
@@ -272,8 +296,8 @@ class PostgresConnectorRepository:
                         pairing.get("owner_id"),
                         pairing.get("device_code_hash"),
                         pairing["status"],
-                        pairing["created_at"],
-                        pairing["expires_at"],
+                        _timestamp(pairing["created_at"]),
+                        _timestamp(pairing["expires_at"]),
                         json.dumps(pairing),
                     )
                 for device in state["devices"]:
@@ -295,8 +319,8 @@ class PostgresConnectorRepository:
                         device["owner_id"],
                         device["token_hash"],
                         device["status"],
-                        device["created_at"],
-                        device.get("revoked_at"),
+                        _timestamp(device["created_at"]),
+                        _optional_timestamp(device.get("revoked_at")),
                         json.dumps(device),
                     )
                     await connection.execute(
@@ -333,7 +357,7 @@ class PostgresConnectorRepository:
                         binding["runtime_id"],
                         binding["agent_id"],
                         binding["status"],
-                        binding["created_at"],
+                        _timestamp(binding["created_at"]),
                         json.dumps(binding),
                     )
                 for command in state["commands"]:
@@ -353,8 +377,8 @@ class PostgresConnectorRepository:
                         command["status"],
                         command["action"],
                         command["idempotency_key"],
-                        command["created_at"],
-                        command["expires_at"],
+                        _timestamp(command["created_at"]),
+                        _timestamp(command["expires_at"]),
                         json.dumps(command),
                     )
                 for event in state["events"]:
@@ -372,7 +396,7 @@ class PostgresConnectorRepository:
                         event["binding_id"],
                         event["sequence"],
                         event["event_type"],
-                        event["received_at"],
+                        _timestamp(event["received_at"]),
                         json.dumps(event),
                     )
                 for item in state["audit"]:
@@ -388,7 +412,7 @@ class PostgresConnectorRepository:
                         item.get("owner_id"),
                         item["action"],
                         item["actor"],
-                        item["occurred_at"],
+                        _timestamp(item["occurred_at"]),
                         json.dumps(item),
                     )
                 # Pairing codes are short-lived, unauthenticated ingress state.
