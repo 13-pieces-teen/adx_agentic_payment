@@ -1,6 +1,6 @@
-# ADX Connector 云端控制面部署与运维
+# Arena 402 Connector 云端控制面部署与运维
 
-本文档描述 `dev-agent-plugin` 的单机生产拓扑，目标是让外部用户完成“一次安装、一次授权、自动上线”。部署不依赖 Supabase：Connector 身份、配对、设备、Runtime、命令、事件和审计数据均落在自托管 PostgreSQL。
+本文档描述当前仓库的单机生产拓扑，目标是让外部用户完成“一次安装、一次授权、自动上线”。部署不依赖 Supabase：Connector 身份、配对、设备、Runtime、命令、事件和审计数据均落在自托管 PostgreSQL。
 
 ## 1. 目标拓扑
 
@@ -213,7 +213,7 @@ sudo sh deploy/scripts/harden-host-access.sh \
 ```bash
 sh deploy/scripts/backup.sh
 git fetch origin
-git switch dev-agent-plugin
+git switch main
 git pull --ff-only
 sh deploy/scripts/deploy.sh
 ```

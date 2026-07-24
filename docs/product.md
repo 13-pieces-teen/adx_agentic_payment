@@ -59,9 +59,13 @@ Injective、x402 或底层支付设施本身不负责 Arena 402 的 RFQ、报价
 - `matching/` 和 `web/api.py` 已实现内存版 Agent 注册、listing/intent、
   matching、受规则约束的 negotiation 和 Arena/ELO 记分/会话原型；它不是
   完整的 Arena 402 RFQ 应用层。
+- `connector/` 和 `connector_gateway/` 已实现本地 Runtime 发现、设备配对、
+  出站 WSS、typed command、durable event 以及 PostgreSQL 持久化的
+  self-hosted beta 控制面；它还没有绑定到 Arena 402 的正式 Agent 身份、
+  `Deal`、支付或交付状态。
 - `agent-arena/settlement/` 已实现 Injective EVM testnet 上的 EIP-3009
   授权与直接 mUSDC 结算原型。
-- 上述两部分尚未接成 Arena 402 的 `RFQ -> Deal` 领域协议。
+- 上述基础尚未接成 Arena 402 的 `RFQ -> Deal` 领域协议。
 - x402 HTTP challenge、带支付重试、交付解锁和最终 `Receipt` 尚未形成
   端到端闭环。
 - TEE、链上 escrow、争议处理、真实退款、生产手续费和信誉系统尚未作为产品

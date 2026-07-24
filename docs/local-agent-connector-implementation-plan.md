@@ -1,4 +1,4 @@
-# ADX 本地 Agent Connector Implementation Plan
+# Arena 402 本地 Agent Connector Implementation Plan
 
 > 文档状态：Self-hosted beta 实施状态与后续计划
 > 最后更新：2026-07-24
@@ -28,7 +28,7 @@ Deploy Caddy + Next.js + FastAPI + PostgreSQL
 
 成功不包含：
 
-- 把 Connector-only `agent_id` 当作已经注册、可交易的 ADX Agent；
+- 把 Connector-only `agent_id` 当作已经注册、可交易的 Arena 402 Agent；
 - 把进程内 Arena 状态当作金融生产数据；
 - 默认开启 Codex/Claude task execution；
 - 宣称安装包已经签名或具有 SBOM；
@@ -362,7 +362,7 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 
 ### P1：业务持久化边界
 
-- 将真实 ADX Agent registry 与 Connector Binding 对接；
+- 将真实 Arena 402 Agent registry 与 Connector Binding 对接；
 - 持久化 Agent、Order、Match、Negotiation 与业务 Audit；
 - 保持 Runtime telemetry、Business Event 和 Payment finality 三类权威来源分离；
 - 未完成前禁止真实资金或不可逆金融动作。
@@ -433,7 +433,7 @@ Native A2A Endpoint 适合已经运行在公网或可被平台代理访问、并
 
 可复用：
 
-- ADX Agent identity 与 ownership；
+- Arena 402 Agent identity 与 ownership；
 - task/correlation/idempotency/audit；
 - capability 与 event projection；
 - matching/negotiation/payment 的业务边界。

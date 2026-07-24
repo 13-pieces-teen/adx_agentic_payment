@@ -1,7 +1,8 @@
-# ADX Local Connector
+# Arena 402 Local Connector
 
 `adx-connector` is the user-side execution bridge between locally installed
-agent runtimes and the ADX Arena. It initiates one outbound WebSocket
+agent runtimes and Arena 402. The executable retains the `adx-connector` name
+as a compatibility identifier. It initiates one outbound WebSocket
 connection, reports a multi-runtime inventory, and starts only Connector-owned
 Claude Code or Codex processes. It does not attach to or take over terminals
 that the user already opened.

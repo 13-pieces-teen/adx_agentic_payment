@@ -1,14 +1,14 @@
-# ADX 本地 Agent Connector 产品与技术规格
+# Arena 402 本地 Agent Connector 产品与技术规格
 
 > 文档状态：Self-hosted beta 规格，与当前仓库实现同步
 > 最后更新：2026-07-24
-> 适用范围：用户本地 Agent Runtime 接入 ADX Arena 的出站 Connector
+> 适用范围：用户本地 Agent Runtime 接入 Arena 402 的出站 Connector
 > 对应计划：[`local-agent-connector-implementation-plan.md`](./local-agent-connector-implementation-plan.md)
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
 
 ## 1. 核心结论
 
-ADX 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。它安装在用户电脑上，只发起 HTTPS/WSS 443 出站连接，发现受支持的本地 Agent Runtime，并仅控制由 Connector 自己启动和记录 ownership 的会话。
+Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。它安装在用户电脑上，只发起 HTTPS/WSS 443 出站连接，发现受支持的本地 Agent Runtime，并仅控制由 Connector 自己启动和记录 ownership 的会话。
 
 当前仓库已经具备一条不依赖 Supabase 的 self-hosted beta 路径：
 
@@ -403,7 +403,7 @@ npm run build
 1. 完成目标服务器部署和外部 E2E，收集安装到 online 的耗时与失败点。
 2. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
 3. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。
-4. 将 Connector Binding 与真实、持久化的 ADX Agent registry 对接。
+4. 将 Connector Binding 与真实、持久化的 Arena 402 Agent registry 对接。
 5. 将 Arena/OrderBook/Negotiation 从进程内状态迁移到独立业务持久层，并保持与支付最终性解耦。
 6. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository 和多实例 drain 后再扩展 worker。
 7. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
