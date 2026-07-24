@@ -24,9 +24,10 @@ not implement:
 - `@x402/*` middleware or SDK packages;
 - compatibility with a standard public x402 facilitator.
 
-The complete product path in `docs/product.md`—`Mandate`, `RFQ`, `Offer`,
-`Deal`, an x402 HTTP payment challenge, delivery unlock, and `Receipt`—is also
-outside this module.
+The current Arena 402 game path—accepted negotiation, frozen settlement intent,
+chain confirmation, and idempotent cash/inventory update—is also outside this
+module. See
+[`../../docs/arena-settlement-integration.md`](../../docs/arena-settlement-integration.md).
 
 ## Relationship to the completed specs
 
@@ -227,9 +228,9 @@ The integrating service must enforce that binding before production use.
 - Re-submitting the exact same authorization was rejected because its EIP-3009
   nonce had already been consumed.
 
-This evidence covers the payment relay only. It does not prove request-level
-order idempotency, delivery gating, standard x402 compatibility, or the full
-product demo. The frozen SETTLE-002 record mentions a separate
+This evidence covers the payment relay only. It does not prove game-level
+idempotency, inventory commit, standard x402 compatibility, or the full product
+demo. The frozen SETTLE-002 record mentions a separate
 `RealSettlement.settleTrade()` run using only a truncated transaction hash;
 without the complete hash or a checked-in run artifact, this README does not
 treat that run as independently reproducible evidence.
@@ -243,8 +244,9 @@ treat that run as independently reproducible evidence.
 - Relay state and SDK intents are in memory and are lost on restart.
 - The relay must constrain token, chain, payee, amount, and business order ID
   before production use.
-- The next product integration must connect an immutable Arena 402 `Deal` to the
-  settlement authorization and payment-gated delivery.
+- The next product integration must connect an immutable accepted-negotiation
+  snapshot to the settlement authorization, then update game cash and inventory
+  only after chain confirmation.
 - The frozen specs' M4 milestone proposed a TEE-produced authorization. Current
   product scope allows a test-only signer first and treats TEE custody as later
   work.

@@ -1,7 +1,8 @@
 # Settlement Contracts — Mock Stablecoin (SETTLE-002.5)
 
 Injective EVM testnet 上的 mock 稳定币：标准 ERC-20 + EIP-3009 + 公开 faucet。
-供 x402 结算闭环使用。
+供 Arena 402 的 EIP-3009 direct-relay 结算原型使用；它本身不构成完整
+HTTP x402 闭环。
 
 ## 已部署（testnet 1439）
 

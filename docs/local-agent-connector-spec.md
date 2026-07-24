@@ -20,6 +20,10 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 - Command 在任何 WSS 下发前先跨越 PostgreSQL durable pre-delivery barrier；
 - `adx-connector connect --server https://...`、浏览器授权、凭据保存和系统自启动；
 - Docker Compose + PostgreSQL + FastAPI + Next.js + Caddy 部署栈，支持域名 TLS 和短期 IPv4 TLS；
+
+这条路径当前只实现 Device/Runtime 控制面，尚未实现
+[`game-design.md`](game-design.md) 定义的 `arena.decide`、`arena.negotiate`
+业务适配。Connector 的成功回执不能证明 Agent 已成交或链上支付已确认。
 - Windows/Linux AMD64/ARM64 安装包、SHA-256 校验和与一行安装脚本。
 
 这表示“控制面代码与单机部署路径已具备”，不表示某台真实服务器已经部署完成，也不表示已经通过外部网络端到端验收。
@@ -27,7 +31,8 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 当前实现仍有四个明确边界：
 
 1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
-2. `matching/`、Arena、OrderBook 和 Negotiation 的业务状态仍是进程内状态，不能作为金融生产系统、可靠账本或结算权威来源。
+2. `matching/`、Arena 和 Negotiation 的业务状态仍是进程内状态，不能作为
+   Game/Round/Inventory 的可靠账本或结算权威来源。
 3. Runtime task 默认 detection-only；fixed-argv Codex/Claude runner 不具备完整的平台审批闭环。
 4. 安装包目前有 HTTPS 传输与 SHA-256 校验，但签名发布、SBOM、独立信任根和安全自动更新仍是后续。
 
@@ -307,7 +312,7 @@ Gateway 仍会按 Runtime capabilities 拒绝未声明能力的 command。这个
 
 1. Device/WSS/heartbeat/inventory；
 2. Binding/Command/Session/Runtime Event；
-3. 与 `agent_id/task_id/deal_id` 等业务对象的引用。
+3. 与 `agent_id/game_id/round_id/negotiation_id` 等业务对象的只读引用。
 
 这些信号不是同一权威来源：
 
@@ -404,7 +409,7 @@ npm run build
 2. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
 3. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。
 4. 将 Connector Binding 与真实、持久化的 Arena 402 Agent registry 对接。
-5. 将 Arena/OrderBook/Negotiation 从进程内状态迁移到独立业务持久层，并保持与支付最终性解耦。
+5. 将 Game/Round/Pool/Pairing/Negotiation/Inventory 从进程内状态迁移到独立业务持久层，并保持与支付最终性解耦。
 6. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository 和多实例 drain 后再扩展 worker。
 7. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
 8. 以独立入口设计 Native A2A Endpoint，复用业务身份、任务关联和审计模型，但不复用 Device pairing 或本地 process supervisor。

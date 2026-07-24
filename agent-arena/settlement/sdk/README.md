@@ -91,8 +91,8 @@ state-transition guarantee nor evidence that funds moved back.
 
 `RealSettlement.lockFunds()` recovers the signer, but it does not yet bind every
 authorization field to `buyerWallet`, `sellerWallet`, `amount`, `expiry`,
-token, chain, and business order ID. The integrating service must enforce those
-checks.
+token, chain, and the game `negotiationId`. The integrating service must
+enforce those checks.
 
 ## Fee fields
 
@@ -140,5 +140,5 @@ that metadata first by following
 `SELLER_PRIVATE_KEY` alone does not change the E2E payee.
 
 The E2E verifies the direct mUSDC balance change and rejection of the exact same
-authorization nonce. It does not verify the complete product flow or
-order-level idempotency.
+authorization nonce. It does not verify the complete game flow, negotiation-
+level idempotency, or inventory commit.

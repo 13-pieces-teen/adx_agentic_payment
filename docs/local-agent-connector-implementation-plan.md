@@ -31,6 +31,7 @@ Deploy Caddy + Next.js + FastAPI + PostgreSQL
 - 把 Connector-only `agent_id` 当作已经注册、可交易的 Arena 402 Agent；
 - 把进程内 Arena 状态当作金融生产数据；
 - 默认开启 Codex/Claude task execution；
+- 把 Connector Command 成功当作游戏成交或支付确认；
 - 宣称安装包已经签名或具有 SBOM；
 - 在没有真实公网验证时宣称云主机部署和外部 E2E 已完成。
 
@@ -363,8 +364,10 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 ### P1：业务持久化边界
 
 - 将真实 Arena 402 Agent registry 与 Connector Binding 对接；
-- 持久化 Agent、Order、Match、Negotiation 与业务 Audit；
+- 持久化 Game、Game Agent、Round、Pool、Pairing、Negotiation、Inventory 与业务 Audit；
 - 保持 Runtime telemetry、Business Event 和 Payment finality 三类权威来源分离；
+- 定义版本化 `arena.decide` / `arena.negotiate` payload；Connector 只负责
+  有界投递和结构化结果，不解释游戏规则；
 - 未完成前禁止真实资金或不可逆金融动作。
 
 ### P1：隐私与审计

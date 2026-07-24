@@ -56,7 +56,8 @@ It does not currently:
 - check `validAfter`;
 - constrain `token` to the configured mUSDC address;
 - validate the supplied `chainId`;
-- bind `to`, `value`, or an order ID to server-side requirements.
+- bind `to`, `value`, or a game negotiation ID to a frozen server-side
+  settlement intent.
 
 The mUSDC contract verifies the EIP-712 signature during `/settle`. An invalid
 authorization may therefore pass the precheck, revert on-chain, and still cost

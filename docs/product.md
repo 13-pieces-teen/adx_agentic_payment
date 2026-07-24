@@ -1,94 +1,132 @@
 # Arena 402 Product Contract
 
-> Status: current product scope for the hackathon MVP.
+> 状态：当前 hackathon MVP 产品范围。
 
 ## 产品定位
 
-**Arena 402** 是面向 Agent 的受限 RFQ 交易与可验证交付竞技场，用于购买和
-交付可机器验证的数字商品或服务结果。
+Arena 402 是一场面向 AI Agent 的回合制交易竞技游戏：
 
-买方不是浏览通用 marketplace，而是把预算、期限、交付要求和授权边界写入
-`Mandate`，再发出结构化 `RFQ`。卖方 Agent 返回带价格、有效期和交付承诺的
-签名 `Offer`。双方只进行受限协商，形成不可变的 `Deal`，随后通过支付解锁
-可验证交付物。
+> 所有 Agent 公平开局，每回合决定买、卖或观望，进入市场后按先到先得配对并
+> 进行有限轮砍价，最终按事件塑造的结算价计算净资产。
 
-Injective 是 MVP 的具体 testnet 结算层。标准 x402 HTTP 支付流程是目标接口，但
-Injective、x402 或底层支付设施本身不负责 Arena 402 的 RFQ、报价、协商和
-交付验证。
+产品展示的不是“谁调用了最贵的模型”，而是模型、Prompt、决策速度、风险判断
+和谈判策略如何共同影响可审计的交易结果。
 
-## MVP 交易对象
+Injective EVM testnet 是 MVP 的真实链上支付层，使用测试用 mock USDC
+（mUSDC）。Arena 决定游戏规则、交易快照、货物和排名；链上决定支付最终性；
+平台不托管用户自带钱包或真实资金。
 
-首个演示只支持一种能够端到端机器验证的数字交付物。它必须具备：
+游客体验是明确例外：平台 signer service 可以管理隔离、限额、可过期、可撤销
+和可轮换的 testnet-only 演示密钥。该便利层不能被描述为主网非托管方案，也
+不能改变点对点结算和游戏账本边界。
 
-- 可明确判断的规格、价格、截止时间和商业条款；
-- 支付前可提交的 `DeliveryCommitment`；
-- 可通过内容哈希或等价证明验证的最终交付物；
-- 与成交条款、支付凭证和交付结果关联的 `Receipt`。
+## MVP 体验
 
-物理商品、主观质量无法自动判断的服务，以及需要人工仲裁才能确认结果的交易，
-不进入首个 MVP。
+### 公平开局
 
-## 目标流程
+- 所有 Agent 获得相同现金；
+- 所有 Agent 获得相同种类和数量的初始货物；
+- 货物总量受控，不能凭空增发；
+- 现金零收益，观望是一种策略但没有额外奖励。
 
-1. Buyer Agent 根据用户授权创建 `Mandate` 和 `RFQ`。
-2. Seller Agent 返回签名 `Offer`；协议最多允许一次 `CounterOffer`。
-3. 接受后的条款固化为 `Deal`，不再由支付层重新定价。
-4. Seller 提交绑定交付物哈希、条款或许可、有效期的
-   `DeliveryCommitment`。
-5. 交付端点按 x402 协议返回 `402 Payment Required` 和 payment requirements。
-6. Buyer 完成 Injective testnet 支付；支付失败或无效时不得解锁交付物。
-7. Seller 返回交付物或解锁材料，以及可关联 Deal、payment 和 artifact 的
-   `Receipt`。
-8. Buyer 验证支付凭证、条款、许可和交付物哈希。
+### 每回合
+
+1. Arena 广播公开行情和事件。
+2. 每个 Agent 一次调用，选择 `buy`、`sell` 或 `pass`。
+3. 买卖池按合法决策完成时间 FCFS 配对。
+4. 买方先报价，双方最多协商 2–3 轮。
+5. `accept` 后冻结价格、双方、货物和结算参数。
+6. 买方生成 EIP-3009 授权，Facilitator 提交 testnet 交易。
+7. 链上确认后，Arena 才更新现金与货物。
+8. 未配对者不受惩罚；配对后谈崩或超时，双方
+   `failedNegotiations + 1`。
+
+每个 Agent 每回合最多进行一次决策调用和 2–3 次谈判调用。
+
+### 终场
+
+事件系统生成每种货物的最终结算价：
+
+```text
+netWorth = cash + sum(quantity[good] * finalPrice[good])
+```
+
+主榜只按净资产排名。成交量、交易次数和 `failedNegotiations` 只能进入副榜，
+不能改变冠军。
+
+## 玩家参与方式
+
+| 类型 | 参与方式 | 平台责任 |
+|------|----------|----------|
+| 游客 | 选择人格卡 | 托管 Runtime、默认模型/Prompt、testnet 钱包 |
+| Hacker | 自带 API Key、模型和 System Prompt | 受限 Runtime、秘密存储、协议适配 |
+| 本地 Agent | 通过 Connector 使用本地 Runtime | 出站配对、typed task、状态与审计 |
+
+三类参与者使用相同游戏规则和起始资产。详细入场边界见
+[`agent-onboarding.md`](agent-onboarding.md)。
+
+## MVP 产品红线
+
+- 被接受的交易必须产生真实 Injective EVM testnet USDC 交易；
+- 货物只能在链上确认后转移；
+- 平台不得托管用户自带钱包或主网私钥；guest signer 只能管理受限的
+  testnet-only 演示密钥；
+- 游戏不得依赖保存模型私有 chain-of-thought；
+- 事件、配对、协商、结算和排名必须持久化并可复核；
+- 超时或单个 Runtime 故障不得卡住整局；
+- 金额、nonce 和幂等键必须避免重复付款或重复转移；
+- 文档和演示必须准确区分 direct EIP-3009 relay 与标准 HTTP x402。
 
 ## MVP 验收标准
 
-以下是目标验收条件，不代表当前仓库已经全部实现：
+以下是目标条件，不代表当前仓库已经全部实现：
 
-- 一次演示完整经过
-  `Mandate -> RFQ -> Offer -> Deal -> Payment -> Delivery -> Receipt`。
-- RFQ 之外的报价、过期 Offer 或被修改的 Deal 不得触发交付。
-- 支付结果可通过 Injective testnet 交易哈希或等价凭证验证。
-- Buyer 可以独立验证最终交付物与 `DeliveryCommitment` 一致。
-- 重试不会产生重复 Deal、重复付款或重复解锁。
-- 无效或失败支付不会释放交付物，并返回明确终态。
-- 仓库、日志和交付凭证不包含私钥、助记词、访问令牌或其他真实秘密。
+- 2–3 种货物、5–10 回合和统一初始资产可配置；
+- 每轮完整经过 broadcast、decide、pair、negotiate、settle、close；
+- FCFS 使用服务端接收并校验后的时间，结果可审计；
+- 每个 Agent 每轮最多匹配一次；
+- 谈判消息只允许 `propose`、`accept`、`reject`；
+- 任一 Agent 调用在 deadline 后收敛为明确结果；
+- `accept` 后价格和收款方不可被支付层修改；
+- 链上失败不会改变货物；
+- 链上成功只改变一次现金和货物；
+- 终场净资产可由持仓快照和结算价表独立重算；
+- UI 能展示回合、事件、配对、公开谈判、交易哈希和最终排名；
+- 至少覆盖游客和一种自带 Agent 的完整入场路径。
 
 ## 当前实现边界
 
-- `matching/` 和 `web/api.py` 已实现内存版 Agent 注册、listing/intent、
-  matching、受规则约束的 negotiation 和 Arena/ELO 记分/会话原型；它不是
-  完整的 Arena 402 RFQ 应用层。
-- `connector/` 和 `connector_gateway/` 已实现本地 Runtime 发现、设备配对、
-  出站 WSS、typed command、durable event 以及 PostgreSQL 持久化的
-  self-hosted beta 控制面；它还没有绑定到 Arena 402 的正式 Agent 身份、
-  `Deal`、支付或交付状态。
-- `agent-arena/settlement/` 已实现 Injective EVM testnet 上的 EIP-3009
-  授权与直接 mUSDC 结算原型。
-- 上述基础尚未接成 Arena 402 的 `RFQ -> Deal` 领域协议。
-- x402 HTTP challenge、带支付重试、交付解锁和最终 `Receipt` 尚未形成
-  端到端闭环。
-- TEE、链上 escrow、争议处理、真实退款、生产手续费和信誉系统尚未作为产品
-  能力实现。
+- Python `matching/` 已有 listing/intent、matching、有限 negotiation 和 ELO
+  原型，但不具备新游戏要求的持久化回合、FCFS 池、事件、持仓和终场清算。
+- Connector 已有较完整的设备/Runtime 控制面，但尚未实现 Arena 游戏
+  `decide`/`negotiate` 业务适配。
+- Settlement 已验证 testnet EIP-3009 direct relay，但尚未接收游戏冻结快照，
+  也未驱动持仓的幂等提交。
+- `arena402/index.html` 是现有 Supabase 静态展示页，仍包含旧 ELO/Battle
+  视图；新的 Game Lobby、Game View 和 Result 页面尚未实现。
+- 标准 HTTP x402 challenge/retry/header 与公共 Facilitator 兼容尚未实现。
+- TEE、主网资金、链上 escrow、退款、争议、生产手续费和多链不属于已实现能力。
 
 ## 非目标
 
-首个 MVP 不实现：
+首个 MVP 不做：
 
-- 通用多品类 marketplace 或完整链上订单簿；
-- 多轮砍价、开放式 Agent 博弈或最优价格发现；
-- 对每次推理、消息或谈判轮次单独收费；
-- 主网真实资金交易；
-- 依赖 TEE、链上身份、信誉或争议系统才能成立的可信承诺；
-- 跨链结算、流动性服务和生产级运营体系。
+- 通用商品 marketplace 或开放式链上订单簿；
+- 无限轮自由聊天；
+- 主网真实资金；
+- 依赖链上身份、TEE 或 escrow 才能运行的核心规则；
+- 借贷、杠杆、做空或玩家增发货物；
+- 用 ELO、REP 或交易次数决定主榜；
+- 对本地设备进行全盘监控；
+- 存储 API Key、私钥、助记词或模型私有推理。
 
-## 待冻结问题
+## 待冻结参数
 
-- [ ] 首个机器可验证数字交付物的具体类型与验收器是什么？
-- [ ] 现有 Python `Intent` / `ResourceListing` 如何映射到
-      `Mandate` / `RFQ` / `Offer` / `Deal`？
-- [ ] 标准 x402 HTTP 流程的 seller resource endpoint、client retry 和
-      payment response 采用什么接口？
-- [ ] `DeliveryCommitment` 和 `Receipt` 的最小字段、签名者与持久化方式是什么？
-- [ ] 演示继续使用 mUSDC，还是切换到团队验证过的其他 Injective testnet 资产？
-- [ ] 哪些步骤使用真实 testnet，哪些可以使用明确标注的 mock？
+- [ ] 总回合数：5、8 还是 10？
+- [ ] `MAX_TURN`：2 还是 3？
+- [ ] 单回合与单次调用的正式 timeout？
+- [ ] MVP 货物和初始现金/持仓？
+- [ ] 事件牌组、随机 seed 和最终结算价算法？
+- [ ] 单笔交易数量固定为 1，还是允许有界数量？
+- [ ] 逐笔链上结算无法满足现场吞吐时，采用哪种能保留逐笔 transfer
+      证据的批量交易方案？

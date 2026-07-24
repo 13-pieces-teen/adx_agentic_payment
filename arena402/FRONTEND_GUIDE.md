@@ -1,7 +1,7 @@
-# Arena402 — 前端开发指南
+# Arena 402 前端开发指南
 
-> 基于 `GAME_DESIGN(1).md` 游戏机制总纲  
-> 供 Cursor / AI IDE 实现 · 只做大版块 · 不做细化
+> 权威规则：[`../docs/game-design.md`](../docs/game-design.md)
+> 状态：目标前端架构；游戏页面、业务迁移和实时链路尚未实现
 
 ---
 
@@ -10,10 +10,14 @@
 现有 `index.html`（单文件静态站）实现了：
 - Studio Spotlight 动态聚光背景
 - 顶栏导航 + Hero 大字 Arena402
-- Leaderboard（ELO 排名）+ Battle Feed + Agent 卡片 + Market 列表
-- Supabase 直连（anon key，RLS 公开读）
+- 旧版 Leaderboard（ELO）+ Battle Feed + Agent 卡片 + Market 列表
+- Supabase browser client 和旧表查询
 
-**游戏机制前端 = 在现有网站基础上新增页面和实时功能。**
+这些页面是合并前的展示基础，不代表新游戏规则已经实现。Arena 402 新主榜必须
+按终场净资产排名，不能继续用 ELO 决定游戏胜负。
+
+**游戏机制前端 = 在现有视觉基础上新增持久化 Game 页面与实时功能。**
+下文描述目标，不应当作当前已上线能力。
 
 ---
 
@@ -25,8 +29,8 @@
 | **字体** | Press Start 2P（标题）+ VT323（正文） | 像素风，已配置 font-display swap |
 | **样式** | CSS 变量 + clip-path 像素切割 + 无框架 | 现有设计系统已成熟 |
 | **状态** | 全局 state 对象 + render() 刷新 | 现有模式已验证，简化无构建 |
-| **实时通信** | Supabase Realtime（WebSocket） | 已配置 publication，battles/listings 已开启 |
-| **数据** | Supabase PostgreSQL（anon key + RLS） | 已部署 5 张表，需新增游戏表 |
+| **实时通信** | Supabase Realtime（WebSocket） | 复用现有 browser client；游戏 channel 尚未实现 |
+| **数据** | Supabase PostgreSQL（anon key + RLS） | 现有页面查询旧表；游戏迁移和 RLS 仍需在仓库中定义、审查和执行 |
 | **动画** | CSS @keyframes + requestAnimationFrame | 现有聚光灯动画模式 |
 | **图表** | Canvas 2D（自绘，不引入库） | 棋盘可视化已验证 |
 
@@ -41,7 +45,7 @@
 /game               →  Game Lobby（等待室 + 规则说明）
 /game/{id}          →  Game View（回合进行中主界面）
 /game/{id}/result   →  Game Result（终场排名）
-/arena              →  Leaderboard（现有，保留）
+/arena              →  旧 Leaderboard（兼容入口，后续迁移到净资产历史榜）
 /agents             →  Agent 管理（现有，保留）
 /market             →  资源市场（现有，保留）
 ```
@@ -64,7 +68,7 @@
 │  玩家3 🟡    │  🌿香料 6.5     │  Round 2: ask 9.5 │
 │  玩家4 🟢    │                  │  ...ACCEPTED! ✅  │
 │  ...         │  [事件卡片]      │                   │
-│              │  ⚔️王国战争     │  [x402 tx: 0x...] │
+│              │  ⚔️王国战争     │  [Injective tx]   │
 │  [观战模式]   │  40%宝石-20%   │                   │
 │              │  黄金+20%       │                   │
 ├──────────────┴──────────────────┴───────────────────┤
@@ -76,7 +80,8 @@
 
 - 当前回合数 / 总回合数（大号像素字体）
 - 本回合剩余倒计时（⏱ 动画，0 时闪烁）
-- 当前阶段标签：DECIDE → PAIRING → NEGOTIATE → SETTLE → IDLE
+- 当前阶段标签：BROADCAST → DECIDE → PAIR → NEGOTIATE → SETTLE →
+  ROUND_CLOSE
 - 本回合事件摘要（1行，跑马灯）
 
 ### 3.2 AGENT LIST（左侧栏）
@@ -138,17 +143,18 @@
 ## 4. 游戏状态机（前端驱动）
 
 ```
-IDLE → DECIDE → PAIRING → NEGOTIATING → SETTLING → IDLE (下一回合)
+WAITING → BROADCAST → DECIDE → PAIR → NEGOTIATE → SETTLE → ROUND_CLOSE
 ```
 
 | 阶段 | 前端展示 | 数据来源 |
 |------|---------|---------|
-| **IDLE** | 回合未开始，显示"等待中" | rounds 表 |
+| **WAITING** | 游戏或回合未开始，显示“等待中” | games / rounds 表 |
+| **BROADCAST** | 展示行情、事件和回合倒计时 | rounds + events 表 |
 | **DECIDE** | agent 列表每行显示"决定中..."，决策完成的显示 ✓ | pools 表（进池=决策完成） |
-| **PAIRING** | 市场面板显示池子人数，配对动画 | pairings 表 |
-| **NEGOTIATING** | 协商查看器实时显示消息 | negotiations + neg_messages 表 |
-| **SETTLING** | 链上确认状态，tx hash 显示 | settlements 表 |
-| **IDLE** | 回合结算摘要 → 等待下回合 | rankings 快照 |
+| **PAIR** | 市场面板显示池子人数，配对动画 | pairings 表 |
+| **NEGOTIATE** | 协商查看器实时显示消息 | negotiations + neg_messages 表 |
+| **SETTLE** | 链上提交与确认状态 | settlements 表 |
+| **ROUND_CLOSE** | 库存提交后展示回合摘要 | holdings + rounds 表 |
 
 ---
 
@@ -180,22 +186,26 @@ supabase.channel('game-{id}')
 
 ---
 
-## 6. 新增数据库表（需建迁移）
+## 6. 目标数据库表（尚未建迁移）
 
-在现有 5 张表基础上新增游戏表：
+以下是前端需要消费的领域投影。正式字段以
+[`../docs/game-design.md`](../docs/game-design.md) 和后端迁移为准：
 
 ```sql
 -- 游戏局
 games: id, status(waiting/playing/finished), total_rounds, current_round, created_at
 
 -- 玩家（游戏内）
-game_players: game_id, agent_id, starting_cash, current_cash, failed_count
+game_agents: game_id, agent_id, tier, runtime_binding_id, starting_cash,
+             current_cash, failed_negotiations, status
 
 -- 持仓
 holdings: game_id, agent_id, good, qty
 
 -- 回合
-rounds: game_id, round_no, phase(decide/pairing/negotiate/settle), started_at, ended_at
+rounds: game_id, round_no,
+        phase(broadcast/decide/pair/negotiate/settle/round_close),
+        started_at, ended_at
 
 -- 池子（FCFS 配对）
 pools: round_id, good, direction(buy/sell), agent_id, entered_at
@@ -210,19 +220,22 @@ negotiations: pairing_id, result(dealt/broke/timeout), final_price, turns_used
 neg_messages: negotiation_id, turn, from_role(buyer/seller), type(propose/accept/reject), price, message
 
 -- 结算
-settlements: negotiation_id, x402_tx_hash, amount, status
+settlements: negotiation_id, tx_hash, chain_id, token, amount,
+             status(authorization_requested/authorized/submitted/
+                    chain_confirmed_uncommitted/inventory_committed/failed)
 
 -- 事件
-game_events: round_id, type(deterministic/probabilistic), description, params(jsonb), revealed_result
+events: round_id, type(deterministic/probabilistic), description, params(jsonb), revealed_result
 
 -- 结算价表（终场）
-settle_prices: game_id, good, final_price
+settle_table: game_id, good, final_price
 
 -- 排名
-game_rankings: game_id, agent_id, net_worth, rank, side_ranks(jsonb)
+rankings: game_id, agent_id, net_worth, rank, side_ranks(jsonb)
 ```
 
-> 建议新建 `db/migrations/002_game_tables.sql`，在 Supabase SQL Editor 执行。
+> 迁移必须先进入仓库、通过后端与 RLS 审查，再在目标环境执行。不能只在
+> Supabase SQL Editor 手工建表后把它描述为可复现实现。
 
 ---
 
@@ -291,16 +304,20 @@ arena402/
 
 ## 11. 给 Cursor 的实现顺序
 
-1. **建表**：执行 `002_game_tables.sql`
+1. **后端迁移与 RLS**：先建立并测试游戏表和只读投影
 2. **game.html 骨架**：三栏布局 + TOP BAR + 阶段状态机
-3. **Agent List 组件**：读 `game_players` + `holdings`
+3. **Agent List 组件**：读 `game_agents` + `holdings`
 4. **Market Board 组件**：读 `rounds` + `pools` + `events`
 5. **Negotiation Viewer 组件**：读 `negotiations` + `neg_messages`（实时）
-6. **实时订阅**：Supabase Realtime 接通全部 channel
-7. **动画**：逐个加配对/协商/成交动画
-8. **Game Result 页面**：读 `rankings` + `settle_prices`
-9. **Lobby + 创建/加入游戏**
+6. **Settlement 状态**：`submitted` 可显示 tx hash；
+   `chain_confirmed_uncommitted` 显示“链上已确认，库存提交中”；只有
+   `inventory_committed` 显示成功动画和“成交完成”
+7. **实时订阅**：Supabase Realtime 接通经过 RLS 审查的 channel
+8. **动画**：逐个加配对/协商/成交动画
+9. **Game Result 页面**：按 `settle_table` 重算并展示净资产排名
+10. **Lobby + 创建/加入游戏**
 
 ---
 
-*本指南基于 GAME_DESIGN v1 · 状态:前端架构已定,细节由 Cursor 实现*
+*本指南维护 Game UI 目标。当前 `index.html` 仍是旧展示页，完成状态以代码、
+迁移、测试和 `docs/roadmap.md` 为准。*

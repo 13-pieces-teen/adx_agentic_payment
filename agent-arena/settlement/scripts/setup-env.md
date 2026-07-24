@@ -163,5 +163,5 @@ The expected scope is:
 - full signed mUSDC value reaches the payee;
 - reusing the exact authorization nonce is rejected.
 
-It does not test an HTTP x402 challenge, order-level idempotency, escrow,
+It does not test an HTTP x402 challenge, game-level idempotency, inventory commit, escrow,
 refund, platform fee collection, matching, or delivery.

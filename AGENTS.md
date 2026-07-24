@@ -2,63 +2,94 @@
 
 ## Project
 
-This repository is an early-stage hackathon prototype for **Arena 402**:
-a bounded RFQ workflow for machine-verifiable digital delivery.
+This repository is an early-stage hackathon prototype for **Arena 402**, a
+round-based AI trading game:
 
-The current repository contains two implemented but not yet integrated foundations:
+- every Agent starts with equal cash and inventory;
+- each round it chooses `buy`, `sell`, or `pass`;
+- buy and sell pools are paired first-come-first-served;
+- paired Agents negotiate for at most 2–3 turns;
+- accepted trades settle point-to-point on Injective EVM testnet;
+- after N rounds, final event-driven prices determine net-worth ranking.
 
-- an in-memory Python matching, negotiation, and Arena prototype;
+The repository contains three implemented but not yet integrated foundations:
+
+- an in-memory Python matching, negotiation, and Arena/ELO prototype;
+- a self-hosted Local Agent Connector and Gateway control plane;
 - an Injective EVM testnet EIP-3009 direct-settlement prototype.
 
-The standard x402 HTTP payment flow and the complete
-`RFQ -> Deal -> Payment -> Delivery -> Receipt` product loop are not complete yet.
+The persistent round engine, game-specific Agent adapters, settlement-to-
+inventory commit, and full game frontend are not complete yet.
 
 ## Read first and documentation authority
 
 - Setup and repository orientation: `README.md`
+- Locked game rules and cross-module I/O: `docs/game-design.md`
 - Current product scope: `docs/product.md`
-- Current implementation status and next steps: `docs/roadmap.md`
-- Module implementation details: the module-local `README.md`, spec index, source,
-  tests, and verified run artifacts
+- Current implementation status and sequencing: `docs/roadmap.md`
+- Agent participation and Runtime binding: `docs/agent-onboarding.md`
+- Accepted-trade settlement boundary: `docs/arena-settlement-integration.md`
+- Module implementation details: module-local `README.md`, source, tests,
+  verified run artifacts, and approved active specs
 - Project skills: `.agents/skills/`
 
-Apply authority by question rather than using one global precedence order:
+Apply authority by question:
 
-- use root `README.md` for setup and repository orientation;
-- use `docs/product.md` for current product scope and non-goals;
-- use `docs/roadmap.md` for cross-module implementation status and sequencing;
-- use source, tests, verified run artifacts, approved active specs, and module
-  `README.md` files for module behavior and implementation claims;
-- use archived or background documents for historical context only.
+- use `docs/game-design.md` for game rules, state transitions, scoring, and
+  Agent business I/O;
+- use `docs/product.md` for MVP scope, acceptance criteria, and non-goals;
+- use `docs/roadmap.md` for implementation status and sequencing;
+- use source, tests, verified evidence, and module READMEs for claims about
+  implemented behavior;
+- use archived/background documents only for historical context.
 
 If an implementation-status claim conflicts with code or verified evidence,
-the evidence wins and the current status document must be corrected. Code does
-not override the product scope defined in `docs/product.md`.
+the evidence wins and the active status document must be corrected. Code does
+not silently override the product/game contract.
 
-Completed specifications under `agent-arena/specs/` are frozen development
-records. They preserve the decisions, acceptance criteria, terminology, and
-evidence used by the original implementation and must not be retroactively
-rewritten to match later documentation. When a frozen spec differs from current
-behavior, explain the difference in the active module `README.md` or
-`docs/roadmap.md`; create a new spec only after its scope is approved.
+## Compatibility and frozen records
 
-Additional context boundaries:
+- The active product name is **Arena 402**.
+- Preserve real compatibility identifiers such as `adx-connector`, `ADX_*`,
+  package names, database identifiers, persisted values, wire URIs, and
+  historical archive content unless a migration is explicitly approved.
+- Completed specifications under `agent-arena/specs/` are frozen development
+  records. Do not rewrite them to match the current game framing.
+- When a frozen spec differs from current behavior, document the difference in
+  an active module README or `docs/roadmap.md`.
+- `docs/injective/` contains fixed external documentation snapshots. Do not
+  edit them or treat them as evidence of implemented Arena behavior.
 
-- `docs/injective/` contains fixed external documentation snapshots. A snapshot is
-  reference material, not evidence that Arena 402 has adopted or implemented
-  that design.
-- `产品描述.docx` and `ISEK解读与ADX2025参赛策略.md` are background materials.
-  Do not load or treat them as current project authority by default.
+## Architecture boundaries
+
+Keep three authorities separate:
+
+- Connector/Gateway owns Device, Runtime, Binding, Command, receipt, and
+  Connector-owned Session state;
+- Arena owns Game, Round, pool, pairing, negotiation, event, inventory, and
+  ranking state;
+- Injective EVM owns payment finality.
+
+Do not infer a successful trade or payment from a Connector acknowledgement.
+Do not move inventory before chain confirmation. Do not let Settlement reprice
+an accepted negotiation.
+
+Do not request, store, or expose private chain-of-thought, API keys, wallet
+private keys, seed phrases, unrelated local files, or full machine activity.
+Persist structured actions, public negotiation messages, timestamps, status,
+errors, and payment evidence only.
+
+The current settlement code is an EIP-3009 direct relay prototype, not a
+complete standard HTTP x402 implementation. Keep that distinction explicit.
 
 ## Repository harness
 
-- Keep `README.md`, `docs/product.md`, `docs/roadmap.md`, and active module
-  entrypoints aligned with the authority boundaries above.
-- Preserve existing design documents; add new documents only for a clear, maintained purpose.
-- Keep `.agents/` limited to shared project skills; do not add task files yet.
+- Keep `README.md`, `docs/game-design.md`, `docs/product.md`,
+  `docs/roadmap.md`, and active module entrypoints aligned.
+- Add a new maintained document only when it owns a unique purpose.
+- Keep `.agents/` limited to shared project skills.
 - Treat `.agents/skills/` as the only editable source for project skills.
-- Do not edit generated copies under `.claude/skills/`; that directory is
-  created by the synchronization command and may not exist before the first run.
+- Do not edit generated copies under `.claude/skills/`.
 - After changing a skill, run:
 
   ```text
@@ -68,31 +99,26 @@ Additional context boundaries:
 
 ## Documentation lifecycle
 
-- Update current entrypoints in place. Do not archive `README.md`,
-  `docs/product.md`, `docs/roadmap.md`, or an active module entrypoint merely
-  because its content is stale.
-- Discuss the proposed archive target, reason, and replacement with a human and
-  receive confirmation before moving any document into the archive.
-- After confirmation, preserve superseded documents under
+- Update active entrypoints in place. Do not archive `README.md`,
+  `docs/game-design.md`, `docs/product.md`, `docs/roadmap.md`, or an active
+  module entrypoint merely because its content is stale.
+- Before moving any document into the archive, present the proposed target,
+  reason, and replacement to a human and receive confirmation.
+- Preserve superseded documents under
   `docs/archive/YYYY-MM-DD/<original-relative-path>`.
-- Add an entry to `docs/archive/README.md` with the archive date, reason, and
-  links to current replacements. Preserve the archived file's historical
-  content unless the human explicitly approves an inline notice. Find and
-  repair every inbound link after the move.
-- Archived documents are non-current by default. Do not use them as
-  implementation authority or add new design decisions to them.
-- If code, commands, interfaces, or repository layout invalidate a current
-  document, update that document in the same scoped change or explicitly mark the
-  unresolved mismatch. This rule does not authorize edits to frozen completed
-  specs.
-- Before adding a new design document, state the unique maintained purpose it
-  owns and which document, if any, it supersedes.
+- Update `docs/archive/README.md`, preserve archived file contents, and repair
+  inbound links after a move.
+- Archived documents are non-current. Do not add new decisions to them.
+- Do not edit frozen specs under `agent-arena/specs/`.
 
 ## Working rules
 
-- Keep changes small and scoped to the requested task.
-- Preserve unrelated work and avoid broad refactors.
-- Add only commands that have been verified in this repository.
-- Update `product.md` or `roadmap.md` only when their information changes.
-- Never commit secrets, wallet keys, seed phrases, or real payment credentials.
-- Use testnet by default; require human confirmation before a state-changing transaction.
+- Keep changes scoped and preserve unrelated work.
+- Add only commands verified in this repository.
+- Never commit secrets or real payment credentials.
+- Use testnet by default.
+- Require human confirmation before a state-changing chain transaction.
+- Keep amount handling deterministic; use token units or fixed-point decimal,
+  not binary floating point.
+- Make retries idempotent across Agent calls, settlement submission, chain
+  recovery, and inventory commit.

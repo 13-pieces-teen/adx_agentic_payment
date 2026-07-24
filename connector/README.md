@@ -11,6 +11,27 @@ The default policy is detection-only: the Connector can discover runtimes and
 answer `runtime.probe`, but it does not start an Agent task until the user opts
 in locally for a specific runtime.
 
+## Arena game integration status
+
+The Connector is an implemented control plane, not the Arena game authority.
+It does not currently implement the target `arena.decide` or
+`arena.negotiate` business payload adapters described in
+[`../docs/agent-onboarding.md`](../docs/agent-onboarding.md).
+They will be versioned payload kinds inside the existing top-level
+`task.dispatch` action, not new Connector protocol actions.
+
+When that adapter is added:
+
+- Arena owns game, round, pairing, negotiation, inventory, and ranking state;
+- the Connector owns Device, Runtime, Binding, Command, receipt, and
+  Connector-owned Session state;
+- Injective EVM owns payment finality;
+- a successful Connector receipt proves only that a bounded local task
+  completed, not that a trade or payment succeeded;
+- only structured actions and public negotiation messages may be returned;
+  private chain-of-thought, local credentials, and unrelated files remain out
+  of scope.
+
 ## Build
 
 Requirements:

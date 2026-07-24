@@ -1,4 +1,7 @@
-# ADX Connector installers
+# Arena 402 Local Connector installers
+
+The binary, service, and environment identifiers retain the historical `ADX`
+name for compatibility.
 
 These installers provide the low-step local onboarding path:
 

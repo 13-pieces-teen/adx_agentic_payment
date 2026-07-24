@@ -2,6 +2,11 @@
 
 本文档描述当前仓库的单机生产拓扑，目标是让外部用户完成“一次安装、一次授权、自动上线”。部署不依赖 Supabase：Connector 身份、配对、设备、Runtime、命令、事件和审计数据均落在自托管 PostgreSQL。
 
+这套部署只覆盖 Connector/Gateway 控制面，不会部署完整 Arena 402 游戏。
+Game/Round/Pairing/Negotiation/Inventory 业务库、游戏前端和 Injective
+Settlement 需要按 [`roadmap.md`](roadmap.md) 单独集成。Device online 或
+Command succeeded 也不能作为成交或链上支付确认。
+
 ## 1. 目标拓扑
 
 ```text
