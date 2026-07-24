@@ -17,7 +17,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --require-hashes --requirement /tmp/requirements.txt
 
 COPY --chown=adx:adx matching ./matching
-COPY --chown=adx:adx shared ./shared
 COPY --chown=adx:adx connector_gateway ./connector_gateway
 COPY --chown=adx:adx web ./web
 COPY --chown=adx:adx db ./db
