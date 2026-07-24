@@ -3,7 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from web.pawnhouse_api import create_pawnhouse_router
+from web.pawnhouse_api import (
+    create_pawnhouse_read_router,
+    create_pawnhouse_router,
+)
+from web.api import create_app
 
 
 class _Repository:
@@ -52,6 +56,14 @@ class _Repository:
             "gameId": game_id,
             "phase": "running",
             "schemaVersion": "arena.pawnhouse-game-state.v1",
+        }
+
+    async def automation_state(self, *, game_id):
+        return {
+            "gameId": game_id,
+            "roundId": f"round:{game_id}:1",
+            "action": "wait_settlement",
+            "pendingSettlements": 1,
         }
 
     async def timeline(self, game_id, *, after_sequence=0):
@@ -105,6 +117,51 @@ def _client() -> tuple[TestClient, _Repository]:
         )
     )
     return TestClient(app), repository
+
+
+def test_read_router_exposes_game_state_without_dev_mutations() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_read_router(
+            repository=repository,  # type: ignore[arg-type]
+        )
+    )
+    client = TestClient(app)
+
+    state = client.get("/api/v1/pawnhouse/games/game_1")
+    mutation = client.post(
+        "/api/dev/pawnhouse/games",
+        json={
+            "gameId": "game_1",
+            "eventSeed": "fixed-demo-seed",
+        },
+    )
+
+    assert state.status_code == 200
+    assert state.json()["gameId"] == "game_1"
+    assert mutation.status_code == 404
+
+
+def test_app_mounts_read_only_game_api_without_dev_control(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADX_ENV", "development")
+    monkeypatch.setenv("ADX_ARENA_CORE_ENABLED", "true")
+    monkeypatch.setenv(
+        "ADX_ARENA_CORE_DATABASE_URL",
+        "postgresql://arena:arena@127.0.0.1:5432/arena",
+    )
+    monkeypatch.delenv("ADX_ARENA_DEV_CONTROL", raising=False)
+    monkeypatch.delenv("ADX_HOSTED_AGENTS_ENABLED", raising=False)
+    monkeypatch.delenv("ADX_ARENA_PARTICIPATION_ENABLED", raising=False)
+
+    app = create_app(connector_demo_enabled=False)
+    paths = {route.path for route in app.routes}
+
+    assert "/api/v1/pawnhouse/games/{game_id}" in paths
+    assert "/api/dev/pawnhouse/games" not in paths
+    assert app.state.pawnhouse_mode == "read_only"
 
 
 def test_development_mutations_require_the_explicit_token() -> None:
@@ -221,6 +278,12 @@ def test_read_interfaces_do_not_require_the_development_token() -> None:
     assert state.json()["phase"] == "running"
     assert timeline.status_code == 200
     assert timeline.json()["nextAfter"] == 5
+
+    automation = client.get(
+        "/api/v1/pawnhouse/games/game_1/automation"
+    )
+    assert automation.status_code == 200
+    assert automation.json()["action"] == "wait_settlement"
 
 
 def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:

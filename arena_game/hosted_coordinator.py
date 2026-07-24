@@ -199,26 +199,31 @@ class PawnhouseHostedCoordinator:
                 round_id=round_id,
             )
         )
-        for negotiation_id in negotiation_ids:
-            while True:
-                context = (
-                    await self._pawnhouse.hosted_negotiation_context(
-                        negotiation_id=negotiation_id
-                    )
-                )
-                if context is None:
-                    break
-                task = await self._factory.create_negotiate_task(
-                    game_agent_id=str(context["participant_id"]),
-                    participant_view=self._negotiate_view(context),
-                    config_snapshot=dict(context["config_snapshot"]),
-                )
-                result, action = await self._wait_and_consume(task)
-                await self._pawnhouse.apply_hosted_negotiation_action(
-                    negotiation_id=negotiation_id,
-                    result_id=result.result.result_id,
-                    action=action,
-                )
+        await asyncio.gather(
+            *(
+                self._run_negotiation(negotiation_id)
+                for negotiation_id in negotiation_ids
+            )
+        )
+
+    async def _run_negotiation(self, negotiation_id: str) -> None:
+        while True:
+            context = await self._pawnhouse.hosted_negotiation_context(
+                negotiation_id=negotiation_id
+            )
+            if context is None:
+                break
+            task = await self._factory.create_negotiate_task(
+                game_agent_id=str(context["participant_id"]),
+                participant_view=self._negotiate_view(context),
+                config_snapshot=dict(context["config_snapshot"]),
+            )
+            result, action = await self._wait_and_consume(task)
+            await self._pawnhouse.apply_hosted_negotiation_action(
+                negotiation_id=negotiation_id,
+                result_id=result.result.result_id,
+                action=action,
+            )
 
     async def _wait_and_consume(
         self,

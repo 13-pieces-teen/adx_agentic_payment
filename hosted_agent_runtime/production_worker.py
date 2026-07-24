@@ -51,6 +51,9 @@ async def main() -> None:
         lease_seconds=int(
             os.getenv("ADX_HOSTED_WORKER_LEASE_SECONDS", "600")
         ),
+        task_concurrency=int(
+            os.getenv("ADX_HOSTED_WORKER_TASK_CONCURRENCY", "5")
+        ),
     )
     await repository.initialize()
     loop = asyncio.get_running_loop()

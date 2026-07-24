@@ -14,6 +14,9 @@ HOSTED_SQL_PATH = (
 SETTLEMENT_SQL_PATH = (
     ROOT / "db" / "migrations" / "009_arena_settlement_commit.sql"
 )
+ORCHESTRATION_SQL_PATH = (
+    ROOT / "db" / "migrations" / "010_arena_full_game_orchestration.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -105,3 +108,14 @@ def test_settlement_migration_separates_chain_confirmation_from_inventory() -> N
     assert "CHECK (buyer_holding_after = buyer_holding_before + 1)" in sql
     assert "CHECK (seller_holding_after = seller_holding_before - 1)" in sql
     assert "GRANT SELECT ON ALL TABLES IN SCHEMA arena402 TO adx_arena_api" in sql
+
+
+def test_full_game_migration_persists_round_portfolio_snapshots() -> None:
+    sql = ORCHESTRATION_SQL_PATH.read_text(encoding="utf-8")
+    assert "CREATE TABLE arena402.round_portfolio_snapshots" in sql
+    assert "CREATE TABLE arena402.final_settlement_prices" in sql
+    assert "cash_atomic NUMERIC(78, 0)" in sql
+    assert "holdings_snapshot JSONB" in sql
+    assert "PRIMARY KEY (round_id, game_participant_id)" in sql
+    assert "PRIMARY KEY (game_id, good_id)" in sql
+    assert "GRANT SELECT ON arena402.round_portfolio_snapshots" in sql

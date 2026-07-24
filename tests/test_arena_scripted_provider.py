@@ -8,6 +8,8 @@ from hosted_agent_runtime.production_providers import (
 )
 from hosted_agent_runtime.providers import (
     ARENA_SCRIPTED_BUYER_MODEL,
+    ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
+    ARENA_SCRIPTED_REJECTING_SELLER_MODEL,
     ARENA_SCRIPTED_PROVIDER_ID,
     ARENA_SCRIPTED_SELLER_MODEL,
     ProviderRequest,
@@ -46,6 +48,22 @@ def test_local_bundle_exposes_two_scripted_hosted_models_only_in_dev_bundle() ->
     }
     assert (ARENA_SCRIPTED_PROVIDER_ID, ARENA_SCRIPTED_BUYER_MODEL) in models
     assert (ARENA_SCRIPTED_PROVIDER_ID, ARENA_SCRIPTED_SELLER_MODEL) in models
+
+
+def test_local_bundle_exposes_rejecting_models_for_full_game_safety_demo() -> None:
+    bundle = build_local_development_provider_bundle()
+    models = {
+        (item.provider_id, item.model_id)
+        for item in bundle.registry.list_public()
+    }
+    assert (
+        ARENA_SCRIPTED_PROVIDER_ID,
+        ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
+    ) in models
+    assert (
+        ARENA_SCRIPTED_PROVIDER_ID,
+        ARENA_SCRIPTED_REJECTING_SELLER_MODEL,
+    ) in models
 
 
 def test_scripted_provider_runs_buyer_and_seller_decide_and_negotiate() -> None:

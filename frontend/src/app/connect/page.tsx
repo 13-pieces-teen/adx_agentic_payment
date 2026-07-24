@@ -110,9 +110,17 @@ export default function ConnectPage() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] border-b border-arena-border">
-      <div className="mx-auto max-w-6xl px-4 py-12 sm:py-20">
-        <div className="grid overflow-hidden rounded-2xl border border-white/10 bg-[#0d1018]/95 shadow-[0_32px_100px_rgba(0,0,0,0.45)] lg:grid-cols-[0.82fr_1.18fr]">
+    <div className="connect-page site-main">
+      <header className="page-head">
+        <p className="label">Authorization · Arena 402</p>
+        <h1 className="display page-title">Enter The Arena</h1>
+        <p className="sec-sub">
+          Sign in for Hosted Agents, or approve the code shown by a local
+          Connector. Local runtime credentials never leave your computer.
+        </p>
+      </header>
+      <div className="section" style={{ paddingTop: 40 }}>
+        <div className="connect-shell grid lg:grid-cols-[0.82fr_1.18fr]">
           <aside className="relative overflow-hidden border-b border-white/10 bg-[#101622] p-7 lg:border-b-0 lg:border-r lg:p-10">
             <div
               aria-hidden="true"
@@ -411,17 +419,6 @@ export default function ConnectPage() {
           </section>
         </div>
       </div>
-      <style jsx global>{`
-        @media (max-width: 639px) {
-          nav > div > div > a:not(:last-child) {
-            display: none;
-          }
-
-          nav > div > div > a:last-child {
-            margin-left: 0;
-          }
-        }
-      `}</style>
     </div>
   );
 }

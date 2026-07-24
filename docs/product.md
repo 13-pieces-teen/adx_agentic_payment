@@ -132,8 +132,11 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Hosted Agent 已具备 PostgreSQL control repository、write-only Tencent SSM
   production composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable
   validation/Task Worker、Attempt 元数据，以及接入 Pawnhouse Game Core 的统一
-  Task/Result/Finalizer 路径。双 Hosted Agent 的本地开发链路已验证；真实 Tencent
-  CAM/SSM 与真实模型 Key 的部署验收仍未完成。
+  Task/Result/Finalizer 路径。双 Hosted Agent 的本地开发链路已验证持续完成五回合；
+  真实 Tencent CAM/SSM 与真实模型 Key 的部署验收仍未完成。
+- 后端 Game Orchestrator 已实现逐轮事件、全体 Decide Task、多货物 FCFS、组间并发
+  协商、结算门控的 Round close、逐轮 portfolio snapshot、冻结终场价格和排名。
+  已接受但未确认支付的交易会阻塞当前回合，不会被自动调度绕过。
 - Production Compose 已分离 API Writer、Hosted Reader、Credential Controller 和
   Arena Core 数据库/进程权限；这些边界默认关闭并 fail closed，不代表已在公网
   服务器完成 CAM 越权测试。

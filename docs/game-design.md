@@ -1,7 +1,8 @@
 # Arena 402：王城典当行游戏机制
 
-> 状态：王城典当行新业务内核的当前游戏契约；Milestone 1 已完成世界、事件、
-> 初始组合、回合与排名领域基础，市场和 Runtime 接线尚未完成。
+> 状态：王城典当行新业务内核的当前游戏契约；后端已完成五回合自动编排、
+> Hosted/rule Runtime 接线、FCFS、多组协商、Round close、终场估值与排名。
+> Local Connector 游戏 Adapter、通用 PaymentMandate 和真实生产验收尚未完成。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 本文维护游戏规则、跨模块状态和 Agent I/O 契约。产品边界见
@@ -197,7 +198,15 @@ EIP-3009 direct relay 是单笔授权原型，不等于该 Mandate 或完整 HTT
 ### 7. Round close
 
 Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息、结算结果、
-现金与持仓快照，然后进入下一回合。
+现金与持仓快照，然后进入下一回合。后台 Game Orchestrator 根据 PostgreSQL
+权威状态推进；重启后不依赖进程内计数恢复当前回合。所有 Hosted Decide Task
+先创建后等待结果，不同 pairing 可并发协商，但同一 pairing 内仍严格按
+`turn_sequence` 顺序执行。
+
+只要存在 `accepted_pending_settlement` 或 `settling` pairing，Round 就保持在
+`settle`，不得关闭或进入下一回合。最后一轮关闭后，Arena 将最后的
+`final_price_atomic` 冻结为独立结算价表，再用最后一轮 portfolio snapshot
+生成唯一排名并将 Game 标记为 `completed`。
 
 不得要求或保存模型的私有 chain-of-thought。可审计证据只包括结构化输入摘要、
 合法动作、经过过滤的公开谈判消息、时间戳、Attempt/Token 数值、安全错误类别和

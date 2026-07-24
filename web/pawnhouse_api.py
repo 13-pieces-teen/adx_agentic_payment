@@ -141,6 +141,83 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code})
 
 
+def create_pawnhouse_read_router(
+    *,
+    repository: PostgresPawnhouseRepository,
+) -> APIRouter:
+    """Expose public, read-only game state without mounting dev mutations."""
+
+    router = APIRouter(tags=["pawnhouse"])
+
+    @router.get("/api/v1/pawnhouse/games/{game_id}")
+    async def game_state(game_id: _Id) -> dict[str, object]:
+        try:
+            return await repository.game_state(game_id)
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+
+    @router.get("/api/v1/pawnhouse/games/{game_id}/automation")
+    async def game_automation(game_id: _Id) -> dict[str, object]:
+        try:
+            value = await repository.automation_state(game_id=game_id)
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        return {
+            **value,
+            "schemaVersion": "arena.pawnhouse-automation.v1",
+        }
+
+    @router.get("/api/v1/pawnhouse/games/{game_id}/timeline")
+    async def game_timeline(
+        game_id: _Id,
+        after: Annotated[int, Query(ge=0)] = 0,
+    ) -> dict[str, object]:
+        events = await repository.timeline(game_id, after_sequence=after)
+        return {
+            "gameId": game_id,
+            "events": events,
+            "nextAfter": events[-1]["sequence"] if events else after,
+            "schemaVersion": "arena.pawnhouse-timeline.v1",
+        }
+
+    @router.get("/api/v1/pawnhouse/games/{game_id}/runtime-run")
+    async def hosted_runtime_run(game_id: _Id) -> dict[str, object]:
+        value = await repository.hosted_run_status(game_id=game_id)
+        if value is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "runtime_run_not_found"},
+            )
+        return {
+            "gameId": game_id,
+            "runtimeRunId": value["runtime_run_id"],
+            "roundId": value["round_id"],
+            "status": value["status"],
+            "stage": value["stage"],
+            "errorCode": value["safe_error_code"],
+            "createdAt": value["created_at"],
+            "startedAt": value["started_at"],
+            "completedAt": value["completed_at"],
+            "schemaVersion": "arena.pawnhouse-runtime-run.v1",
+        }
+
+    @router.get(
+        "/api/v1/pawnhouse/games/{game_id}/settlement-intents"
+    )
+    async def settlement_intents(game_id: _Id) -> dict[str, object]:
+        values = await repository.settlement_intents_for_game(
+            game_id=game_id
+        )
+        return {
+            "gameId": game_id,
+            "settlementIntents": values,
+            "total": len(values),
+            "schemaVersion": "arena402.settlement-intent-list.v1",
+        }
+
+    return router
+
+
 def create_pawnhouse_router(
     *,
     repository: PostgresPawnhouseRepository,
@@ -152,6 +229,9 @@ def create_pawnhouse_router(
         raise RuntimeError("ADX_ARENA_DEV_TOKEN must contain at least 16 characters")
 
     router = APIRouter(tags=["pawnhouse-dev"])
+    router.include_router(
+        create_pawnhouse_read_router(repository=repository)
+    )
 
     def authorize(value: str | None) -> None:
         if value != dev_token:
@@ -344,61 +424,6 @@ def create_pawnhouse_router(
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
-    @router.get("/api/v1/pawnhouse/games/{game_id}")
-    async def game_state(game_id: _Id) -> dict[str, object]:
-        try:
-            return await repository.game_state(game_id)
-        except PawnhouseRepositoryError as exc:
-            raise _repository_error(exc) from None
-
-    @router.get("/api/v1/pawnhouse/games/{game_id}/timeline")
-    async def game_timeline(
-        game_id: _Id,
-        after: Annotated[int, Query(ge=0)] = 0,
-    ) -> dict[str, object]:
-        events = await repository.timeline(game_id, after_sequence=after)
-        return {
-            "gameId": game_id,
-            "events": events,
-            "nextAfter": events[-1]["sequence"] if events else after,
-            "schemaVersion": "arena.pawnhouse-timeline.v1",
-        }
-
-    @router.get("/api/v1/pawnhouse/games/{game_id}/runtime-run")
-    async def hosted_runtime_run(game_id: _Id) -> dict[str, object]:
-        value = await repository.hosted_run_status(game_id=game_id)
-        if value is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "runtime_run_not_found"},
-            )
-        return {
-            "gameId": game_id,
-            "runtimeRunId": value["runtime_run_id"],
-            "roundId": value["round_id"],
-            "status": value["status"],
-            "stage": value["stage"],
-            "errorCode": value["safe_error_code"],
-            "createdAt": value["created_at"],
-            "startedAt": value["started_at"],
-            "completedAt": value["completed_at"],
-            "schemaVersion": "arena.pawnhouse-runtime-run.v1",
-        }
-
-    @router.get(
-        "/api/v1/pawnhouse/games/{game_id}/settlement-intents"
-    )
-    async def settlement_intents(game_id: _Id) -> dict[str, object]:
-        values = await repository.settlement_intents_for_game(
-            game_id=game_id
-        )
-        return {
-            "gameId": game_id,
-            "settlementIntents": values,
-            "total": len(values),
-            "schemaVersion": "arena402.settlement-intent-list.v1",
-        }
-
     @router.post(
         "/api/dev/pawnhouse/settlement-intents/"
         "{settlement_intent_id}/submission"
@@ -487,4 +512,7 @@ def create_pawnhouse_router(
     return router
 
 
-__all__ = ["create_pawnhouse_router"]
+__all__ = [
+    "create_pawnhouse_read_router",
+    "create_pawnhouse_router",
+]

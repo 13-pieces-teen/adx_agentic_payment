@@ -3,15 +3,15 @@
 ## Current clean-slate path
 
 The maintained King's Pawnhouse path now includes the world/event core,
-PostgreSQL market and negotiation state, and a dual Hosted Agent development
-demonstration. Two isolated users each create and validate one Hosted Agent;
-the durable worker executes `buy`/`sell`, the Arena Result Sink applies each
-result at most once, database-clock FCFS creates the pairing, and two
-`arena.negotiate` tasks finish at `accepted_pending_settlement`.
+PostgreSQL market and negotiation state, complete five-round backend
+orchestration, and dual Hosted Agent development demonstrations. Arena
+automatically opens each round, reveals its event, queues all Decide tasks,
+pairs four-good pools by database-clock FCFS, runs bounded negotiations,
+persists round portfolio snapshots, and freezes final prices and rankings.
 
 ```powershell
 docker compose -f docker-compose.local.yml up --build -d
-python scripts/run_rule_pawnhouse_demo.py
+python scripts/run_full_pawnhouse_game_demo.py
 ```
 
 For the dual Hosted Agent path, issue two fresh one-use local invitations:
@@ -23,6 +23,17 @@ $env:ARENA_BUYER_INVITE="<first invite>"
 $env:ARENA_SELLER_INVITE="<second invite>"
 python scripts/run_dual_hosted_pawnhouse_demo.py
 ```
+
+To run the same two Hosted Agents through all five rounds without fabricating
+an unpaid settlement, use fresh invitations and:
+
+```powershell
+python scripts/run_full_hosted_pawnhouse_demo.py
+```
+
+The full-game models deliberately propose and reject. The accepted-deal demo
+above still stops at `accepted_pending_settlement` until a real payment is
+confirmed.
 
 The script prints only a safe public summary. It uses the deterministic
 `arena-scripted` Provider, which is available only when
@@ -88,20 +99,20 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 
 ## 当前实现状态
 
-仓库已跑通双 Hosted Agent 的本地开发闭环至冻结结算意图；新鲜 testnet 交易和
-生产 Tencent SSM/真实 Provider 验收仍未执行：
+仓库已跑通双 Hosted Agent 的五回合本地开发闭环，以及独立的成交后冻结结算意图
+边界；新鲜 testnet 交易和生产 Tencent SSM/真实 Provider 验收仍未执行：
 
 | 模块 | 当前状态 |
 |------|----------|
-| 王城典当行 Game Core | 已实现四种货物、20 金初始组合、事件/回合/排名、PostgreSQL 池与 FCFS、有限轮协商、双 Hosted Agent 接线和冻结结算意图 |
+| 王城典当行 Game Core | 已实现四种货物、20 金初始组合、五回合自动推进、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
 | Python matching/Arena | `matching/` 与 `web/api.py` 提供内存版 Agent、listing/intent、matching、有限 negotiation 和 ELO/Arena 原型；它不是新游戏的持久化回合引擎 |
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；尚未接入 `arena.decide` / `arena.negotiate` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；Local Connector 游戏适配仍待实现 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
 | 静态 Arena 前端 | `arena402/index.html` 已有 Supabase 驱动的 Agent、Battle、Market 和 ELO 页面；新的 `/game` 回合视图、数据表和实时状态机尚未实现 |
-| 游戏业务持久化 | `006`–`009` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit；完整多回合调度仍待补齐 |
-| 端到端集成 | 双 Hosted Agent 可完成买卖、FCFS、协商并冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
+| 游戏业务持久化 | `006`–`010` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices 与 Rankings |
+| 端到端集成 | 双 Hosted Agent 可持续完成五回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
 | 标准 HTTP x402 | 尚未实现 `402 Payment Required` challenge、支付 header、paid retry 或标准公共 Facilitator 兼容 |
 
 现有 settlement 是 **EIP-3009 direct-relay prototype**，不能描述为完整标准
@@ -114,7 +125,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `matching/`, `web/` | 现有内存 matching、negotiation 和 Arena/ELO 原型 |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`009` Pawnhouse 市场、Hosted orchestration 和确认后结算迁移 |
+| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`010` Pawnhouse 市场、Hosted orchestration、确认后结算和完整游戏迁移 |
 | `arena402/` | 根 Vercel 部署使用的 CDN-only 静态前端 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
@@ -172,9 +183,10 @@ docker compose -f docker-compose.local.yml down -v
 开发栈使用，禁止复用到公网或共享环境。生产组合仍使用 Tencent Secret Manager、
 独立 Worker 和独立数据库角色。
 
-这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 持久化
-Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结 SettlementIntent”。新鲜 Injective
-testnet 支付仍需要单独的人类确认；通用 PaymentMandate 和多回合自动调度尚未完成。
+这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
+持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
+可继续冻结 SettlementIntent。新鲜 Injective testnet 支付仍需要单独的人类确认；
+通用 PaymentMandate 尚未完成。
 
 ## 快速检查现有模块
 

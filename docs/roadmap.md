@@ -23,6 +23,10 @@
 - [ ] Milestone 5 live acceptance: real Tencent CAM/SSM identities, real
   Provider credential, server restart/offline continuity, and permission-denial
   evidence.
+- [x] Milestone 6: durable backend-only N-round orchestration, one event per
+  round, automatic Hosted/rule execution, four-good FCFS pools, pairing-group
+  concurrency, settlement-gated round close, per-round portfolio snapshots,
+  frozen final prices, terminal ranking, and completed Game state.
 
 The Milestone 2 demonstration is:
 
@@ -66,11 +70,32 @@ cash/holding deltas and replay idempotency. A read-only Injective testnet
 recovery check also matched a historical successful ERC-20 transfer. No fresh
 transaction was signed or broadcast.
 
+The Milestone 6 backend-only demonstrations are:
+
+```powershell
+python scripts/run_full_pawnhouse_game_demo.py
+
+$env:ARENA_BUYER_INVITE="<fresh first invite>"
+$env:ARENA_SELLER_INVITE="<fresh second invite>"
+python scripts/run_full_hosted_pawnhouse_demo.py
+```
+
+Verified local PostgreSQL evidence on 2026-07-25:
+
+- eight Rule Agents completed five rounds across all four goods: 40 decisions,
+  20 FCFS pairings, 60 negotiation messages, five portfolio-close snapshots
+  per participant, four frozen final prices, and eight terminal rankings;
+- two Hosted Agents completed five durable Runtime runs: 10 decisions, five
+  pairings, 10 negotiation messages, five closed rounds, and two rankings;
+- an older accepted Hosted negotiation remained blocked in `settle` with one
+  pending settlement. Automatic orchestration did not move inventory or skip
+  the chain-confirmation gate.
+
 > 状态：当前跨模块实施状态与建议顺序。
 
-Arena 402 已完成 Hosted Runtime 与单轮 Pawnhouse 交易的本地开发闭环，并已建立
+Arena 402 已完成 Hosted Runtime 与五回合 Pawnhouse 游戏的本地开发闭环，并已建立
 确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 游戏适配、
-通用 PaymentMandate、多回合自动调度与生产实机验收仍未完成。Hosted 方向以
+通用 PaymentMandate 与生产实机验收仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
@@ -134,11 +159,12 @@ create game
       `004` HTTP 幂等迁移、默认关闭的 capability/API 壳，以及保留 Local Connector
       的最小 `/agents` 创建 UI。
 
-这些完成项是基础能力，不等于完整游戏已经可运行。
+这些完成项已构成可运行的后端游戏闭环，但不代表真实支付或生产部署已验收。
 
 ## 当前缺口
 
-- [ ] 当前持久化演示聚焦一轮；仍缺 N 回合自动推进、完整终场调度和生产 Operator API。
+- [x] 后端已完成 N 回合自动推进、事件揭晓、Round close、冻结终场价格和排名。
+- [ ] 生产仍缺经过认证的 Game Operator API。
 - [ ] 生产 Tencent CAM/SSM 三身份、真实 Provider Key 与服务器离线连续性尚未实机验收。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
@@ -147,7 +173,8 @@ create game
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
 - [ ] 前端尚无 Game Lobby、Game View、Result 和对应 Realtime 数据流。
-- [ ] 缺少事件牌组、可复核随机性和最终结算价生成器。
+- [x] 固定五回合事件表、schedule commitment、结束后 seed 揭晓与冻结终场价格已实现；
+      可随机洗牌的事件牌组仍属后续扩展。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令
       运行双 Hosted Agent 至冻结结算意图，并输出安全公开证据。
 
@@ -223,7 +250,7 @@ create game
 - [x] 使用 PostgreSQL queue/lease，比赛 Task、validation 与 lifecycle 分开领取。
 - [x] Provider 请求发送前持久化 Attempt；unknown 不盲目重放。
 - [x] Arena Worker 独立运行 Finalizer，Hosted Worker 宕机时仍可收敛 expired Task。
-- [x] 本地双 Hosted Agent 在客户端脚本仅等待 HTTP 状态的情况下继续执行完整单轮。
+- [x] 本地双 Hosted Agent 在客户端脚本仅等待 HTTP 状态的情况下持续完成五回合。
 - [ ] 在真实服务器关闭浏览器、重启进程并验证连续性与最小权限拒绝证据。
 
 ### Phase 6：Arena 与 Connector 接线（M2）
@@ -234,8 +261,11 @@ create game
 - [ ] Connector `task.dispatch` ACK 与唯一 terminal Result 分离；不解析
    `runtime.message` 或 stdout 作为动作。
 - [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`。
-- [x] 实现单轮所需的持久化 Round、Pool、Pairing、Negotiation、Inventory、
-      Event 和排名基础。
+- [x] 实现完整 N 回合的持久化 Round、Pool、Pairing、Negotiation、Inventory、
+      Event、Round portfolio snapshot、final settlement price 和排名闭环。
+- [x] Arena Worker 自动排队每轮 Hosted Runtime；所有 Decide Task 先创建，
+      Provider Task 有界并发，不同 pairing 并发协商、每个 pairing 内保持 turn 顺序。
+- [x] 未结算的 accepted pairing 将回合保持在 `settle`，不会进入下一回合。
 - [x] 建立公开协商/结算时间线与 owner-only usage/latency/Attempt 投影。
 
 ### Phase 7：PaymentMandate 与 Settlement

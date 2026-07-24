@@ -1,5 +1,5 @@
 export const CONNECTOR_API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  process.env.NEXT_PUBLIC_API_URL || ''
 ).replace(/\/$/, '');
 
 export type PairingStatus = 'pending' | 'approved' | 'consumed' | 'expired' | string;

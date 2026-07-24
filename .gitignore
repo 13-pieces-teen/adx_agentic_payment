@@ -11,6 +11,7 @@
 # Tool-local state
 .claude/settings.local.json
 .codex/
+.tmp/
 
 # Dependencies and build output
 node_modules/

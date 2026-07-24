@@ -1,8 +1,8 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：已批准实施；Phase 0–3 基础与 Phase 4 控制面/UI 测试壳已完成，
-> 生产 PostgreSQL 控制仓库、真实 SSM/Provider 与 Durable Worker 待实现
-> 最后更新：2026-07-24
+> 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与五回合游戏编排已完成，
+> 真实 Tencent SSM/Provider、Connector 游戏 Adapter 和生产 E2E 待验收
+> 最后更新：2026-07-25
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
@@ -341,12 +341,12 @@ Hosted Runtime 最终需要真实 Game/Participant/Round 外键。当前 Phase 1
 | Phase 0 | Spec、Plan、边界与威胁模型 | 已完成 |
 | Phase 1 | 契约、迁移与持久化 identity/binding/task foundation | 基础实现完成；共享 repository contract suite 待补 |
 | Phase 2 | SecretStore、Tencent SSM 与 Provider capability | Port/registry 已实现；真实 Tencent SSM/CAM 未完成 |
-| Phase 3 | Fake/真实 Provider Adapter 与结构化输出 | Fake Provider、PromptBuilder 与 DirectModelDriver 测试基础已实现；真实 Provider Adapter 与 durable Worker 接线未完成 |
-| Phase 4 | Hosted Agent API、创建 UI 与 readiness | 控制面、幂等迁移、受门控 API 与最小 UI 壳已实现；生产组合仍关闭 |
-| Phase 5 | Durable Worker、deadline、retry 与恢复 | 未开始 |
-| Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | 未开始 |
-| Phase 7 | PaymentMandate/Settlement 接线 | 独立依赖，未开始 |
-| Phase 8 | 单机部署、真实 E2E 与负载校准 | 未开始 |
+| Phase 3 | Fake/真实 Provider Adapter 与结构化输出 | Fake、DeepSeek/OpenAI-compatible Adapter、PromptBuilder、DirectModelDriver 和 Worker 接线已实现；真实 Key 验收待生产部署 |
+| Phase 4 | Hosted Agent API、创建 UI 与 readiness | 控制面、幂等迁移、受门控 API、生产 PostgreSQL 组合与最小 UI 壳已实现 |
+| Phase 5 | Durable Worker、deadline、retry 与恢复 | PostgreSQL queue/lease、Attempt、Finalizer 与独立 Worker 已实现；真实服务器重启验收待完成 |
+| Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | Hosted/rule 已完成，并可自动执行五回合；Connector Adapter 待实现 |
+| Phase 7 | PaymentMandate/Settlement 接线 | 单笔 EIP-3009 意图/恢复/确认后库存提交已实现；通用 Mandate 与新鲜交易待完成 |
+| Phase 8 | 单机部署、真实 E2E 与负载校准 | Compose/资源限制已实现；真实 SSM/Provider/支付和负载校准待完成 |
 | Phase 9 | Native A2A、Agent Studio、多 Runtime | Post-MVP |
 
 依赖关系：
