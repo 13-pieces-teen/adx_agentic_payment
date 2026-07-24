@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<!--
+  Arena 402 · 代币一键导入体验页(测试网 / 参考实现)
+
+  ⚠️ 路径定位(重要):本页是 MetaMask / 桌面浏览器插件路径的参考实现,走
+     wallet_watchAsset 一键导入。它 **不是** 手机端最终方案。
+     手机端最终走 injpass:用户 Passkey 建钱包,代币显示靠 injpass/Injective 社区
+     的 **代币列表批量导入**(见 token-list.draft.json + WALLET_INTEGRATION_STATUS.md),
+     不依赖 watchAsset(injpass 大概率不支持 watchAsset)。
+     iOS MetaMask 无 DApp 浏览器,一键导入在 iOS MetaMask 上不可用 —— 这是本页保留
+     "复制地址+手动导入"降级路径的原因。
+
+  目的:让你在 PC(装 MetaMask 插件)上真实走一遍"用户导入 arena402-m / -g"的
+  体验,并作为前端集成 watchAsset 的参数参考。参数(地址/decimals/网络)真实。
+
+  终态四环节里,本页覆盖 ②加网络 + ③一键导入;①用户注册钱包(injpass 扫码)与
+  ④图标托管 URL 由平台/前端补齐。图标 URL 未就位时,钱包会显示默认图标。
+
+  钱包兼容:
+   - 检测到 window.ethereum(MetaMask App 内置浏览器 / 桌面插件):走一键 watchAsset。
+   - 检测不到(如 injpass 或普通手机浏览器):降级为"复制地址 + 手动导入指引"。
+     injpass 的 watchAsset 能力待确认;确认后可在此补条件分支。
+
+  测试网参数硬编码自 2026-07-25 部署结果;正式版应从 ../deployments.json 读。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Arena 402 · 导入代币</title>
+<style>
+  :root {
+    --gold: #c6a15a; --green: #3a9678; --bg: #0f0f0e; --card: #17171a;
+    --line: #2a2a2e; --text: #ece7dc; --muted: #8a857a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 24px 18px calc(32px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 8px 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 18px; margin-bottom: 14px; }
+  .row { display: flex; align-items: center; gap: 14px; }
+  .icon { width: 48px; height: 48px; border-radius: 50%; flex: none; object-fit: cover;
+    background: #222; border: 1px solid var(--line); }
+  .meta { flex: 1; min-width: 0; }
+  .sym { font-size: 16px; font-weight: 600; }
+  .desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .addr { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace;
+    word-break: break-all; margin-top: 6px; }
+  button { font-size: 15px; font-weight: 600; border: none; border-radius: 12px;
+    padding: 14px 16px; width: 100%; cursor: pointer; margin-top: 14px;
+    transition: opacity .15s; touch-action: manipulation; }
+  button:active { opacity: .7; }
+  .btn-net { background: #1f1f24; color: var(--text); border: 1px solid var(--line); }
+  .btn-m { background: var(--gold); color: #1a1206; }
+  .btn-g { background: var(--green); color: #04140e; }
+  .btn-copy { background: transparent; color: var(--muted); border: 1px solid var(--line);
+    padding: 10px; font-size: 13px; font-weight: 500; }
+  .status { font-size: 13px; margin-top: 16px; padding: 12px 14px; border-radius: 10px;
+    line-height: 1.5; display: none; }
+  .status.show { display: block; }
+  .ok { background: rgba(58,150,120,.15); color: #7fd8b8; }
+  .err { background: rgba(200,80,80,.15); color: #e89393; }
+  .warn { background: rgba(198,161,90,.15); color: var(--gold); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 20px; line-height: 1.6; }
+  code { background: #000; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏛️ Arena 402 · 导入代币</h1>
+  <div class="sub">把王城典当行的纪念币与游戏币加入你的钱包。<br/>测试网络(Injective EVM testnet)。</div>
+
+  <button id="net" class="btn-net">① 添加 Injective 测试网络</button>
+
+  <div class="card">
+    <div class="row">
+      <img class="icon" id="icon-m" alt="arena402-m" />
+      <div class="meta">
+        <div class="sym">arena402-m</div>
+        <div class="desc">纪念币 · 不可转让(soulbound)</div>
+      </div>
+    </div>
+    <div class="addr" id="addr-m"></div>
+    <button class="btn-m" data-token="m">② 导入 arena402-m</button>
+    <button class="btn-copy" data-copy="m">复制合约地址</button>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <img class="icon" id="icon-g" alt="arena402-g" />
+      <div class="meta">
+        <div class="sym">arena402-g</div>
+        <div class="desc">游戏币 · 参赛钱包间可转</div>
+      </div>
+    </div>
+    <div class="addr" id="addr-g"></div>
+    <button class="btn-g" data-token="g">② 导入 arena402-g</button>
+    <button class="btn-copy" data-copy="g">复制合约地址</button>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <div class="hint" id="hint"></div>
+</div>
+
+<script>
+// ── 测试网参数(正式版从 deployments.json 读)──────────────────
+const CHAIN = {
+  chainIdHex: "0x59f",                       // 1439
+  chainName: "Injective EVM Testnet",
+  nativeCurrency: { name: "Injective", symbol: "INJ", decimals: 18 },
+  rpcUrls: ["https://k8s.testnet.json-rpc.injective.network/"],
+  blockExplorerUrls: ["https://testnet.blockscout.injective.network/"],
+};
+const TOKENS = {
+  m: {
+    address: "0xE6b9865a5fbbb45bF58b8235D02Ec40d97D58E8d",
+    symbol: "arena402-m", decimals: 0,
+    // TODO: 前端上传图标后替换为公开 https URL(见 token-icons/README.md)
+    image: "",
+  },
+  g: {
+    address: "0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884",
+    symbol: "arena402-g", decimals: 6,
+    image: "",
+  },
+};
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+function show(msg, kind) {
+  statusEl.textContent = msg;
+  statusEl.className = "status show " + (kind || "");
+}
+const hasWallet = () => typeof window.ethereum !== "undefined";
+
+// 渲染地址 + 本地占位图标(同目录 token-icons 下)
+$("addr-m").textContent = TOKENS.m.address;
+$("addr-g").textContent = TOKENS.g.address;
+$("icon-m").src = TOKENS.m.image || "token-icons/arena402-m.png";
+$("icon-g").src = TOKENS.g.image || "token-icons/arena402-g.png";
+
+// ── ① 添加网络 ────────────────────────────────────────────────
+$("net").addEventListener("click", async () => {
+  if (!hasWallet()) return degraded();
+  try {
+    await window.ethereum.request({ method: "wallet_addEthereumChain", params: [CHAIN] });
+    show("✅ 已添加 / 切换到 Injective 测试网络。现在可以导入代币了。", "ok");
+  } catch (e) {
+    show("添加网络失败:" + (e && e.message ? e.message : e), "err");
+  }
+});
+
+// ── ② 一键导入代币(wallet_watchAsset, EIP-747)────────────────
+document.querySelectorAll("button[data-token]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const t = TOKENS[btn.dataset.token];
+    if (!hasWallet()) return degraded();
+    try {
+      const added = await window.ethereum.request({
+        method: "wallet_watchAsset",
+        params: {
+          type: "ERC20",
+          options: {
+            address: t.address,
+            symbol: t.symbol.replace(/[^A-Za-z0-9]/g, "").slice(0, 11) || "ARENA", // 部分钱包对 symbol 有格式限制
+            decimals: t.decimals,
+            image: t.image || undefined,
+          },
+        },
+      });
+      show(added ? `✅ ${t.symbol} 已加入钱包。` : `已取消导入 ${t.symbol}。`, added ? "ok" : "warn");
+    } catch (e) {
+      show(`导入 ${t.symbol} 失败:` + (e && e.message ? e.message : e), "err");
+    }
+  });
+});
+
+// ── 复制地址(降级路径 & 通用)────────────────────────────────
+document.querySelectorAll("button[data-copy]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const t = TOKENS[btn.dataset.copy];
+    try { await navigator.clipboard.writeText(t.address); show(`已复制 ${t.symbol} 合约地址。`, "ok"); }
+    catch { show("复制失败,请手动选择地址复制。", "warn"); }
+  });
+});
+
+// ── 无钱包降级(injpass / 普通手机浏览器)─────────────────────
+function degraded() {
+  show("未检测到浏览器钱包。请在 MetaMask App 的内置浏览器中打开本页,或复制上方合约地址在钱包里手动导入。", "warn");
+}
+
+// 首屏提示 + 环境自检
+(function init() {
+  const h = $("hint");
+  if (hasWallet()) {
+    h.innerHTML = "检测到浏览器钱包 ✓ 先点①添加网络,再点②导入。<br/>"
+      + "手机端请在 <b>MetaMask App 内置浏览器</b> 打开本页,一键才生效。";
+  } else {
+    h.innerHTML = "<b>未检测到钱包。</b>手机上请用 <b>MetaMask App → 内置浏览器</b> 打开本页;"
+      + "或复制合约地址在钱包中手动导入。<br/>injpass 等其他钱包的一键能力待确认。";
+    degraded();
+  }
+})();
+</script>
+</body>
+</html>

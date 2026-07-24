@@ -1,0 +1,46 @@
+{
+  "_note": "Arena 402 代币列表提交草稿(格式无关,待 injpass/Injective 社区规范确认后转最终格式)。",
+  "_status": "DRAFT — 字段值真实(已上链 testnet 1439),但 schema 是通用 Uniswap tokenlist 风格的占位。提交前必须核对 injpass/社区要求的确切 schema、字段名、提交仓库与审核流程。",
+  "_todo": [
+    "联系 injpass 团队确认:自发 ERC-20 如何进入 injpass 钱包资产显示(批量导入/社区代币列表)。",
+    "确认代币列表的确切 schema(是否 Uniswap tokenlist standard、logoURI 尺寸/格式要求、chainId 表示)。",
+    "确认提交渠道(仓库 PR / 后台表单 / injpass mini app 注册)与审核流程。",
+    "前端出图 → 上传 CDN/IPFS 拿公开 https URL → 替换下方 logoURI 占位。",
+    "确认 testnet 代币是否需要单独列表,还是与 mainnet 共用(上主网时会换地址)。"
+  ],
+  "name": "Arena 402 Tokens",
+  "timestamp": "PENDING_STAMP_AT_SUBMISSION",
+  "version": { "major": 0, "minor": 1, "patch": 0 },
+  "tokens": [
+    {
+      "chainId": 1439,
+      "address": "0xE6b9865a5fbbb45bF58b8235D02Ec40d97D58E8d",
+      "name": "Arena 402 Memorial",
+      "symbol": "arena402-m",
+      "decimals": 0,
+      "logoURI": "TODO_UPLOAD_ICON_URL(assets/token-icons/arena402-m.png)",
+      "tags": ["soulbound", "non-transferable", "memorial"],
+      "_extensions": {
+        "soulbound": true,
+        "transferable": false,
+        "network": "injective-evm-testnet",
+        "note": "纪念币,mint-only,除 owner 铸造外任何账户不可转(transfer/transferFrom/approve 全 revert)。"
+      }
+    },
+    {
+      "chainId": 1439,
+      "address": "0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884",
+      "name": "Arena 402 Gold",
+      "symbol": "arena402-g",
+      "decimals": 6,
+      "logoURI": "TODO_UPLOAD_ICON_URL(assets/token-icons/arena402-g.png)",
+      "tags": ["game", "whitelist-gated"],
+      "_extensions": {
+        "whitelistGated": true,
+        "supportsEip3009": true,
+        "network": "injective-evm-testnet",
+        "note": "游戏币,白名单受限转账(只有登记参赛钱包之间可转,DEX 池地址进不了白名单)。"
+      }
+    }
+  ]
+}

@@ -6,7 +6,10 @@
   "type": "module",
   "scripts": {
     "compile": "hardhat compile",
-    "deploy": "tsx scripts/deploy.ts"
+    "deploy": "tsx scripts/deploy.ts",
+    "deploy:tokens": "tsx scripts/deploy-tokens.ts",
+    "node": "hardhat node",
+    "test": "node --test test/tokens.test.mjs"
   },
   "devDependencies": {
     "hardhat": "^2.22.0",
