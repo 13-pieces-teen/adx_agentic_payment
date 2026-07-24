@@ -67,7 +67,10 @@ from hosted_agent_control_plane import (
 from hosted_agent_runtime import CapabilityRegistry
 from web.hosted_agent_api import create_hosted_agent_router
 from web.arena_participation_api import create_arena_participation_router
-from web.pawnhouse_api import create_pawnhouse_router
+from web.pawnhouse_api import (
+    create_pawnhouse_read_router,
+    create_pawnhouse_router,
+)
 
 
 # ============================================================
@@ -241,6 +244,13 @@ def _pawnhouse_dev_requested() -> bool:
     ).strip().lower() in {"1", "true", "yes"}
 
 
+def _pawnhouse_core_requested() -> bool:
+    return os.getenv(
+        "ADX_ARENA_CORE_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _allowed_origins(production: bool) -> list[str]:
     configured = [
         value.strip().rstrip("/")
@@ -267,7 +277,11 @@ def _allowed_origins(production: bool) -> list[str]:
 def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     production_connector = _production_connector_enabled(connector_demo_enabled)
     environment = os.getenv("ADX_ENV", "").strip().lower()
-    if _pawnhouse_dev_requested() and environment != "development":
+    pawnhouse_dev_enabled = _pawnhouse_dev_requested()
+    pawnhouse_core_enabled = (
+        _pawnhouse_core_requested() or pawnhouse_dev_enabled
+    )
+    if pawnhouse_dev_enabled and environment != "development":
         raise RuntimeError(
             "ADX_ARENA_DEV_CONTROL is allowed only with ADX_ENV=development"
         )
@@ -322,20 +336,24 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     pawnhouse_orchestrator_task: asyncio.Task[None] | None = None
     settlement_confirmation_reader: EvmJsonRpcConfirmationReader | None = None
     pawnhouse_dev_token = ""
-    if _pawnhouse_dev_requested():
+    pawnhouse_dsn = ""
+    if pawnhouse_core_enabled:
         pawnhouse_dsn = os.getenv(
             "ADX_ARENA_CORE_DATABASE_URL",
             "",
         ).strip()
         if not pawnhouse_dsn:
             raise RuntimeError(
-                "ADX_ARENA_CORE_DATABASE_URL is required for Pawnhouse dev control"
+                "ADX_ARENA_CORE_DATABASE_URL is required when Arena Core is enabled"
             )
+        pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
+
+    if pawnhouse_dev_enabled:
         pawnhouse_dev_token = os.getenv(
             "ADX_ARENA_DEV_TOKEN",
             "",
         ).strip()
-        pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
+        assert pawnhouse_repository is not None
         pawnhouse_orchestrator = PawnhouseGameOrchestrator(
             repository=pawnhouse_repository
         )
@@ -492,18 +510,27 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
 
     if pawnhouse_repository is not None:
         app.state.pawnhouse_repository = pawnhouse_repository
-        app.include_router(
-            create_pawnhouse_router(
-                repository=pawnhouse_repository,
-                dev_token=pawnhouse_dev_token,
-                auth=(
-                    connector_bundle.auth
-                    if connector_bundle is not None
-                    else None
-                ),
-                confirmation_reader=settlement_confirmation_reader,
+        if pawnhouse_dev_enabled:
+            app.state.pawnhouse_mode = "development"
+            app.include_router(
+                create_pawnhouse_router(
+                    repository=pawnhouse_repository,
+                    dev_token=pawnhouse_dev_token,
+                    auth=(
+                        connector_bundle.auth
+                        if connector_bundle is not None
+                        else None
+                    ),
+                    confirmation_reader=settlement_confirmation_reader,
+                )
             )
-        )
+        else:
+            app.state.pawnhouse_mode = "read_only"
+            app.include_router(
+                create_pawnhouse_read_router(
+                    repository=pawnhouse_repository
+                )
+            )
 
     # ---- Singletons (in production: proper DI container) ----
     registry = AgentRegistry()

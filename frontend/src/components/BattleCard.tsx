@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { Swords, Clock, Target, Zap } from 'lucide-react';
-import { Battle } from '@/lib/supabase';
+import { Battle } from '@/lib/arena-api';
 
 const OUTCOME_EMOJI: Record<string, string> = {
   buyer_win: '🟢',

@@ -1,0 +1,162 @@
+/* ============================================================
+   arena402 — CRT Terminal (设计方案 v2 §4)
+   Negotiation viewer rendered as a CRT terminal window.
+   Colors: buyer --paper · seller --paper-dim · system --grey-dark.
+   Separate sheet — do not merge into style.css / game.css.
+   ============================================================ */
+
+.crt {
+  position: relative;
+  border: 1px solid var(--line-strong);
+  background: #050506;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* faint CRT curvature glow + scanlines */
+.crt::before {
+  content: '';
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse at center, rgba(244,242,236,0.045) 0%, transparent 72%),
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.28) 0px, rgba(0,0,0,0.28) 1px, transparent 1px, transparent 3px);
+  pointer-events: none;
+  z-index: 2;
+}
+.crt::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: rgba(244,242,236,0.02);
+  pointer-events: none;
+  z-index: 3;
+  animation: crtFlicker 4s steps(12) infinite;
+}
+@keyframes crtFlicker {
+  0%, 92%, 100% { opacity: 0; }
+  93% { opacity: 1; }
+  96% { opacity: 0.4; }
+}
+
+/* title bar with traffic dots */
+.crt-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(244,242,236,0.04);
+}
+.crt-dots { display: inline-flex; gap: 5px; }
+.crt-dots i {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+}
+.crt-dots i:first-child { background: var(--paper-dim); }
+.crt-bar-title {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--paper-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crt-meta {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--grey-dark);
+}
+
+/* terminal body */
+.crt-body {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 14px 14px 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.85;
+}
+
+.crt-line { white-space: pre-wrap; word-break: break-word; min-height: 1.85em; }
+.crt-line.sys    { color: var(--grey-dark); }
+.crt-line.buyer  { color: var(--paper); }
+.crt-line.seller { color: #c4c4be; }
+.crt-line.quote  { padding-left: 14px; font-style: italic; opacity: 0.85; }
+.crt-line.ok     { color: #9fbf9b; }
+.crt-line.bad    { color: #bf8f8b; }
+.crt-line.hl     { letter-spacing: 0.14em; }
+.crt-line.ok.hl  { background: rgba(159,191,155,0.10); animation: crtConfirm 0.9s ease 1; }
+.crt-line.bad.hl { background: rgba(191,143,139,0.10); }
+@keyframes crtConfirm {
+  0%, 40%, 80% { background: rgba(159,191,155,0.32); }
+  20%, 60%, 100% { background: rgba(159,191,155,0.10); }
+}
+
+/* thinking indicator + progress bar */
+.crt-line.think { color: var(--grey); }
+.crt-progress {
+  display: inline-block;
+  width: 90px; height: 7px;
+  margin-left: 10px;
+  border: 1px solid var(--line-strong);
+  vertical-align: middle;
+  overflow: hidden;
+}
+.crt-progress-fill {
+  display: block;
+  height: 100%;
+  width: 40%;
+  background: var(--paper-dim);
+  animation: crtThink 1.4s ease-in-out infinite;
+}
+@keyframes crtThink {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* blinking block cursor */
+.crt-cursor {
+  color: var(--paper);
+  animation: crtBlink 1.06s steps(1) infinite;
+}
+@keyframes crtBlink { 50% { opacity: 0; } }
+
+/* 谈崩抖动 */
+.crt-shake { animation: crtShake 0.45s ease; }
+@keyframes crtShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-5px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+
+/* 成交全屏微闪 */
+body.gm-flash::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: var(--paper);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 400;
+  animation: gmFlash 0.45s ease;
+}
+@keyframes gmFlash {
+  0% { opacity: 0; }
+  18% { opacity: 0.14; }
+  100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crt::after, .crt-cursor, .crt-progress-fill,
+  .crt-line.ok.hl, .crt-shake { animation: none; }
+  body.gm-flash::after { display: none; }
+}
