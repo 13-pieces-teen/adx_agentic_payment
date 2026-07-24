@@ -1,5 +1,6 @@
 {
 	admin 127.0.0.1:2019
+	default_sni {$ADX_PUBLIC_HOST}
 	servers {
 		protocols h1 h2 h3
 	}
