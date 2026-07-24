@@ -17,8 +17,12 @@
   persisted confirmation.
 - [ ] Milestone 4 live acceptance: explicitly approved fresh testnet transfer,
   public transaction evidence, and recovery-driven inventory commit.
-- [ ] Milestone 5: production worker/Secret Manager boundaries and operating
-  guide.
+- [x] Milestone 5 foundation: separate Hosted Worker, Credential Controller,
+  Arena Coordinator/Deadline Finalizer/settlement recovery process,
+  least-privilege database logins, fail-closed profiles, and operator runbook.
+- [ ] Milestone 5 live acceptance: real Tencent CAM/SSM identities, real
+  Provider credential, server restart/offline continuity, and permission-denial
+  evidence.
 
 The Milestone 2 demonstration is:
 
@@ -64,9 +68,10 @@ transaction was signed or broadcast.
 
 > 状态：当前跨模块实施状态与建议顺序。
 
-Arena 402 已具备 matching、Connector 和 settlement 三个基础，但新定义的
-Hosted/Local 统一 Runtime、回合制交易游戏和离线支付尚未端到端实现。Hosted
-方向以 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
+Arena 402 已完成 Hosted Runtime 与单轮 Pawnhouse 交易的本地开发闭环，并已建立
+确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 游戏适配、
+通用 PaymentMandate、多回合自动调度与生产实机验收仍未完成。Hosted 方向以
+[`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
 
@@ -133,29 +138,18 @@ create game
 
 ## 当前缺口
 
-- [ ] `games`、`rounds`、`game_agents` 目前只有 Runtime 集成所需的最小基础；
-      仍缺 `holdings`、`pools`、`pairings`、`negotiations`、`neg_messages`、
-      `settlements`、业务 `events`、`settle_table`、`rankings` 的完整迁移和
-      repository。
-- [ ] 缺少持久化回合调度、deadline、恢复和单局状态机。
-- [ ] 缺少生产 PostgreSQL Hosted control repository、真实 Tencent Secret Manager、
-      至少一个真实 HTTPS Provider Adapter、PostgreSQL-backed AttemptRecorder、
-      durable Hosted Worker 和 Credential Controller 进程；write-only HTTP ingress
-      目前只在显式测试组合中可执行，主应用保持 fail closed。
-- [ ] Arena Result Sink/Consumer/Finalizer 尚未接入真实 Game Core 状态机。
-- [ ] 现有 matching 尚未使用 Result Sink 的数据库 `result_received_at` 执行游戏
-      FCFS。
-- [ ] 现有 negotiation 尚未实现新协议的消息上限、轮次上限、谈崩计数和
-      每 Agent 每轮一次配对。
+- [ ] 当前持久化演示聚焦一轮；仍缺 N 回合自动推进、完整终场调度和生产 Operator API。
+- [ ] 生产 Tencent CAM/SSM 三身份、真实 Provider Key 与服务器离线连续性尚未实机验收。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
-- [ ] 接受的协商尚未生成冻结 `SettlementIntent`。
 - [ ] PaymentMandate 的额度、期限、范围、撤销和
       `reserve / consume / release` 尚未实现。
-- [ ] Settlement 尚未把链上确认与 Arena 库存事务幂等连接。
+- [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
+      人工确认闸门。
 - [ ] 前端尚无 Game Lobby、Game View、Result 和对应 Realtime 数据流。
 - [ ] 缺少事件牌组、可复核随机性和最终结算价生成器。
-- [ ] 缺少一个命令运行完整演示和一份对应证据。
+- [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令
+      运行双 Hosted Agent 至冻结结算意图，并输出安全公开证据。
 
 ## 实施顺序
 
@@ -218,36 +212,41 @@ create game
 - [x] 用户可在一个最小 `/agents` 表单一次提交两个幂等 API；原 Key 不回显、不进
       React state/storage，Local Connector 入口保留，Hosted-only 用户可不填
       Connector code 直接登录。
-- [ ] 实现生产 PostgreSQL control repository 与真实 Secret Writer 组合，并完成
-      刷新/重启后的持久化验证。
+- [x] 实现生产 PostgreSQL control repository 与 Tencent SSM Secret Writer
+      组合；真实 CAM/SSM 与刷新/重启验收仍待部署执行。
 - [ ] 实现 replace/revoke/revalidate/PATCH/disable/join 及其并发锁定规则。
-- [ ] 由 Phase 5 Worker 完成可恢复的 `provisioning -> ready/degraded`。
+- [x] Phase 5 Hosted Worker 可恢复地完成 `provisioning -> ready/degraded`。
 
 ### Phase 5：Durable Workers（M1）
 
-1. 独立部署 Arena Core Worker、Hosted Worker 与 Credential Controller，均无公网端口。
-2. 使用 PostgreSQL queue/lease，比赛 Task 与 validation 分开领取。
-3. Provider 请求发送前持久化 Attempt；unknown 不盲目重放。
-4. Hosted Worker 全部宕机时，Arena Finalizer 仍收敛 expired Task。
-5. 浏览器和用户电脑离线后验证 Hosted Agent 的后续 Task 继续执行。
+- [x] 独立定义 Arena Worker、Hosted Worker 与 Credential Controller，均无公网端口。
+- [x] 使用 PostgreSQL queue/lease，比赛 Task、validation 与 lifecycle 分开领取。
+- [x] Provider 请求发送前持久化 Attempt；unknown 不盲目重放。
+- [x] Arena Worker 独立运行 Finalizer，Hosted Worker 宕机时仍可收敛 expired Task。
+- [x] 本地双 Hosted Agent 在客户端脚本仅等待 HTTP 状态的情况下继续执行完整单轮。
+- [ ] 在真实服务器关闭浏览器、重启进程并验证连续性与最小权限拒绝证据。
 
 ### Phase 6：Arena 与 Connector 接线（M2）
 
-1. 先用确定性 rule Agent 验证 Game Core。
-2. Hosted、Connector 与 rule Adapter 共用同一 AgentTask/Result schema。
-3. Connector `task.dispatch` ACK 与唯一 terminal Result 分离；不解析
+- [x] 先用确定性 rule Agent 验证 Game Core。
+- [ ] Hosted、Connector 与 rule Adapter 共用同一 AgentTask/Result schema；
+      Hosted/rule 已完成，Connector 游戏 Adapter 尚未接入。
+- [ ] Connector `task.dispatch` ACK 与唯一 terminal Result 分离；不解析
    `runtime.message` 或 stdout 作为动作。
-4. FCFS 只使用 Result Sink 的数据库 `result_received_at`。
-5. 实现持久化回合、Pool、Pairing、Negotiation、Inventory、Event 和排名。
-6. 建立公开协商/结算时间线与 owner-only usage/latency/Attempt 投影。
+- [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`。
+- [x] 实现单轮所需的持久化 Round、Pool、Pairing、Negotiation、Inventory、
+      Event 和排名基础。
+- [x] 建立公开协商/结算时间线与 owner-only usage/latency/Attempt 投影。
 
 ### Phase 7：PaymentMandate 与 Settlement
 
 1. 冻结 Mandate 的 Game/network/token/payee、单笔/累计额度、期限、撤销和签名域。
 2. 实现并发 Deal 的 `reserve / consume / release`。
-3. `accept` 后冻结唯一 `SettlementIntent`，提交前再次校验 Mandate。
-4. 调用现有 SettlementSDK/Facilitator，恢复 unknown/reorg。
-5. 链上确认后幂等提交现金和货物。
+- [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；Mandate
+      模式仍待实现。
+- [x] 本地桥接现有 SettlementSDK/Facilitator，并由 Arena Worker 只读恢复
+      submitted/unknown。
+- [x] 链上确认后幂等提交现金和货物。
 6. Hosted Worker 与 guest signer 的 IAM、数据库和密钥域完全分离。
 
 详细契约见
@@ -256,7 +255,7 @@ create game
 ### Phase 8：前端、部署、E2E 与校准（M3）
 
 1. 增加 Game Lobby、Game View、Result 与公开/私有投影。
-2. 在单机 Compose 中加入三个无公网端口 Worker 与独立权限。
+- [x] 在单机 Compose 中加入三个无公网端口 Worker 与独立权限。
 3. 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
 4. 跑 2、4、8、16 Agent，记录 P50/P95/P99、queue age、timeout、retry、Token、
    每轮 wall time 和资源占用。

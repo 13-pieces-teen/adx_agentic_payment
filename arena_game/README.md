@@ -57,3 +57,18 @@ persisted public timeline. A Game without settlement configuration remains at
 `accepted_pending_settlement`. A Game using `single_eip3009` freezes an
 immutable intent at `authorization_requested`; neither path moves cash or
 inventory until Arena has persisted and checked the exact chain confirmation.
+
+## Production worker boundary
+
+`python -m arena_game.production_worker` runs without a public port and
+combines three independent loops:
+
+- the Pawnhouse Hosted-task coordinator;
+- the Arena-owned Deadline Finalizer, which keeps running when Hosted model
+  workers are unavailable;
+- read-only settlement recovery followed by idempotent inventory commit.
+
+The process has the `adx_arena_core` database role and HTTPS read access to the
+configured Injective RPC/Blockscout endpoints. It has no wallet, private key,
+Secret Manager permission, Facilitator submission credential, or transaction
+broadcast interface.

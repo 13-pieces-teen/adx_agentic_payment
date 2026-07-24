@@ -1,11 +1,11 @@
-"""Phase 4 network-independent Hosted Agent control-plane foundation.
+"""Hosted Agent control plane, persistence, and lifecycle boundaries."""
 
-This package is not a production API or a production persistence adapter.  It
-defines strict domain/service contracts and an explicitly test-only in-memory
-repository so the later FastAPI and PostgreSQL adapters have a security
-boundary to implement.
-"""
-
+from .credential_controller import (
+    CredentialLifecycleJob,
+    CredentialLifecycleRepository,
+    DurableCredentialController,
+    PostgresCredentialLifecycleRepository,
+)
 from .models import (
     CONTROL_PLANE_SCHEMA_VERSION_V1,
     AgentIdentityStatus,
@@ -46,6 +46,10 @@ from .services import (
 )
 
 __all__ = [
+    "CredentialLifecycleJob",
+    "CredentialLifecycleRepository",
+    "DurableCredentialController",
+    "PostgresCredentialLifecycleRepository",
     "CONTROL_PLANE_SCHEMA_VERSION_V1",
     "AgentIdentityStatus",
     "CapabilityCatalogService",

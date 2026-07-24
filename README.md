@@ -88,19 +88,20 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 
 ## 当前实现状态
 
-仓库已经具备多项可复用基础，但尚未运行完整游戏闭环：
+仓库已跑通双 Hosted Agent 的本地开发闭环至冻结结算意图；新鲜 testnet 交易和
+生产 Tencent SSM/真实 Provider 验收仍未执行：
 
 | 模块 | 当前状态 |
 |------|----------|
-| 王城典当行 Game Core | Milestone 1 已实现四种货物、20 金初始组合、定点金额、事件 DSL、5 回合演示事件表、回合状态机、终场估值与排名；市场、协商与 Runtime 接线在后续 Milestone |
+| 王城典当行 Game Core | 已实现四种货物、20 金初始组合、事件/回合/排名、PostgreSQL 池与 FCFS、有限轮协商、双 Hosted Agent 接线和冻结结算意图 |
 | Python matching/Arena | `matching/` 与 `web/api.py` 提供内存版 Agent、listing/intent、matching、有限 negotiation 和 ELO/Arena 原型；它不是新游戏的持久化回合引擎 |
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；尚未接入 `arena.decide` / `arena.negotiate` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
-| 统一 Runtime 基础 | 已实现版本化 `AgentTask -> AgentTaskResult` 契约、Task Factory、Result Sink/Consumer、独立 Finalizer、Memory/PostgreSQL repository 与角色隔离；尚未接入 Game Core 或 Local Connector |
+| 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；Local Connector 游戏适配仍待实现 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
 | 静态 Arena 前端 | `arena402/index.html` 已有 Supabase 驱动的 Agent、Battle、Market 和 ELO 页面；新的 `/game` 回合视图、数据表和实时状态机尚未实现 |
-| 游戏业务持久化 | `games`、`rounds`、`pools`、`pairings`、`negotiations`、`settlements`、`rankings` 等目标模型尚未落地 |
-| 端到端集成 | 协商接受尚未自动生成冻结结算意图；PaymentMandate 尚未实现；链上确认也尚未驱动货物和现金的幂等更新 |
+| 游戏业务持久化 | `006`–`009` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit；完整多回合调度仍待补齐 |
+| 端到端集成 | 双 Hosted Agent 可完成买卖、FCFS、协商并冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
 | 标准 HTTP x402 | 尚未实现 `402 Payment Required` challenge、支付 header、paid retry 或标准公共 Facilitator 兼容 |
 
 现有 settlement 是 **EIP-3009 direct-relay prototype**，不能描述为完整标准
@@ -113,7 +114,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `matching/`, `web/` | 现有内存 matching、negotiation 和 Arena/ELO 原型 |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | 旧版 Supabase schema、Connector Gateway 迁移、Arena Agent/Runtime/Task 的 Phase 1 基础，以及 Hosted HTTP 幂等 `004` 迁移；完整 Pool/Pairing/Inventory/Settlement 游戏迁移仍未实现 |
+| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`009` Pawnhouse 市场、Hosted orchestration 和确认后结算迁移 |
 | `arena402/` | 根 Vercel 部署使用的 CDN-only 静态前端 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
@@ -121,7 +122,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 | `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、PostgreSQL repository、Tencent SSM 生产组合与显式 local-development 组合 |
 | `docs/hosted-arena-agent-*.md` | Hosted/Local 统一 Runtime 的已批准规格、实施计划与当前阶段状态 |
 | `frontend/` | Connector onboarding、控制台，以及默认受 readiness 关闭的最小 Hosted Agent 创建壳 |
-| `deploy/`, `docker-compose.production.yml` | Connector 控制面部署与安装器 |
+| `deploy/`, `docker-compose.production.yml` | Connector 控制面，以及可选 Hosted Worker、Credential Controller、Arena Worker 的 fail-closed 单机部署 |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 结算原型 |
 | `agent-arena/specs/` | 已完成且冻结的 settlement 开发记录 |
 | `docs/game-design.md` | 当前权威游戏机制与跨模块 I/O |
@@ -171,9 +172,9 @@ docker compose -f docker-compose.local.yml down -v
 开发栈使用，禁止复用到公网或共享环境。生产组合仍使用 Tencent Secret Manager、
 独立 Worker 和独立数据库角色。
 
-这条本地路径当前验证的是“登录 -> 创建 Hosted Agent -> 验证模型凭据 -> Agent
-持续在线”的控制面与 Runtime 基础。完整持久化回合、撮合协商、Injective 支付和库存
-提交仍未组成端到端游戏闭环。
+这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 持久化
+Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结 SettlementIntent”。新鲜 Injective
+testnet 支付仍需要单独的人类确认；通用 PaymentMandate 和多回合自动调度尚未完成。
 
 ## 快速检查现有模块
 
@@ -223,6 +224,7 @@ Settlement 的环境、命令、链上部署信息和验证证据见：
 - Hosted Agent 规格：[`docs/hosted-arena-agent-spec.md`](docs/hosted-arena-agent-spec.md)
 - Hosted Agent 实施计划：[`docs/hosted-arena-agent-implementation-plan.md`](docs/hosted-arena-agent-implementation-plan.md)
 - 游戏结算接线：[`docs/arena-settlement-integration.md`](docs/arena-settlement-integration.md)
+- Hosted/Arena 生产运行：[`docs/hosted-arena-production-runbook.md`](docs/hosted-arena-production-runbook.md)
 - Connector 规格：[`docs/local-agent-connector-spec.md`](docs/local-agent-connector-spec.md)
 - Connector 部署：[`docs/self-hosted-connector-deployment.md`](docs/self-hosted-connector-deployment.md)
 - 前端目标：[`arena402/FRONTEND_GUIDE.md`](arena402/FRONTEND_GUIDE.md)

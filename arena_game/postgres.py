@@ -1668,6 +1668,37 @@ class PostgresPawnhouseRepository:
         )
         return [self._settlement_public(row) for row in rows]
 
+    async def recoverable_settlement_targets(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, str]]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        rows = await self._require_pool().fetch(
+            """
+            SELECT settlement_intent_id, status
+            FROM arena402.settlement_intents
+            WHERE status IN (
+                'submitted',
+                'confirmation_timeout',
+                'chain_confirmed_uncommitted'
+            )
+            ORDER BY created_at, settlement_intent_id
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [
+            {
+                "settlement_intent_id": str(
+                    row["settlement_intent_id"]
+                ),
+                "status": str(row["status"]),
+            }
+            for row in rows
+        ]
+
     async def record_settlement_submission(
         self,
         *,

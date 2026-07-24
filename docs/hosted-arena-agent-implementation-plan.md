@@ -738,12 +738,13 @@ Credential validation 状态机：
   `ADX_HOSTED_AGENTS_ENABLED=true`，在生产依赖尚未组成时也会启动失败，而不会
   回退到 Memory/Fake。
 
-尚未完成生产 PostgreSQL control repository、真实 Tencent Secret Manager、
-Credential validation/Hosted Worker，以及 replace/revoke/revalidate/PATCH/disable/
-join 路由。最小 UI 的两阶段恢复上下文只在当前页面内存中；刷新发生在 Credential
-成功、Agent create 前时，仍依赖未来的 unbound Credential TTL/Controller 或服务端
-resume 流程。当前 UI 也未实现“暂停新建但仍管理已有 Agent”的独立 readiness。
-因此当前 UI 是功能壳，不代表 Hosted Agent 已能持续离线运行。
+2026-07-25 更新：生产 PostgreSQL control repository、Tencent SSM
+Writer/Reader/Controller adapter、DeepSeek/OpenAI-compatible Provider、durable
+validation/Task Worker、独立 Credential Controller、Arena Coordinator/Finalizer 与
+确认恢复 Worker 已落地。生产 Compose 默认关闭这些 profile，并在 IAM 未明确验证时
+fail closed。双 Hosted Agent 已在本地 PostgreSQL 开发栈完成 Decide/Negotiate，
+但真实 Tencent CAM/SSM、真实 Provider Key、服务器重启连续性和越权拒绝证据仍需
+部署验收。replace/revoke/revalidate/PATCH/disable 路由和 UI resume 仍未完成。
 
 ### 11.1 Backend API
 
@@ -902,7 +903,7 @@ credential_id
 
 ```text
 arena-core-worker
-  command: python -m arena_core.worker
+  command: python -m arena_game.production_worker
   public ports: none
   database: Result Consumer + Deadline Finalizer
   cloud secret permission: none
@@ -916,7 +917,7 @@ hosted-agent-worker
   outbound: allowlisted Provider + Tencent API
 
 credential-controller
-  command: python -m hosted_agent_runtime.credential_controller
+  command: python -m hosted_agent_control_plane.production_controller
   public ports: none
   database: credential lifecycle jobs only
   secret permission: revoke/delete only
@@ -988,18 +989,18 @@ E2E：
 
 ### 12.5 退出门槛
 
-- [ ] 浏览器关闭不影响后续 Task；
-- [ ] API 重启不丢 Task；
-- [ ] Worker 重启后没有悬挂永久 running；
-- [ ] 每个 Task 只产生一个业务终态；
-- [ ] 最多两个 Attempt；
-- [ ] request_sent unknown 不盲目重放；
-- [ ] Result Sink/Consumer 重放不重复应用；
-- [ ] Finalizer 与 Result Sink 竞态只有一个终态；
+- [x] 本地双 Hosted Agent 执行不依赖持续打开前端页面；
+- [x] Task、Result、Attempt 与 Runtime Run 持久化在 PostgreSQL；
+- [x] lease 过期任务可重新领取，request_sent unknown 不盲目重放；
+- [x] 每个 Task 只产生一个业务终态；
+- [x] 最多两个 Attempt；
+- [x] Result Sink/Consumer 重放不重复应用；
+- [x] Finalizer 与 Result Sink 竞态只有一个终态；
 - [ ] Credential Controller 与 Worker IAM/DB role 彼此越权失败；
 - [ ] validation complete 函数只接受当前 lease/job/hash，且不会授予 Worker 直接
       Config/Binding 写权；
-- [ ] 2 vCPU/4 GB 主机上有明确并发与内存上限。
+- [x] 2 vCPU/4 GB 单机 Compose 已设置单副本 CPU/内存上限；
+- [ ] 真实服务器浏览器关闭、API/Worker 重启与资源压力仍待验收。
 
 ## 13. Phase 6：Arena 接线与可观测投影
 

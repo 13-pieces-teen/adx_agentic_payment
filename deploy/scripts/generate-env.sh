@@ -105,6 +105,11 @@ else
 fi
 
 postgres_password="$(openssl rand -hex 32)"
+api_database_password="$(openssl rand -hex 32)"
+hosted_worker_database_password="$(openssl rand -hex 32)"
+arena_core_database_password="$(openssl rand -hex 32)"
+credential_controller_database_password="$(openssl rand -hex 32)"
+hosted_fingerprint_pepper_b64="$(openssl rand -base64 48 | tr -d '\n')"
 session_secret="$(openssl rand -hex 48)"
 bootstrap_invite="$(openssl rand -hex 20)"
 bootstrap_invite_hash="$(
@@ -121,6 +126,10 @@ umask 077
   printf 'POSTGRES_DB=adx\n'
   printf 'POSTGRES_USER=adx\n'
   printf 'POSTGRES_PASSWORD=%s\n' "${postgres_password}"
+  printf 'ADX_API_DATABASE_PASSWORD=%s\n' "${api_database_password}"
+  printf 'ADX_HOSTED_WORKER_DATABASE_PASSWORD=%s\n' "${hosted_worker_database_password}"
+  printf 'ADX_ARENA_CORE_DATABASE_PASSWORD=%s\n' "${arena_core_database_password}"
+  printf 'ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD=%s\n' "${credential_controller_database_password}"
   printf '\n'
   printf 'ADX_CONNECTOR_SESSION_SECRET=%s\n' "${session_secret}"
   printf 'ADX_BOOTSTRAP_INVITE_HASH=%s\n' "${bootstrap_invite_hash}"
@@ -133,6 +142,33 @@ umask 077
   printf 'ADX_CONNECTOR_MAX_PENDING_PAIRINGS=500\n'
   printf 'ADX_ENV=%s\n' "${adx_environment}"
   printf 'ADX_API_MAX_CONCURRENCY=256\n'
+  printf '\n'
+  printf 'ADX_HOSTED_AGENTS_ENABLED=false\n'
+  printf 'ADX_ENABLE_HOSTED_RUNTIME=false\n'
+  printf 'ADX_HOSTED_FINGERPRINT_PEPPER_B64=%s\n' "${hosted_fingerprint_pepper_b64}"
+  printf 'ADX_HOSTED_FINGERPRINT_PEPPER_VERSION=1\n'
+  printf 'ADX_TENCENT_SSM_REGION=ap-guangzhou\n'
+  printf 'ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS=0\n'
+  printf 'ADX_TENCENT_SSM_IAM_VERIFIED=false\n'
+  printf 'ADX_TENCENT_SSM_WRITER_SECRET_ID=\n'
+  printf 'ADX_TENCENT_SSM_WRITER_SECRET_KEY=\n'
+  printf 'ADX_TENCENT_SSM_WRITER_TOKEN=\n'
+  printf 'ADX_TENCENT_SSM_READER_SECRET_ID=\n'
+  printf 'ADX_TENCENT_SSM_READER_SECRET_KEY=\n'
+  printf 'ADX_TENCENT_SSM_READER_TOKEN=\n'
+  printf 'ADX_TENCENT_SSM_CONTROLLER_SECRET_ID=\n'
+  printf 'ADX_TENCENT_SSM_CONTROLLER_SECRET_KEY=\n'
+  printf 'ADX_TENCENT_SSM_CONTROLLER_TOKEN=\n'
+  printf 'ADX_OPENAI_COMPATIBLE_ENDPOINT=\n'
+  printf 'ADX_OPENAI_COMPATIBLE_MODELS=\n'
+  printf '\n'
+  printf 'ADX_ENABLE_ARENA_WORKER=false\n'
+  printf 'ADX_ARENA_SETTLEMENT_RPC_URL=https://k8s.testnet.json-rpc.injective.network/\n'
+  printf 'ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL=https://testnet.blockscout.injective.network/api/v2\n'
+  printf 'ADX_ARENA_WORKER_LEASE_SECONDS=600\n'
+  printf 'ADX_ARENA_WORKER_POLL_SECONDS=0.25\n'
+  printf 'ADX_ARENA_FINALIZER_POLL_SECONDS=1\n'
+  printf 'ADX_SETTLEMENT_RECOVERY_POLL_SECONDS=3\n'
   printf '\n'
   printf 'ADX_ACME_EMAIL=%s\n' "${acme_email}"
   printf 'TZ=Asia/Shanghai\n'
