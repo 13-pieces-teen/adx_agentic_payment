@@ -26,6 +26,7 @@ https://{$ADX_PUBLIC_HOST} {
 		output stdout
 		format filter {
 			request>uri replace REDACTED
+			resp_headers>Location replace REDACTED
 			wrap json
 		}
 	}

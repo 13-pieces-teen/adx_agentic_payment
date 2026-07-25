@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_edge_access_logs_never_emit_request_uri_or_query_values() -> None:
+def test_edge_access_logs_never_emit_oauth_urls_or_query_values() -> None:
     for name in (
         "Caddyfile.domain",
         "Caddyfile.ip",
@@ -19,6 +19,7 @@ def test_edge_access_logs_never_emit_request_uri_or_query_values() -> None:
         )
         assert "format filter {" in config
         assert "request>uri replace REDACTED" in config
+        assert "resp_headers>Location replace REDACTED" in config
         assert "wrap json" in config
 
 
