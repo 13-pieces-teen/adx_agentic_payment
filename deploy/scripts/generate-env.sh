@@ -218,6 +218,7 @@ umask 077
   printf 'ADX_ENABLE_ARENA_WORKER=true\n'
   printf 'ADX_ENABLE_SETTLEMENT_WORKER=false\n'
   printf 'ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false\n'
+  printf 'ADX_SETTLEMENT_INTENT_ID=\n'
   printf 'ADX_ENABLE_TESTNET_SIGNER=false\n'
   printf 'ADX_WALLET_SIGNER_URL=http://wallet-signer:8787\n'
   printf 'ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID=1439\n'

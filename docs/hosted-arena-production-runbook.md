@@ -448,8 +448,10 @@ Worker，以及可选 `wallet-signer` 和 `arena-facilitator`。后两者分别�
    内部 signer URL 与至少 32 字节 bearer token；
 5. 先保持 `ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false` 完成 API、数据库、
    signer health 与管理快照验收；
-6. 获得一次真实 testnet 交易的人工执行批准后再开启自动产品路径；产品运行后，
-   合法 PaymentMandate 内的 A2A 交易不逐笔人工确认。
+6. 第一笔真实 testnet 验收先把 `ADX_SETTLEMENT_INTENT_ID` 设置为已人工复核的
+   单一不可变 SettlementIntent，再获得该笔交易的执行批准并开启自动路径；
+   验收完成前不得清空这个 canary 限制。产品正式运行后，清空该变量，合法
+   PaymentMandate 内的 A2A 交易不逐笔人工确认。
 
 轮换 KEK 时先保留旧文件，准备新的 `0400` 32-byte 文件，配置 old/new filename
 和 version，然后执行 dry-run：

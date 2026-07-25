@@ -50,6 +50,22 @@ def test_generated_production_env_contains_wallet_configuration() -> None:
     assert "ADX_ARENA402_M_TOKEN_ADDRESS=\\n" in generator
 
 
+def test_production_settlement_worker_forwards_single_intent_canary() -> None:
+    compose = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
+    settlement_worker = compose.split(
+        "\n  settlement-worker:", 1
+    )[1].split("\n  wallet-signer:", 1)[0]
+
+    assert "ADX_SETTLEMENT_INTENT_ID: ${ADX_SETTLEMENT_INTENT_ID:-}" in (
+        settlement_worker
+    )
+
+    generator = (
+        ROOT / "deploy" / "scripts" / "generate-env.sh"
+    ).read_text(encoding="utf-8")
+    assert "ADX_SETTLEMENT_INTENT_ID=\\n" in generator
+
+
 def test_api_image_contains_wallet_runtime_package() -> None:
     dockerfile = (
         ROOT / "deploy" / "docker" / "Dockerfile.api"
