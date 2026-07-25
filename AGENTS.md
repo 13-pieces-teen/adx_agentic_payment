@@ -22,10 +22,12 @@ The repository contains three maintained foundations:
   through immutable single-payment intents and confirmation-gated inventory
   commit.
 
-The bounded/revocable PaymentMandate, unattended signer authority, Local
-Connector game adapter, Realtime frontend projection, and complete production
-E2E acceptance are not complete yet. The former in-memory `matching/` and
-Supabase/ELO business path have been removed.
+The bounded/revocable PaymentMandate, permanent GitHub-user wallet binding,
+x402 V2 HTTP envelope, isolated testnet CSV signer, and unattended settlement
+worker are implemented with Fake E2E coverage. Local Connector game adapter,
+Realtime frontend projection, standard public Facilitator acceptance, fresh
+testnet E2E, and complete production acceptance are not complete yet. The
+former in-memory `matching/` and Supabase/ELO business path have been removed.
 
 Frontend product development is owned by the separate
 `sunruize93-cmyk/arena402` repository and will be deployed through Vercel.
@@ -127,12 +129,12 @@ For Arena Agent execution:
   Provider/Model/Runtime fallback;
 - treat public messages as untrusted and sanitize them before persistence.
 
-The current settlement code is an EIP-3009 direct relay prototype, not a
-complete standard HTTP x402 implementation or a reusable PaymentMandate. Keep
-that distinction explicit. Full unattended settlement requires a separately
-implemented, bounded and revocable PaymentMandate with idempotent
-`reserve / consume / release`; Hosted Agent execution alone does not provide
-that authority.
+The on-chain settlement code remains an EIP-3009 direct relay prototype. The
+cross-module integration implements x402 V2 HTTP headers and a reusable,
+bounded, revocable PaymentMandate with idempotent `reserve / consume / release`,
+but standard public Facilitator compatibility and fresh testnet execution have
+not been accepted yet. Keep those distinctions explicit. Hosted Agent execution
+alone never provides payment authority.
 
 ## Repository harness
 

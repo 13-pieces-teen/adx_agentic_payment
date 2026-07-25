@@ -5,6 +5,8 @@ The TypeScript source under this directory provides:
 - viem helpers for signing an EIP-3009 authorization;
 - a guest-wallet signing seam that does not return private keys or a
   general-purpose account;
+- an x402 V2 exact-payment payload builder and header codec;
+- a one-time CSV import path plus isolated PostgreSQL ciphertext signer;
 - a shared `SettlementSDK` interface;
 - an in-memory `MockSettlement`;
 - a testnet-backed `RealSettlement` that calls the custom relay.
@@ -18,15 +20,16 @@ local package wiring first. The authoritative source entry is `src/index.ts`.
 
 ## Protocol boundary
 
-The SDK does not implement a complete HTTP x402 client:
+`src/x402-v2.ts` accepts one Arena-bound x402 V2 `PaymentRequired`, copies the
+exact accepted requirement, derives the EIP-3009 nonce from the immutable
+SettlementIntent hash, signs through `WalletSecretStore`, and produces a
+`PaymentPayload` suitable for `PAYMENT-SIGNATURE`. The Python resource server
+owns the HTTP 402/retry/response exchange and Facilitator calls.
 
-- it does not receive a `402 Payment Required` challenge;
-- it does not parse `PaymentRequirements`;
-- it does not attach x402 request headers or process response headers;
-- it has no `@x402/*` dependency.
-
-`src/x402.ts` is currently an EIP-3009 signing helper named for the intended
-future integration.
+The shape follows x402 V2 (`x402Version: 2`, CAIP-2 `eip155:<chainId>`,
+`resource`, `accepted`, `payload`). Public Facilitator interoperability still
+requires a live testnet acceptance run; the current automated tests use Fake
+ports and perform local cryptographic verification.
 
 ## Guest-wallet secret-store foundation
 
@@ -47,13 +50,34 @@ process-local keys, keeps one stable address per test wallet ID, and rejects
 unknown, disabled, or address-mismatched wallets.
 `createWalletSecretStore()` returns a disabled adapter by default.
 
+`LocalCsvWalletSecretStore` remains an explicit local-development adapter. It
+requires an absolute owner-only file, maps the CSV `index` to stable
+`agent-wallet-0001` identifiers, derives each address from its key, and rejects
+every mismatch or duplicate.
+
+Production uses `PostgresEncryptedWalletSecretStore`. The one-time importer
+validates each CSV key/address pair, generates a random per-wallet DEK, encrypts
+the raw key with AES-256-GCM, wraps the DEK with a 32-byte KEK, and sends only
+ciphertext/nonces to PostgreSQL. The KEK is a separate raw 32-byte host file
+with mode `0400`; it is mounted only into the signer and manual admin profile.
+The long-running signer has a dedicated database login that can execute only
+the one-wallet ciphertext read function. It has no CSV mount and never returns
+a key or general-purpose account.
+
+`npm run wallet:vault-import` is dry-run by default and needs `--apply` to
+write. `npm run wallet:vault-rotate` likewise validates by default; `--apply`
+unwraps and rewraps only DEKs, leaving wallet addresses and private-key
+ciphertext unchanged. Both tools log counts only.
+
 The wallet-backed signing function requires a caller-supplied nonce; it never
 generates a fresh authorization on retry. The SDK also checks the adapter's
 returned address against the frozen buyer and recovers the final signature
 before returning a payment authorization.
 
-This foundation does not read the prepared wallet CSV files, persist wallet
-bindings, implement PaymentMandate, or enable unattended chain submission.
+Permanent user bindings, PaymentMandates, reservations, x402 attempts, leases,
+and unattended orchestration live in `arena_payments/`. The signer receives
+only its role-specific ciphertext function, not Game tables, Mandate mutation
+authority, a general-purpose signing method, or transaction broadcast access.
 
 ## Arena SettlementIntent bridge
 

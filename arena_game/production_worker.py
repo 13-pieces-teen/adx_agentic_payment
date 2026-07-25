@@ -9,7 +9,6 @@ import signal
 from datetime import datetime, timezone
 
 from arena_core.postgres_repository import PostgresArenaCoreRepository
-
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseHostedCoordinator
 from .orchestrator import PawnhouseGameOrchestrator
@@ -39,7 +38,7 @@ def _https_url(name: str, *, required: bool) -> str | None:
 
 
 class ArenaProductionWorker:
-    """Run four independent, non-signing durable loops."""
+    """Run the four Arena-owned, non-signing durable loops."""
 
     def __init__(
         self,

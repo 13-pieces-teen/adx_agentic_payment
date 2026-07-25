@@ -286,7 +286,8 @@ class PostgresConnectorRepository:
             """
             SELECT s.token_hash, s.user_id, s.csrf_hash, s.created_at,
                    s.expires_at, s.revoked_at, u.username, u.password_hash,
-                   u.temporary, u.disabled_at
+                   u.temporary, u.identity_provider, u.provider_subject,
+                   u.disabled_at
             FROM connector_sessions s
             JOIN connector_users u ON u.user_id = s.user_id
             WHERE s.token_hash = $1

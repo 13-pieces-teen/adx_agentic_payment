@@ -219,11 +219,11 @@ create game
       腾讯 CAM/SSM 三身份保留为可选高安全验收。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
-- [ ] PaymentMandate 的额度、期限、范围、撤销和
-      `reserve / consume / release` 尚未实现。
-- [ ] Hosted 上线目标要求 platform-managed testnet guest wallet、入局一次授权和
-      每笔 accepted trade 自动结算；当前逐笔人工确认 bridge 只用于开发验证，
-      不能作为上线支付路径。
+- [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
+      `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
+- [x] GitHub User 永久绑定 platform-managed testnet guest wallet，一局一次
+      Mandate 授权后，每笔 accepted trade 自动结算；逐笔人工确认 bridge 仅保留
+      为开发验证工具。
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
 - [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
@@ -336,34 +336,39 @@ create game
 
 ### Phase 7：PaymentMandate 与 Settlement
 
-- [ ] 每个 GitHub 平台 User 首次登录时永久绑定一个 `sandbox_guest` testnet
-      wallet；后续 Game Participant 引用同一钱包，数据库只保存地址和不透明
-      signer key 引用，不在游戏结束后把钱包重新分配给其他用户。
+- [x] 每个 GitHub 平台 User 首次钱包读取或入局时永久绑定一个 `sandbox_guest` testnet
+      wallet；后续 Game Participant 引用同一钱包。Arena 业务表只保存地址和不透明
+      signer key 引用；隔离 vault schema 保存信封密文，不在游戏结束后把钱包重新
+      分配给其他用户。
 - [x] Settlement SDK 已建立最小 guest-wallet signer 接缝：调用方只提交稳定
       `walletId`、冻结公开地址和 EIP-3009 授权字段；内存 Fake adapter 仅在显式
-      test-only 组合下启用，未配置 backend 时 fail closed，且没有 CSV/生产密钥接线。
-- [ ] 用户加入 Game 时一次性创建受限 Mandate，不做逐笔人工确认。
-- [ ] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
+      test-only 组合下启用，未配置 backend 时 fail closed；生产路径将仓库外 CSV
+      逐项核对后一次性导入 AES-256-GCM 信封密文，运行时 signer 不再挂载 CSV。
+- [x] 用户可通过认证 API 为已加入 Game 创建一次受限 Mandate，不做逐笔人工确认。
+- [x] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
       状态；payee 只能是同局 Arena 配对出的 seller。
-- [ ] 实现并发 Intent 的 `reserve / consume / release`；锁定 Mandate、buyer cash
-      与 reservation rows，并以 `(round_id, buyer_participant_id)` 唯一约束关闭
-      同一 buyer 的并发占款。
-- [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；Mandate
-      模式仍待实现。
-- [ ] 增加无公网端口 Settlement Worker，自动 reserve、签名、提交并持久化 tx hash；
-      第一版直接复用 settlement library，不新增独立 HTTP Facilitator 服务。
+- [x] 实现并发 Intent 的幂等 `reserve / consume / release`；PostgreSQL 锁定
+      Mandate row，`settlement_intent_id` 唯一约束关闭重复占款，累计金额由数据库
+      CHECK 和事务更新双重限制。
+- [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；同一
+      Game-scoped Mandate 可自动授权多笔互相独立的 Intent。
+- [x] 增加无公网端口的可选 testnet signer service 与 Settlement Worker，自动
+      reserve、签名、x402 `/verify`/`/settle`、持久化 tx hash；`submitting` 之前
+      写入 lease/ambiguity boundary，未知结果不会盲目重付。
 - [ ] funding 与 Settlement 共用数据库化 relay EOA nonce allocator；2 笔 Intent
       可同时在途，但 nonce 分配/广播短暂串行，重启只以同一 nonce 恢复。
 - [x] 本地 bridge 已验证现有 SettlementSDK/Facilitator；它保留为开发验证工具，
       不作为 Hosted 上线执行路径。
-- [x] Arena Worker 可只读恢复 submitted/unknown。
+- [x] Arena Worker 只读恢复 submitted；unknown 保持额度锁定，自动按同一
+      authorization 恢复仍是上线前缺口。
 - [x] 链上确认后幂等提交现金和货物。
 - [ ] 自动路径按同一 EIP-3009 authorization 恢复 unknown；冻结两个确认，
       复核 receipt block hash、calldata 与 Transfer event 后才提交库存。
-- [ ] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
+- [x] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
       取消或退款路径。
-- [ ] Hosted Worker、Arena Worker 与 Settlement Worker 的 IAM、数据库和密钥域
-      完全分离。
+- [x] Hosted Worker 无 signer 权限；长期 signer 仅拥有密文读取函数和独立
+      `0400` KEK mount，CSV 只进入一次性 `wallet-admin` profile。API/Arena Worker
+      只使用 bearer-authenticated 窄签名端口；支持只重包 DEK 的 KEK 版本轮换。
 
 详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)，上线部署和实现
@@ -377,7 +382,8 @@ create game
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
       及独立权限。
-- [ ] 增加 Settlement Worker；首发保持单个 PostgreSQL、单个 API 和每类 Worker
+- [x] 增加独立数据库角色、无公网端口的 Settlement Worker；首发保持单个
+      PostgreSQL、单个 API 和每类 Worker
       一个实例，不增加 Redis/Kafka/Kubernetes。
 - [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
 - [ ] 现有 2C4G/70GB 生产机以 10 Hosted Agent × 5 回合为 MVP 必须通过，
@@ -417,7 +423,7 @@ create game
 
 ## 后续而非 MVP 阻塞项
 
-- 标准 HTTP x402 challenge/retry/header 和公共 Facilitator 兼容；
+- 公共第三方 Facilitator 的真实 testnet x402 V2 兼容验收；
 - TEE key custody 与 remote attestation；
 - 链上身份或 ERC-8004 reputation；
 - escrow、退款、争议、仲裁和生产手续费；

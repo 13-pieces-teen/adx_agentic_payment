@@ -104,3 +104,8 @@ The process has the `adx_arena_core` database role and HTTPS read access to the
 configured Injective RPC/Blockscout endpoints. It has no wallet, private key,
 Secret Manager permission, Facilitator submission credential, or transaction
 broadcast interface.
+
+Automatic mandate-authorized payment submission runs separately as
+`python -m arena_payments.production_worker` with the least-privilege
+`adx_settlement` database role. That process has no public port and is the only
+backend process configured with the signer and Facilitator capabilities.

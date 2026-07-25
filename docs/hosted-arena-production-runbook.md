@@ -2,11 +2,11 @@
 
 > 状态：2026-07-25 批准的 Hosted testnet 上线目标。
 >
-> 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地
-> 编排、单笔 EIP-3009 SettlementIntent、只读链上确认和确认后库存提交。
-> 当前逐笔人工批准 bridge 只是开发阶段验证工具，不是上线支付方案。
-> 本文中的自动 Mandate、guest wallet 和 Settlement Worker 尚待实现；完成本文
-> 验收前，不得宣称 Hosted Agent 已能无人值守完成整局支付。
+> 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排、
+> GitHub User 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
+> 隔离的 PostgreSQL 密文 signer、自动提交编排、只读链上确认和确认后库存提交。
+> 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自动链路已通过
+> Fake E2E；公共 Facilitator、新鲜 testnet 交易与完整生产 E2E 尚未验收。
 
 ## 1. 上线目标
 
@@ -57,7 +57,6 @@ MVP 上线容量目标：
 - Native A2A Endpoint；
 - 用户自带钱包的无人值守签名；
 - 主网或真实资金；
-- 标准 HTTP x402 challenge/retry/header；
 - escrow、退款、争议和手续费；
 - Redis、Kafka、独立消息队列；
 - Kubernetes、多地域、自动扩缩容和多副本高可用；
@@ -77,9 +76,9 @@ Caddy -> FastAPI API
          PostgreSQL
           /   |   \
          /    |    \
-Hosted Worker |  Settlement Worker
-               |
-          Arena Worker
+Hosted Worker   Settlement Worker -> internal wallet-signer/facilitator
+                         |
+                    Arena Worker
 ```
 
 只新增一个长期运行进程：`settlement-worker`。
@@ -90,17 +89,23 @@ Hosted Worker |  Settlement Worker
 | Hosted Worker | 读取单个模型 Secret、执行 AgentTask、提交候选 Result | 修改 pool、negotiation、inventory、mandate、settlement |
 | Credential Controller | 撤销 Hosted 模型 Secret | 读取模型 Key、访问钱包 Key |
 | Arena Worker | 回合编排、Result apply、Finalizer、只读查链、库存提交 | 读取钱包 Key、签名、广播交易 |
-| Settlement Worker | Mandate reserve、guest wallet 签名、EIP-3009 提交、记录 tx hash | 调用 Provider、修改游戏报价、直接提交库存 |
+| Settlement Worker | claim Intent、Mandate reserve、调用 signer/facilitator、记录 tx hash | 修改冻结价格、在确认前提交库存 |
+| Wallet signer | 通过专用函数读取单钱包密文，按 wallet id 与冻结 x402 requirement 签署 EIP-3009 | 直接读表、访问业务状态/Provider 或广播交易 |
 | PostgreSQL | 唯一持久化队列和业务状态权威 | 保存原始模型 Key、钱包私钥、助记词或签名 |
 
-第一版不新增独立 HTTP Facilitator 服务。复用现有 settlement 模块的校验和提交逻辑，
-作为 `settlement-worker` 内部 library 调用，直接通过 viem 向 Injective EVM
-testnet 提交。这样避免额外的内部 HTTP 跳转和第二套运行状态。
+API 的公开 x402 paid retry 只把签名 payload 转发到 bearer-authenticated 的内网
+Settlement ingress；API 不持有 signer token、Facilitator authorization，也不直接
+修改 reservation 或提交链上交易。
 
-自动支付新增的外部依赖只保留两个：
+第一版通过 x402 V2 `/verify` 与 `/settle` 调用显式配置的 Facilitator；可使用
+外部 HTTPS 服务，或 Compose `testnet-facilitator` profile 中不发布宿主机端口的
+内网服务。Facilitator 未配置时 fail closed。签名器同样只加入 data network。
 
-- 批准的 Secret Manager：模型 Secret、guest signer Secret、treasury/relay Secret
-  使用不同前缀与最小读取策略；
+自动支付新增的外部依赖只保留四个：
+
+- PostgreSQL 中的 per-wallet AES-256-GCM 信封密文；
+- 仓库外、宿主机 `0400` 的 32-byte wallet KEK，仅只读挂载给 signer；
+- 一个批准的外部 HTTPS 或内网 x402 V2 Facilitator；
 - 一个 Injective EVM RPC：提交、确认，并在结果未知时按 block/transaction
   扫描恢复。Blockscout 只作为运维查看工具，不是运行时依赖。
 
@@ -110,38 +115,39 @@ testnet 提交。这样避免额外的内部 HTTP 跳转和第二套运行状态
 
 首发 Hosted Agent 只使用 `sandbox_guest` 结算账户：
 
-- 每个 Game Participant 拥有一个独立 testnet EVM 地址；
-- 私钥只由 Settlement Worker 的 signer port 使用；
-- 数据库只保存地址和不可逆/不透明的 `signer_key_id`；
-- signer 根密钥或派生材料只存在于批准的外部 Secret Manager；
-- Hosted Worker、Arena Worker、API 和前端都不能读取 signer Secret；
-- Settlement Worker 的链上账户只持有测试资产，不承载主网或真实资金。
+- 每个 GitHub 平台 User 首次读取钱包或入局时原子绑定一个预生成 testnet EVM
+  地址；后续登录和 Game 继续使用同一钱包，不回收到空闲池；
+- 每个 Game Participant 冻结该 User 已绑定的钱包快照；
+- CSV 只由一次性 `wallet-admin` 导入任务读取；它逐项核对私钥派生地址后，在
+  应用层生成随机 DEK 并写入密文、nonce 和 KEK version；
+- PostgreSQL 不接收 KEK 或明文；长期 wallet-signer 通过
+  `adx_wallet_signer_login` 只能调用单钱包密文读取函数；
+- Hosted Worker、Arena Worker、API、Settlement Worker 和前端都不能读取 CSV、
+  KEK 或私钥；
+- signer 只允许配置的 testnet chain，并在每次签名前再次核对数据库地址、
+  私钥派生地址和冻结 payer。
 
 Game 启动前，平台为每个 guest wallet 自动准备该局最大初始现金对应的 mUSDC。
-EIP-3009 的 payer 不需要持有 gas；Settlement Worker 的 relay account 负责 testnet
+EIP-3009 的 payer 不需要持有 gas；Facilitator relay account 负责 testnet
 gas。首发使用一个 testnet-only treasury/relay account 同时负责初始 mUSDC 分发和
 relay gas；它与每个 Participant 的 guest wallet 分离。首发不实现赛后自动 sweep，
 过期 Game 的测试钱包由运维批次清理。
 
-Wallet provisioning 直接复用 `participant_settlement_accounts`，不新增独立 job
-表：
+Wallet binding 使用 `wallet_inventory` 与 `user_wallets`：
 
 ```text
-provisioning
-  -> Settlement Worker creates one scoped Secret
-  -> stores address + signer_key_id
-  -> funds initial mUSDC
-  -> ready
+validate external CSV without printing keys
+  -> envelope-encrypt each key and import public identity + ciphertext
+  -> remove CSV from the runtime host path after verification
+  -> first GitHub user access atomically binds one available row
+  -> join freezes the same address into participant_settlement_accounts
 ```
 
-Settlement Worker 直接 claim `provisioning` account row；Game start 只接受全部账户
-为 `ready` 的 Participant。
-
-Provisioning 以 `game_participant_id` 为幂等键：同一 Participant 只能对应一个
-确定的 Secret 名称和一个链上地址。Settlement Worker 使用专用的
-guest-signer Secret Creator + exact-key Reader 身份生成私钥并写入 Secret Manager；
-数据库只记录地址和 `signer_key_id`。API、Hosted Worker、Arena Worker 和
-Credential Controller 均无这组权限。
+绑定以 `user_id`、不可变 GitHub numeric subject、`wallet_id` 和
+`(chain_id,address)` 唯一约束为幂等边界；并发登录使用 PostgreSQL row lock 与
+`SKIP LOCKED`。CSV 不复制进仓库、镜像、长期容器或日志；数据库只保存 AES-GCM
+密文。KEK 轮换只解包/重包每个 DEK，不改钱包地址或私钥密文，并用旧 version
+条件更新避免并发覆盖。
 
 Secret 名称由 `game_participant_id` 确定。create 成功或返回 AlreadyExists 后，
 Worker 只读取这个确切 Secret、派生地址并写数据库；create 结果未知时等待后按同名
@@ -239,20 +245,21 @@ Arena validates accept
   -> Settlement Worker claims Intent
   -> validate Game/participant/token/payee/amount/expiry
   -> reserve Mandate amount
-  -> freeze EIP-712 domain, validAfter, validBefore
+  -> build x402 V2 PaymentRequired from frozen EIP-712 domain
   -> derive deterministic EIP-3009 nonce from Intent hash
-  -> sign with buyer guest wallet
-  -> allocate relay EOA nonce and submit transferWithAuthorization
-  -> persist tx hash, relay nonce and authorization nonce digest
+  -> internal signer returns x402 PaymentPayload
+  -> HTTPS facilitator verifies and settles transferWithAuthorization
+  -> persist tx hash and authorization nonce digest
   -> Arena Worker reads receipt and exact Transfer event
   -> mark chain_confirmed_uncommitted
-  -> atomically consume reservation and commit cash/holding
+  -> Arena confirms the chain payment and commits cash/holding
+  -> Settlement Worker reconciles the reservation as consumed
   -> mark inventory_committed
   -> Round may close
 ```
 
 `accept`、签名成功、交易提交和链上确认仍是不同状态。模型 Runtime 永远不参与签名，
-Settlement Worker 也不能修改价格、货物、数量或双方。
+自动支付循环和 signer 也不能修改价格、货物、数量或双方。
 
 Game 创建时冻结 `required_confirmations = 2`。Arena Worker 只有在满足确认深度后，
 才能把 Intent 标记为 `chain_confirmed_uncommitted`，并且必须校验：
@@ -304,36 +311,32 @@ block 的 timestamp 已超过 authorization `validBefore`、且该 block 又获�
 
 ### 5.1 PostgreSQL migration
 
-新增一个连续 migration，完成：
+`018_arena_wallet_mandate_x402.sql` 新增：
 
-1. `payment_mandates`；
-2. `payment_reservations`；
-3. `participant_settlement_accounts.status`、`signer_key_id`、`funding_tx_hash` 与
-   funding relay nonce/start block、provisioning lease，并对 `game_participant_id`
-   唯一；
-4. `settlement_intents.mandate_id`、`reservation_id`、EIP-712 domain、
-   `authorization_valid_after`、`authorization_valid_before`、authorization nonce
-   digest、relay nonce、broadcast start block、tx hash 与 Worker lease 字段；
-5. 单行 `relay_accounts` nonce allocator；funding 与 Settlement 共用；
-6. `games.max_trade_price_atomic`、`game_expires_at`、`required_confirmations`；
-7. `payment_reservations(round_id, buyer_participant_id)` 唯一约束；
-8. 单 active Game 的数据库约束；
-9. `reserve_payment_mandate(intent_id)`；
-10. `consume_payment_mandate(intent_id)`；
-11. `release_payment_mandate(intent_id)`；
-12. `revoke_payment_mandate(mandate_id, user_id)`；
-13. Settlement Worker 专用数据库 role 和最小函数授权。
+1. `wallet_inventory` 与永久 `user_wallets`；
+2. `payment_mandates` 与累计额度数据库 CHECK；
+3. `payment_reservations`，以 SettlementIntent 唯一并记录
+   `reserved | consumed | released`；
+4. `x402_settlement_attempts`，记录 challenge、状态、安全错误码和 Worker lease；
+5. SettlementIntent 的 token EIP-712 name/version 冻结字段；
+6. `payment_mandate` approval source 与 API/Core 最小表权限。
 
-不新增独立 `settlement_jobs` 表。Settlement Worker 直接 claim
-`settlement_intents` 中可执行的状态，使用 `FOR UPDATE SKIP LOCKED`、`leased_by`
-和 `lease_expires_at` 恢复重启。
+`019_arena_wallet_encrypted_secret_vault.sql` 新增隔离
+`wallet_secret_vault` schema、per-wallet 信封密文、地址外键，以及
+`adx_wallet_signer` / `adx_wallet_importer` 的互斥函数权限：signer 可读取一个
+钱包的完整密文但不能直接读表；importer 可导入、禁用和读取/更新 wrapped DEK，
+不能读取私钥密文。
+
+`reserve / consume / release / revoke` 由 repository 在显式 PostgreSQL 事务与 row
+lock 中完成。自动循环使用 `x402_settlement_attempts` 的 `FOR UPDATE SKIP LOCKED`
+和 lease 恢复重启。
 
 ### 5.2 Arena
 
 修改 `arena_game/postgres.py`：
 
-- Hosted Participant 加入时创建 guest settlement account 和 Mandate；
-- Game 启动前检查全部 Hosted Participant 的 wallet/mandate 为 ready；
+- Hosted Participant 加入时引用 GitHub User 永久绑定钱包并冻结 settlement account；
+- 用户通过 Session + CSRF API 显式创建或撤销 Game-scoped Mandate；
 - negotiation apply 校验冻结的 `max_trade_price_atomic` 和 buyer 当前 cash；
 - accept 时在同一事务冻结 Intent；
 - 不再生成 `human approval required` 状态；
@@ -343,34 +346,33 @@ block 的 timestamp 已超过 authorization `validBefore`、且该 block 又获�
 
 Arena 仍不签名、不读取 signer Secret、不提交交易。
 
-### 5.3 Settlement Worker
+### 5.3 Settlement Worker 与 signer
 
-在 `agent-arena/settlement/` 增加一个无公网端口的 Worker：
+独立 Settlement Worker 的自动支付循环：
 
 ```text
 claim Intent
   -> reserve
-  -> sign
-  -> submit
+  -> call internal signer
+  -> x402 verify/settle
   -> record tx hash
 ```
 
-Worker 必须：
+实现约束：
 
 - 只处理 `sandbox_guest + single_eip3009`；
-- claim `provisioning` account、创建 signer Secret、记录地址并自动分发初始 mUSDC；
-- 以 Participant 和 Intent 为幂等边界，恢复 wallet funding 与交易提交；
-- 使用一个数据库化 relay EOA nonce allocator；授权准备可并发，广播分配 nonce
-  短暂串行，已广播交易可同时等待确认；
+- 以 User wallet、Mandate、SettlementIntent 和 reservation 为幂等边界；
 - 使用冻结 Intent hash 派生确定性 nonce；
 - 崩溃后只从冻结的 domain、validity 与 nonce 重新生成同一 authorization；
 - 提交前重新验证 token、chain、payer、payee 和 amount；
-- 从 Secret Manager 读取当前 `signer_key_id` 对应材料；
-- 仅记录 tx hash、nonce digest、安全错误码和时间；
+- signer 从专用 PostgreSQL 函数按 `wallet_id` 读取密文并用本地 KEK 解密，
+  其他服务只持 bearer token；
+- 仅记录 tx hash、payload digest、安全错误码和时间；
 - 在日志和异常中禁止输出 private key、signature、raw nonce；
-- 每个 Intent 最多存在一个链上支付。
+- `submitting` 后结果不明时保持 reservation，不释放、不生成第二笔支付。
 
-现有 Arena Worker 继续负责 read-only confirmation 与库存提交，不把两种权限合并。
+Arena Worker 只负责调度与只读确认；Settlement Worker 使用独立
+`adx_settlement` 数据库角色，私钥仍只存在 signer 容器。
 
 ### 5.4 API 与前端
 
@@ -407,26 +409,59 @@ revoke command 只能由 Participant 所属用户发出，必须使用现有 Ses
 
 ### 5.5 Production Compose
 
-当前 `docker-compose.production.yml` 只包含已有 API、Hosted Worker、Credential
-Controller 和 Arena Worker；Arena Worker 默认启用，Hosted profile 使用单机
-AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 Provider
-配置验收后显式启用。腾讯 SSM 保留为可选高安全后端。它还不能启动自动支付。
-本文已先把现有服务默认值压到 2C4G 基线，但以下 Settlement Worker 接线是上线前的
-代码阻塞项，不能用文档配置替代。
+`docker-compose.production.yml` 已接入 payment migration、API、独立 Settlement
+Worker，以及可选 `wallet-signer` 和 `arena-facilitator`。后两者分别使用
+`testnet-signer` / `testnet-facilitator` profile，只加入 data network、无宿主机
+端口和只读文件系统；wallet-signer 只读挂载 `wallet-master.key`，不挂载 CSV。
+一次性 `wallet-admin` profile 才挂载导入 CSV。自动支付默认关闭。Hosted profile 同时支持
+单机 AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 Provider
+配置验收后显式启用；腾讯 SSM 保留为可选高安全后端。
 
-在现有 production Compose 中增加：
+云端启用前必须：
 
-- `settlement-worker` profile/service；
-- `cpus: 0.20`、`mem_limit: 256m`；
-- Settlement Worker 专用数据库登录；
-- guest signer Secret Creator + exact-key Reader 凭据；
-- relay account Secret Reader 凭据；
-- `ADX_SETTLEMENT_WORKER_CONCURRENCY=2`；
-- `ADX_AUTOMATIC_TESTNET_SETTLEMENT_ENABLED`。
+1. 在仓库外创建独立 wallet secret 目录；生成恰好 32 raw bytes 的
+   `wallet-master.key`，设为容器 UID `10001` 可读、权限 `0400`，并保存加密离线备份；
+2. 把 agent wallet CSV 放在仓库外固定绝对路径，设为 UID `10001` 可读且权限
+   `0600`，配置 `ADX_WALLET_IMPORT_CSV_HOST_PATH`；
+3. 先执行 dry-run，只校验 CSV，不写数据库：
 
-保持单个 PostgreSQL、单个 API、单个 Hosted Worker、单个 Arena Worker、单个
-Settlement Worker。所有 Worker 无公网端口。只有 Worker entrypoint、migration、
-DB role 和 Secret IAM 测试通过后，才把该 service 接入 `deploy.sh` 的 MVP profile。
+   ```text
+   docker compose --profile wallet-admin run --rm --build wallet-vault-admin
+   ```
+
+   再显式执行一次导入：
+
+   ```text
+   docker compose --profile wallet-admin run --rm --build wallet-vault-admin \
+     npm run wallet:vault-import -- --apply
+   ```
+
+   验证数据库计数和 signer health 后，将 CSV 移出运行服务器或安全删除；系统不会
+   自动删除源文件；
+4. 配置外部 HTTPS 或 `http://arena-facilitator:4021`、唯一 facilitator id、
+   内部 signer URL 与至少 32 字节 bearer token；
+5. 先保持 `ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false` 完成 API、数据库、
+   signer health 与管理快照验收；
+6. 获得一次真实 testnet 交易的人工执行批准后再开启自动产品路径；产品运行后，
+   合法 PaymentMandate 内的 A2A 交易不逐笔人工确认。
+
+轮换 KEK 时先保留旧文件，准备新的 `0400` 32-byte 文件，配置 old/new filename
+和 version，然后执行 dry-run：
+
+```text
+docker compose --profile wallet-admin run --rm --build wallet-vault-rotate
+```
+
+确认所有 active wallet 都使用预期旧 version 后，加 `--apply` 完成只重包 DEK：
+
+```text
+docker compose --profile wallet-admin run --rm --build wallet-vault-rotate \
+  npm run wallet:vault-rotate -- --apply
+```
+
+随后把 signer 的文件和
+`ADX_WALLET_MASTER_KEY_VERSION` 一起切到新 version 并重启。确认 signer health
+和合成签名通过后才能销毁旧 KEK。
 
 ## 6. 2C4G/70GB MVP 容量配置
 
@@ -454,15 +489,17 @@ PostgreSQL max_connections: 40
 | API | 512 MB |
 | Hosted Worker | 512 MB |
 | Arena Worker | 320 MB |
-| Settlement Worker（待实现） | 256 MB |
+| Settlement Worker | 256 MB |
+| Wallet signer | 256 MB |
 | Credential Controller | 192 MB |
 | Caddy | 128 MB |
 
-常驻容器合计约 2.7 GB，给宿主机、Docker、页缓存和短时 migration 留约 1.3 GB。
+启用全部可选 Worker 后按 Compose 上限控制，实际常驻内存需要在 2C4G 验收中
+测量；若接近上限应先降低 Worker 并发，不能通过交换或关闭安全边界硬撑。
 Vercel 前端不占用这台服务器；`legacy-web` profile 不得在 MVP 生产机启动。
 
 40 个数据库连接按当前连接池上界预留：API 最多 20、Hosted Worker 5、Arena
-Worker 5、Credential Controller 2、Settlement Worker 2，剩余 6 个留给
+Worker 5、Credential Controller 2、自动支付循环复用 Arena pool，剩余连接留给
 migration、健康检查和运维。不得再增加进程或连接池而不重新计算该预算。
 
 关键实现要求：
@@ -473,7 +510,7 @@ migration、健康检查和运维。不得再增加进程或连接池而不重�
 - 比赛 Task 优先于 credential validation；
 - Worker 一次最多 claim 5 个 Task；10 Agent 为两个 wave，12 Agent 为三个 wave；
 - 同一 pairing 的 negotiate 严格串行，不同 pairing 最多 5 组并发；
-- Settlement Worker 可以同时处理最多 2 个 Intent；relay nonce 分配/广播短暂串行，
+- 自动支付循环可以同时处理最多 2 个 Intent；facilitator relay nonce 分配/广播短暂串行，
   链上等待与确认保持 2 笔并发；
 - 创建 Game 时拒绝超过 12 个参与者；
 - 已有 active Game 时拒绝启动第二局；
@@ -541,13 +578,14 @@ PostgreSQL
   -> Hosted Worker / Credential Controller
   -> Arena Worker
   -> Settlement Worker
+  -> Wallet signer 与 facilitator（两个显式 testnet profile）
   -> enable Game creation
 ```
 
 先部署但关闭自动结算：
 
 ```text
-ADX_AUTOMATIC_TESTNET_SETTLEMENT_ENABLED=false
+ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 ```
 
 完成 wallet、Mandate、signer 权限和自动交易验收后，再设置为 `true` 并重新部署。
@@ -569,12 +607,13 @@ ADX_AUTOMATIC_TESTNET_SETTLEMENT_ENABLED=false
 - 自动交易的 token、payer、payee、amount 与冻结 Intent 完全一致；
 - 链上确认后现金和库存只更新一次；
 - 至少一局包含多笔自动交易并完成最终排名；
-- Settlement Worker 重启不会生成第二笔支付；
+- Settlement Worker 或 signer 重启不会生成第二笔支付；
 - 超额或过期 Mandate 不广播交易；
 - Provider Key、wallet key、signature 和 reasoning 不进入数据库、日志或 API；
 - Hosted Worker 数据库 role 无法修改 Mandate、Settlement 和 Inventory；
 - Arena Worker 无法读取 signer Secret；
-- Settlement Worker 无法修改报价、配对和 Task Result。
+- Arena Worker 数据库 role 不拥有 Mandate mutation 或 Facilitator 提交凭据；
+- wallet-signer 无法访问或修改报价、配对和 Task Result。
 
 ### 8.2 容量通过标准
 
@@ -587,7 +626,7 @@ ADX_AUTOMATIC_TESTNET_SETTLEMENT_ENABLED=false
 - 无 Task 因 Worker claim 批次在开始执行前已经过期；
 - 默认动作只来自真实 Provider/输出/deadline 失败，不来自 Worker 并发不足；
 - PostgreSQL 无连接耗尽；
-- API、Hosted Worker、Arena Worker、Settlement Worker 无 OOM/restart loop；
+- API、Hosted Worker、Arena Worker、wallet-signer 无 OOM/restart loop；
 - 宿主机峰值内存不超过 3.2 GB，无 swap thrash，磁盘剩余不低于 15 GB；
 - 完整 Game 可以从 PostgreSQL 状态恢复并继续。
 
@@ -597,16 +636,16 @@ ADX_AUTOMATIC_TESTNET_SETTLEMENT_ENABLED=false
 
 1. **Mandate migration 与 repository**
    - 表、约束、reserve/consume/release、DB role、单元/真实 PostgreSQL 测试。
-2. **Settlement Worker**
-   - signer port、自动签名、直接提交、tx hash 持久化、重启幂等测试。
+2. **自动支付与 signer**
+   - signer port、x402 签名、facilitator 提交、tx hash 持久化、重启幂等测试。
 3. **Arena 自动支付接线**
    - Join 创建 wallet/Mandate、accept 自动排队、失败关闭 pairing、Round 自动继续。
 4. **Production API 与 Compose**
-   - 正式 Game command、Settlement Worker service、环境变量、权限与健康检查。
+   - 正式 Game command、wallet-signer profile、环境变量、权限与健康检查。
 5. **10/12 Agent E2E**
    - 真实 Provider、自动 testnet 支付、多回合排名、发布证据和活动文档同步。
 
-不并行实现 Local Connector、Native A2A、标准 x402、主网或多局调度。
+不并行实现 Local Connector、Native A2A、主网或多局调度。
 
 ## 10. 上线完成定义
 

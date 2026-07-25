@@ -78,9 +78,12 @@ def test_settlement_config_is_explicit_and_snapshot_safe() -> None:
         token_address=TOKEN.upper().replace("0X", "0x"),
         token_symbol="mUSDC",
         token_decimals=6,
+        token_eip712_name="Mock USD Coin",
+        token_eip712_version="1",
         required_confirmations=2,
     )
     assert enabled.to_snapshot()["tokenAddress"] == TOKEN
+    assert enabled.to_snapshot()["tokenEip712Name"] == "Mock USD Coin"
 
 
 def test_intent_uses_fixed_point_amount_and_stable_hash() -> None:
@@ -91,6 +94,18 @@ def test_intent_uses_fixed_point_amount_and_stable_hash() -> None:
 
     with pytest.raises(SettlementError, match="settlement_amount_mismatch"):
         replace(intent, amount_atomic=6_999_999)
+
+
+def test_new_intent_freezes_token_signing_domain_in_hash() -> None:
+    intent = replace(
+        _intent(),
+        token_eip712_name="Mock USD Coin",
+        token_eip712_version="1",
+    )
+
+    assert intent.to_snapshot()["tokenEip712Name"] == "Mock USD Coin"
+    assert intent.to_snapshot()["tokenEip712Version"] == "1"
+    assert intent.intent_hash != _intent().intent_hash
 
 
 @pytest.mark.parametrize(

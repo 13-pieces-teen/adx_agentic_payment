@@ -2,7 +2,7 @@
 
 ## 2026-07-25 implementation update
 
-The following single-payment foundation is now implemented:
+The following payment foundation is implemented:
 
 - an accepted negotiation can freeze exactly one immutable
   `arena402.settlement-intent.v1` when the Game explicitly selects
@@ -36,18 +36,14 @@ the confirmation and inventory-commit transaction, and a historical Injective
 testnet transfer has been matched through the read-only recovery path. No new
 state-changing transaction was broadcast as part of this milestone.
 
-The following remain outside the implemented foundation:
+The second-stage backend now also implements permanent GitHub User-to-wallet
+binding, bounded and revocable Game-scoped PaymentMandates, x402 V2
+challenge/response headers, an isolated unattended encrypted testnet signer, and a
+dedicated non-public Settlement Worker. A newly approved live testnet
+transaction against the currently deployed services remains outstanding.
 
-- a bounded, revocable multi-payment `PaymentMandate` with
-  `reserve / consume / release`;
-- an unattended isolated guest signer and its production IAM boundary;
-- standard HTTP x402 challenge, headers, paid retry, or public Facilitator
-  compatibility;
-- a newly approved live testnet transaction proving the complete path against
-  the current deployed services.
-
-> 状态：单笔 EIP-3009 游戏接线已实现；PaymentMandate、无人值守 signer 与新鲜
-> live testnet 端到端验收尚未完成。
+> 状态：钱包、PaymentMandate、x402 V2 与无人值守 Settlement Worker 已实现并
+> 默认关闭真实广播；新鲜 live testnet 端到端验收尚未完成。
 >
 > 本文取代已归档的 RFQ/数字交付结算方案，只定义“协商被接受”到“链上确认后
 > 转移游戏货物”的边界。Settlement 模块当前能力和验证证据仍以
@@ -60,8 +56,8 @@ The following remain outside the implemented foundation:
 The per-Intent human confirmation bridge remains a development verifier, not
 the Hosted production payment path. The approved testnet launch target is:
 
-- each Hosted Game Participant receives an isolated platform-managed
-  `sandbox_guest` wallet;
+- each GitHub User is permanently bound to one platform-managed
+  `sandbox_guest` testnet wallet; later logins and Games reuse that wallet;
 - joining the Game once confirms a bounded Game-scoped PaymentMandate;
 - every accepted trade is reserved, signed, submitted, confirmed, and committed
   automatically without a per-trade user action;
@@ -71,8 +67,8 @@ the Hosted production payment path. The approved testnet launch target is:
 - the Arena Worker remains non-signing and owns read-only confirmation plus the
   idempotent inventory commit;
 - reservation is serialized by Mandate and buyer balance locks plus a unique
-  buyer-per-Round constraint; mandate usage is derived from reservation rows
-  rather than duplicated aggregate counters;
+  buyer-per-Round constraint; reservation rows are the idempotency record and
+  transaction-maintained Mandate counters provide bounded allocation;
 - an unknown submission is recovered or resent only with the same deterministic
   EIP-3009 authorization, and inventory waits for two confirmations plus exact
   calldata and `Transfer` event verification;
@@ -85,8 +81,8 @@ the Hosted production payment path. The approved testnet launch target is:
 - the 2 vCPU / 4 GB / 70 GB MVP target is one active Game with 10 Hosted Agents,
   a hard cap of 12, bounded Worker waves, and platform testnet wallets only.
 
-This target deliberately does not add a user-wallet unattended-signing path,
-standard HTTP x402, escrow, Redis, Kafka, or multi-Game scheduling. The
+This target deliberately does not add externally supplied user wallets,
+escrow, Redis, Kafka, or multi-Game scheduling. The
 implementation and deployment sequence is maintained in
 [`hosted-arena-production-runbook.md`](hosted-arena-production-runbook.md).
 Until that plan passes its live acceptance, the implementation status below
@@ -113,19 +109,27 @@ remains authoritative.
 - 当前证据包括 rollback-only 提交验证和历史交易只读恢复，不等于新鲜 live
   交易已经验收。
 
-当前未实现：
+当前已实现：
 
-- 可覆盖一局多笔交易的 PaymentMandate，以及额度
+- GitHub User 永久 testnet 钱包绑定和 Game Participant 钱包快照；
+- 可覆盖一局多笔交易的 PaymentMandate，以及并发安全、幂等的额度
   `reserve / consume / release`；
-- PaymentMandate revoke 与 reserved/submitted 的竞态及完整 reorg 策略；
-- 与 Hosted Worker 完全隔离的 guest signer service 权限接线；
+- revoke 阻止新 reserve，已 submitted 记录继续走确认恢复；
+- 与 Hosted Worker 隔离、无公网端口、bearer-authenticated 的密文 testnet signer；
+- 一次性 CSV 导入、PostgreSQL AES-256-GCM 信封密文、独立宿主机 KEK 与只重包
+  DEK 的版本轮换；运行时不挂载 CSV；
+- x402 V2 challenge/retry/header、CAIP-2 network、exact 原子金额和冻结 Intent 绑定；
+- 自动 Worker lease、`submitting` ambiguity boundary 与 Fake 全链路验收。
+
+当前仍未实现或未验收：
+
+- 完整 reorg 策略；
 - 当前部署服务上的一笔新鲜、经批准 testnet 端到端交易；
-- 标准 HTTP `402 Payment Required` challenge/retry/header 流程；
-- 标准公共 x402 Facilitator 兼容；
+- 标准公共 x402 Facilitator 的真实 testnet 兼容验收；
 - 链上 escrow、退款、争议或生产手续费。
 
-因此，现有代码应称为 **EIP-3009 direct-relay settlement prototype**，
-不能称为完整标准 x402 HTTP 实现。
+因此，底层仍应称为 **EIP-3009 direct-relay settlement prototype**；HTTP
+集成可称为 x402 V2 实现，但不能称为已通过生产公共 Facilitator 验收。
 
 ## 权威状态
 

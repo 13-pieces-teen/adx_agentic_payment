@@ -33,6 +33,31 @@ export type {
   WalletSigningErrorCode,
 } from "./wallet-secret-store.ts";
 export {
+  LocalCsvWalletSecretStore,
+  loadWalletCsvRecords,
+  LocalCsvWalletStoreError,
+} from "./local-csv-wallet-secret-store.ts";
+export {
+  decryptWalletPrivateKey,
+  encryptWalletPrivateKey,
+  loadWalletMasterKey,
+  PostgresEncryptedWalletSecretStore,
+  rewrapEncryptedDataKey,
+  rewrapWalletDataKey,
+} from "./postgres-encrypted-wallet-secret-store.ts";
+export type { LocalCsvWalletStoreErrorCode } from "./local-csv-wallet-secret-store.ts";
+export {
+  createX402PaymentPayload,
+  decodeX402Header,
+  encodeX402Header,
+} from "./x402-v2.ts";
+export type {
+  ArenaX402PaymentPayload,
+  ArenaX402PaymentRequired,
+  ArenaX402PaymentRequirement,
+  X402ResourceInfo,
+} from "./x402-v2.ts";
+export {
   authorizationNonceForIntent,
   validateArenaSettlementIntent,
 } from "./arena.ts";

@@ -92,6 +92,10 @@ def create_game_operator_router(
                     token_address=body.settlement.token_address,
                     token_symbol=body.settlement.token_symbol,
                     token_decimals=body.settlement.token_decimals,
+                    token_eip712_name=body.settlement.token_eip712_name,
+                    token_eip712_version=(
+                        body.settlement.token_eip712_version
+                    ),
                     required_confirmations=(
                         body.settlement.required_confirmations
                     ),

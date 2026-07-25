@@ -4,8 +4,9 @@
 
 This directory contains a testnet settlement prototype built with viem, a mock
 EIP-3009 stablecoin, a custom Express relay, and a TypeScript SDK. The SDK now
-also defines a narrow guest-wallet signing seam and an explicitly test-only
-in-memory adapter; no persistent wallet-secret backend is configured.
+also defines a narrow guest-wallet signing seam, an explicitly test-only
+in-memory adapter, and a testnet-only external CSV adapter for the isolated
+signer service. The default composition still disables signing.
 
 ## Scope boundary
 
@@ -23,14 +24,16 @@ and signature. The current Fake adapter generates process-local keys, keeps a
 stable address per test wallet ID, and refuses unknown, disabled, or
 address-mismatched wallets. The default composition disables signing.
 
-It is **not yet a complete HTTP x402 implementation**. The current code does
-not implement:
+The cross-module `arena_payments/` integration now implements the x402 V2 HTTP
+envelope: a resource server returns `402` with `PAYMENT-REQUIRED`, the isolated
+signer creates `PAYMENT-SIGNATURE`, and the server returns
+`PAYMENT-RESPONSE` after `/verify` and `/settle`. Requirements use CAIP-2
+network identifiers and are bound to one immutable Arena intent.
 
-- a resource server that responds with HTTP `402 Payment Required`;
-- `PaymentRequirements` negotiation;
-- x402 payment request/response headers;
-- `@x402/*` middleware or SDK packages;
-- compatibility with a standard public x402 facilitator.
+This has passed Fake end-to-end tests, but it has not yet completed a fresh
+transaction against a standard public Facilitator. Until that acceptance run,
+describe the chain execution as the existing EIP-3009 relay prototype with an
+x402 V2 integration layer, not as production-certified public compatibility.
 
 The current Arena 402 game path—accepted negotiation, frozen settlement intent,
 chain confirmation, and idempotent cash/inventory update—is also outside this

@@ -20,6 +20,7 @@ COPY --chown=adx:adx connector_gateway ./connector_gateway
 COPY --chown=adx:adx arena_agent_contracts ./arena_agent_contracts
 COPY --chown=adx:adx arena_core ./arena_core
 COPY --chown=adx:adx arena_game ./arena_game
+COPY --chown=adx:adx arena_payments ./arena_payments
 COPY --chown=adx:adx hosted_agent_control_plane ./hosted_agent_control_plane
 COPY --chown=adx:adx hosted_agent_runtime ./hosted_agent_runtime
 COPY --chown=adx:adx web ./web
@@ -27,6 +28,7 @@ COPY --chown=adx:adx db ./db
 COPY --chown=adx:adx deploy/scripts/api-entrypoint.sh ./deploy/scripts/api-entrypoint.sh
 COPY --chown=adx:adx deploy/scripts/migrate.py ./deploy/scripts/migrate.py
 COPY --chown=adx:adx deploy/scripts/provision_db_roles.py ./deploy/scripts/provision_db_roles.py
+COPY --chown=adx:adx deploy/scripts/import_wallet_inventory.py ./deploy/scripts/import_wallet_inventory.py
 RUN chmod 0555 /app/deploy/scripts/api-entrypoint.sh
 
 USER adx

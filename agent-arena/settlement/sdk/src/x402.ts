@@ -204,6 +204,7 @@ export async function checkDomainMatchesChain(dep: Deployments): Promise<boolean
     address: dep.usdc.address,
     abi: [{ type: "function", name: "DOMAIN_SEPARATOR", stateMutability: "view", inputs: [], outputs: [{ type: "bytes32" }] }],
     functionName: "DOMAIN_SEPARATOR",
+    authorizationList: undefined,
   });
   // viem 内部会用同一 domain 生成 separator；这里比对信任 signTypedData 的 domain 编码。
   // 直接用 hashDomain 计算并对比：

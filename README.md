@@ -119,15 +119,15 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；创建 Connector Binding 时会自动注册 `arena_agents` 与 `arena_runtime_bindings`，但尚未接入 `arena.decide` / `arena.negotiate`，因此 route 保持 `provisioning` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；通用 Join API 已同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件；Local Connector 游戏适配仍待实现 |
-| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；SDK 已增加不暴露私钥的 guest-wallet 签名接缝与显式 test-only Fake adapter，未配置真实 backend 时 fail closed |
+| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
-| 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
-| 标准 HTTP x402 | 尚未实现 `402 Payment Required` challenge、支付 header、paid retry 或标准公共 Facilitator 兼容 |
+| 钱包与 PaymentMandate | `018` 已实现 GitHub User 永久绑定平台 testnet 钱包、同局 Participant 钱包快照、Game/chain/token/payee/单笔/累计/期限约束，以及并发安全且幂等的 `reserve / consume / release` 与 revoke |
+| 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；自动链路已用 Fake 跑通 wallet → Mandate → x402 → facilitator → submitted → 链上恢复边界；新鲜真实 testnet 交易仍未执行 |
+| 标准 HTTP x402 | 已实现 V2 `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`、`eip155:<chainId>`、exact 原子金额、冻结 Intent 绑定，以及隔离的密文钱包 signer 与自建 V2 `/verify`/`/settle` Facilitator；公共 Facilitator 尚未实网验收 |
 
-现有 settlement 是 **EIP-3009 direct-relay prototype**，不能描述为完整标准
-x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不是声称已经完成
-尚不存在的协议兼容。
+底层链上执行仍是 **EIP-3009 direct-relay prototype**；HTTP 外层已经按 x402 V2
+实现，但在标准公共 Facilitator 上完成实网验收前，不能声称生产兼容已经完成。
 
 ## 仓库结构
 
@@ -135,7 +135,8 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `web/` | 当前 HTTP 组合根：Connector、Hosted Agent、Arena participation 与 Pawnhouse API |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | Connector、Hosted Agent/Runtime/Task、Pawnhouse、GitHub OAuth 与加密 credential vault 迁移 |
+| `arena_payments/` | 永久钱包绑定、PaymentMandate、x402 V2、Facilitator/Signer 端口、自动结算与云端 lease |
+| `db/` | Connector、Hosted Agent/Runtime/Task、Pawnhouse、GitHub OAuth、加密 credential vault 与钱包/x402 迁移 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
 | `hosted_agent_runtime/` | Secret Store、durable Attempt recorder、Provider/Model/thinking capability registry、安全 Prompt/Driver，以及 DeepSeek/OpenAI-compatible HTTPS Provider |
@@ -194,10 +195,10 @@ docker compose -f docker-compose.local.yml down -v
 
 这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
 持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
-可继续冻结 SettlementIntent。当前开发 bridge 的新鲜 Injective testnet 支付仍需要
-逐笔人类确认；上线目标改为用户 Join 时一次确认 PaymentMandate，此后 accepted trade
-由隔离的 guest signer 自动完成。SDK 已建立隔离签名接口和内存 Fake adapter，但
-永久钱包绑定、PaymentMandate、持久化 signer backend 与自动 Settlement Worker 尚未实现。
+可继续冻结 SettlementIntent。人工 CLI bridge 仍要求逐笔确认；产品自动路径改为用户
+入局时创建一次受限 PaymentMandate，此后 accepted trade 由隔离的 guest signer 和
+自动 Settlement Worker 完成，不再逐笔确认。默认部署仍将自动广播设为关闭，必须先
+配置 testnet signer、Facilitator、钱包清单和管理员 allowlist。
 
 ## 快速检查现有模块
 
@@ -269,6 +270,6 @@ python scripts/sync_skills.py --check
 ## 外部参考
 
 - [A2A Protocol](https://github.com/a2aproject/A2A)
-- [x402](https://github.com/coinbase/x402)
+- [x402](https://github.com/x402-foundation/x402)
 - [Injective](https://injective.com)
 - [Arena 402 frontend](https://github.com/sunruize93-cmyk/arena402)
