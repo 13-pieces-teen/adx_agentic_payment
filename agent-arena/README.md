@@ -39,8 +39,8 @@ current differences in active READMEs.
 | Settlement SDK | Mock and real TypeScript adapters implemented |
 | Direct settlement | Buyer-authorized mUSDC transfer to seller exercised |
 | Standard HTTP x402 | Not complete |
-| Game integration | Not complete; accepted negotiations do not yet create persisted settlement intents |
-| Inventory commit | Not complete; chain confirmation does not yet update Arena cash/holdings |
+| Game integration | Single-payment mode persists immutable SettlementIntent snapshots after accepted negotiations |
+| Inventory commit | Read-only confirmation recovery gates idempotent Arena cash/holding commit |
 | TEE, escrow, refund, dispute, production fee | Not implemented product capabilities |
 
 The current direct-settlement path does not lock funds in an escrow contract.
@@ -58,18 +58,17 @@ Its local `refund()` status must not be represented as an on-chain reversal.
 
 There is no current game engine or TEE implementation in this directory.
 
-## Next integration boundary
+## Remaining integration boundary
 
-1. Freeze an accepted negotiation into a unique `SettlementIntent`.
-2. Bind authorization to game, round, negotiation, chain, token, payee, amount,
-   expiry, and idempotency key.
-3. Invoke SettlementSDK and persist the transaction hash.
-4. Resolve timeout/unknown states by querying the chain before retrying.
-5. After successful chain confirmation, idempotently update Arena cash and
-   goods in one database transaction.
+The current game bridge freezes one unique SettlementIntent, binds its payment
+snapshot, records operator approval/submission, resolves submitted/unknown
+states through read-only chain evidence, and commits Arena cash/goods exactly
+once after confirmation. The remaining product boundary is a bounded,
+revocable PaymentMandate with `reserve / consume / release`, unattended signer
+isolation, and a freshly approved end-to-end testnet acceptance run.
 
-Until those steps pass together, describe this workspace only as a settlement
-prototype, not a complete Arena 402 game or standard x402 HTTP flow.
+Continue to describe this workspace as an EIP-3009 settlement prototype, not a
+standard x402 HTTP flow or a complete unattended payment authority.
 
 ## Security
 

@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/lib/arena-api';
+import { CONNECTOR_API_BASE_URL } from '@/lib/connector-api';
 
 export interface PawnhouseGameState {
   gameId: string;
@@ -30,7 +30,7 @@ export interface PawnhouseTimeline {
 }
 
 async function gameGet<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${CONNECTOR_API_BASE_URL}${path}`, {
     credentials: 'include',
     headers: { Accept: 'application/json' },
     signal,

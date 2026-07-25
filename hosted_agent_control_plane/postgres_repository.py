@@ -28,6 +28,7 @@ from .repository import ControlRepositoryError
 
 _CREDENTIAL_ROUTE = "model_credentials.create"
 _AGENT_ROUTE = "hosted_agents.create"
+_AGENT_UPDATE_ROUTE = "hosted_agents.update"
 _IDEMPOTENCY_TTL_SECONDS = 3600
 _VALIDATION_DEADLINE_MINUTES = 10
 
@@ -66,9 +67,15 @@ SELECT
     c.max_context_items,
     c.max_output_tokens,
     c.config_hash,
-    c.status AS provisioning_status,
+    CASE
+        WHEN a.runtime_update_job_id IS NOT NULL THEN 'provisioning'
+        ELSE c.status
+    END AS provisioning_status,
     b.runtime_binding_id,
-    b.route_status,
+    CASE
+        WHEN a.runtime_update_job_id IS NOT NULL THEN 'provisioning'
+        ELSE b.route_status
+    END AS route_status,
     COALESCE(a.runtime_update_job_id, latest.validation_job_id)
         AS validation_job_id,
     a.created_at,
@@ -622,6 +629,260 @@ class PostgresHostedAgentControlRepository:
                     disposition=ReservationDisposition.CREATED,
                     agent=agent,
                 )
+
+    async def get_hosted_agent_update_replay(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key_digest: str,
+        request_hash: str,
+    ) -> HostedAgentRecord | None:
+        async with self._connection() as connection:
+            replay = await connection.fetchrow(
+                """
+                SELECT * FROM lookup_completed_arena_api_idempotency(
+                    $1, $2, $3, $4
+                )
+                """,
+                owner_user_id,
+                _AGENT_UPDATE_ROUTE,
+                idempotency_key_digest,
+                request_hash,
+            )
+            if replay["disposition"] == "conflict":
+                raise ControlRepositoryError("idempotency_conflict")
+            if replay["disposition"] != "replay":
+                return None
+            row = await connection.fetchrow(
+                _AGENT_SELECT
+                + " WHERE a.owner_user_id = $1 AND a.agent_id = $2",
+                owner_user_id,
+                replay["resource_id"],
+            )
+        if row is None:
+            raise ControlRepositoryError("idempotency_conflict")
+        return _agent(row)
+
+    async def update_hosted_agent(
+        self,
+        *,
+        agent: HostedAgentRecord,
+        expected_config_hash: str,
+        idempotency_key_digest: str,
+        request_hash: str,
+    ) -> HostedAgentRecord:
+        async with self._connection() as connection:
+            async with connection.transaction():
+                reservation = await connection.fetchrow(
+                    """
+                    SELECT * FROM reserve_arena_api_idempotency(
+                        $1, $2, $3, $4, $5
+                    )
+                    """,
+                    agent.owner_user_id,
+                    _AGENT_UPDATE_ROUTE,
+                    idempotency_key_digest,
+                    request_hash,
+                    _IDEMPOTENCY_TTL_SECONDS,
+                )
+                disposition = reservation["disposition"]
+                if disposition == "conflict":
+                    raise ControlRepositoryError("idempotency_conflict")
+                if disposition in {"replay", "retry", "in_progress"}:
+                    resource_id = reservation["resource_id"]
+                    if not resource_id:
+                        raise ControlRepositoryError("idempotency_conflict")
+                    row = await connection.fetchrow(
+                        _AGENT_SELECT
+                        + " WHERE a.owner_user_id = $1 AND a.agent_id = $2",
+                        agent.owner_user_id,
+                        resource_id,
+                    )
+                    if row is None:
+                        raise ControlRepositoryError("idempotency_conflict")
+                    return _agent(row)
+                if disposition != "reserved":
+                    raise ControlRepositoryError("idempotency_conflict")
+
+                current = await connection.fetchrow(
+                    """
+                    SELECT
+                        a.status AS agent_status,
+                        a.runtime_update_job_id,
+                        c.hosted_config_id,
+                        c.credential_id,
+                        c.provider,
+                        c.config_hash,
+                        c.status AS config_status,
+                        b.runtime_binding_id,
+                        b.route_status
+                    FROM arena_agents AS a
+                    JOIN arena_hosted_configs AS c
+                      ON c.agent_id = a.agent_id
+                    JOIN arena_runtime_bindings AS b
+                      ON b.agent_id = a.agent_id
+                     AND b.hosted_config_id = c.hosted_config_id
+                     AND b.disabled_at IS NULL
+                    WHERE a.owner_user_id = $1
+                      AND a.agent_id = $2
+                    FOR UPDATE OF a
+                    """,
+                    agent.owner_user_id,
+                    agent.agent_id,
+                )
+                if current is None:
+                    raise ControlRepositoryError("agent_not_found")
+                if (
+                    current["agent_status"] != "active"
+                    or current["runtime_update_job_id"] is not None
+                    or current["config_status"] != "ready"
+                    or current["route_status"] != "ready"
+                    or current["config_hash"] != expected_config_hash
+                ):
+                    raise ControlRepositoryError("agent_not_ready")
+                if (
+                    current["hosted_config_id"] != agent.hosted_config_id
+                    or current["runtime_binding_id"]
+                    != agent.runtime_binding_id
+                    or current["credential_id"] != agent.credential_id
+                ):
+                    raise ControlRepositoryError("agent_not_ready")
+                if current["provider"] != agent.provider_id:
+                    raise ControlRepositoryError("provider_mismatch")
+
+                active_game = await connection.fetchval(
+                    """
+                    SELECT 1
+                    FROM game_agents
+                    WHERE agent_id = $1
+                      AND status IN ('joined', 'active', 'settling')
+                    LIMIT 1
+                    """,
+                    agent.agent_id,
+                )
+                if active_game is not None:
+                    raise ControlRepositoryError("agent_not_ready")
+
+                credential = await connection.fetchrow(
+                    """
+                    SELECT credential_id, owner_user_id, provider, status
+                    FROM arena_model_credentials
+                    WHERE credential_id = $1
+                      AND owner_user_id = $2
+                    FOR UPDATE
+                    """,
+                    agent.credential_id,
+                    agent.owner_user_id,
+                )
+                if credential is None:
+                    raise ControlRepositoryError("credential_not_found")
+                if credential["provider"] != agent.provider_id:
+                    raise ControlRepositoryError("provider_mismatch")
+                if credential["status"] != "valid":
+                    raise ControlRepositoryError("credential_not_usable")
+
+                candidate = {
+                    "credential_id": agent.credential_id,
+                    "provider": agent.provider_id,
+                    "model": agent.model_id,
+                    "thinking_enabled": agent.thinking_enabled,
+                    "strategy_instructions": agent.strategy_instructions,
+                    "prompt_version": agent.prompt_version,
+                    "task_schema_version": agent.task_schema_version,
+                    "action_schema_version": agent.action_schema_version,
+                    "capability_version": agent.capability_version,
+                    "adapter_version": agent.adapter_version,
+                    "max_input_bytes": agent.max_input_bytes,
+                    "max_context_items": agent.max_context_items,
+                    "max_output_tokens": agent.max_output_tokens,
+                }
+                await connection.execute(
+                    """
+                    INSERT INTO hosted_credential_validation_jobs (
+                        validation_job_id, agent_id, credential_id,
+                        hosted_config_id, job_kind, candidate_config_snapshot,
+                        candidate_config_hash, expected_current_config_hash,
+                        validation_schema_version, status, max_attempts,
+                        next_attempt_at, deadline_at, created_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, 'update', $5::jsonb, $6, $7,
+                        'arena.credential-validation.v1', 'queued', 3,
+                        $8::timestamptz,
+                        $8::timestamptz + make_interval(mins => $9::integer),
+                        $8::timestamptz
+                    )
+                    """,
+                    agent.validation_job_id,
+                    agent.agent_id,
+                    agent.credential_id,
+                    agent.hosted_config_id,
+                    json.dumps(candidate, separators=(",", ":")),
+                    agent.config_hash,
+                    expected_config_hash,
+                    agent.updated_at,
+                    _VALIDATION_DEADLINE_MINUTES,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena_agents
+                    SET runtime_update_job_id = $1,
+                        updated_at = $2
+                    WHERE agent_id = $3
+                      AND runtime_update_job_id IS NULL
+                    """,
+                    agent.validation_job_id,
+                    agent.updated_at,
+                    agent.agent_id,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena_model_credentials
+                    SET status = 'pending_validation',
+                        updated_at = $1
+                    WHERE credential_id = $2
+                      AND status = 'valid'
+                    """,
+                    agent.updated_at,
+                    agent.credential_id,
+                )
+                attached = await connection.fetchrow(
+                    """
+                    SELECT * FROM attach_arena_api_idempotency_resource(
+                        $1, $2, $3, $4, 'arena_agent', $5
+                    )
+                    """,
+                    agent.owner_user_id,
+                    _AGENT_UPDATE_ROUTE,
+                    idempotency_key_digest,
+                    request_hash,
+                    agent.agent_id,
+                )
+                if attached["disposition"] not in {"attached", "replay"}:
+                    raise ControlRepositoryError("idempotency_conflict")
+                completed = await connection.fetchrow(
+                    """
+                    SELECT * FROM complete_arena_api_idempotency(
+                        $1, $2, $3, $4, 'arena_agent', $5, 202
+                    )
+                    """,
+                    agent.owner_user_id,
+                    _AGENT_UPDATE_ROUTE,
+                    idempotency_key_digest,
+                    request_hash,
+                    agent.agent_id,
+                )
+                if completed["disposition"] not in {"completed", "replay"}:
+                    raise ControlRepositoryError("idempotency_conflict")
+                row = await connection.fetchrow(
+                    _AGENT_SELECT
+                    + " WHERE a.owner_user_id = $1 AND a.agent_id = $2",
+                    agent.owner_user_id,
+                    agent.agent_id,
+                )
+                if row is None:
+                    raise ControlRepositoryError("agent_not_found")
+                return _agent(row)
 
     async def get_hosted_agent_for_owner(
         self,

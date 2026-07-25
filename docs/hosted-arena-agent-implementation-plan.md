@@ -1,11 +1,14 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
 > 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与 1–10 回合游戏编排已完成，
-> 真实 Tencent SSM/Provider、Connector 游戏 Adapter 和生产 E2E 待验收
+> 生产 Tencent SSM/CAM、Connector 游戏 Adapter 和完整生产 E2E 待验收；
+> DeepSeek/OpenAI-compatible Provider 已在本地真实链路验证
 > 最后更新：2026-07-25
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
+> 前端边界：产品 UI 已迁移到外部 `sunruize93-cmyk/arena402`；本计划中的
+> `frontend/` 路径记录当前 Compose 过渡壳，Vercel/API 切换尚未验收
 > 设计优先级：以本计划定义的最终 Hosted/Local 统一 Runtime 目标为准；现有
 > Game Design 是待同步的背景输入，不是限制目标架构调整的硬约束
 
@@ -29,7 +32,7 @@ Agent identity / ownership
 
 中间的完整 FCFS 撮合、有限轮协商和结算引擎可以独立推进。本计划只实现它们所依赖的
 Agent/Runtime/Task 基础，并提供清晰的 Arena 接口；不会为了演示 Hosted Agent 而把
-现有内存 matching 原型冒充生产游戏内核。
+已删除的内存 matching 原型冒充生产游戏内核。
 
 ### 1.1 MVP 成功定义
 
@@ -99,7 +102,10 @@ User logs in
 
 复用的是安全与持久化模式，不是把 Connector Device/Command 表作为 Hosted Agent 表。
 
-### 2.2 不能作为目标实现
+### 2.2 已移除且不能作为目标实现
+
+下表是迁移时的删除依据。所列 matching、Supabase factory 与 `001` schema 已于
+2026-07-25 从活动代码删除；保留表格是为了说明为什么不能恢复这些语义。
 
 | 当前实现 | 原因 |
 |---|---|
@@ -199,7 +205,7 @@ User logs in
 
 ## 4. 目标模块与文件布局
 
-计划按权威拆成三个有单向依赖的包，不继续把 Hosted 逻辑堆入 legacy `matching/`：
+当前实现按权威拆成三个有单向依赖的包，不把 Hosted 逻辑堆入游戏领域：
 
 ```text
 arena_agent_contracts/
@@ -700,14 +706,14 @@ Credential validation 状态机：
 ### 10.4 退出门槛
 
 - [x] Fake Provider 全错误矩阵通过；
-- [ ] 真实 Adapter 完成最小 structured action；
+- [x] DeepSeek/OpenAI-compatible Adapter 完成真实 structured action；
 - [x] thinking 开/关或 always-on 行为与 registry 一致；
-- [ ] reasoning text 不进入 persistence/API；
+- [x] reasoning text 不进入 persistence/API；
 - [ ] redirect 到 loopback/RFC1918/link-local/cloud metadata 被拒绝；
 - [ ] 恶意 proxy env 不生效，超大/压缩炸弹响应被拒绝；
 - [x] usage 缺失时 `usage_complete=false`；
 - [x] 无任何 Provider/Model fallback。
-- [ ] transient validation 可在重启后按 `next_attempt_at` 恢复；
+- [x] transient validation 可在重启后按 `next_attempt_at` 恢复；
 - [ ] permanent validation 不自动重试，revalidate 受限流且不重复建 job。
 
 ## 11. Phase 4：Hosted Agent API 与创建 UI
@@ -854,7 +860,8 @@ credential_id
 - 显示 Sandbox/testnet-only、Provider 数据政策与费用提示；
 - 显示 replace credential、disable；
 - 不显示 secret_ref、完整 Prompt 或原始 Provider 错误；
-- 静态 Arena 页面如保留 `+ DEPLOY`，只跳转到正式 `/agents`，不直接写 Supabase。
+- 本仓库 Compose 过渡页只调用正式 API；外部 Next.js 产品仓库仍需移除 legacy
+  Agent/listing/ELO client 并切换到当前 Hosted/Pawnhouse/Connector API。
 
 ### 11.4 测试
 
@@ -891,7 +898,7 @@ credential_id
 - [x] Runtime 未 ready 不显示 online；
 - [ ] join 与异步 Runtime 更新竞态在真实 PostgreSQL 中线性化；
 - [ ] transient validation 可恢复，revalidate 不会并发创建重复 job；
-- [ ] candidate validation 失败不覆盖当前 Config，成功只产生一次完整 CAS；
+- [x] candidate validation 失败不覆盖当前 Config，成功只产生一次完整 CAS；
 - [ ] 浏览器不能覆盖内部 endpoint、系统规则或 Secret reference；
 - [x] Local Connector 入口未被破坏。
 
@@ -1110,15 +1117,15 @@ Owner-only：
 
 ### 13.6 退出门槛
 
-- [ ] Hosted 与 Rule Agent 接收同一版本 payload；
+- [x] Hosted 与 Rule Agent 接收同一版本 payload；
 - [ ] Local Connector adapter 使用同一业务 payload；
-- [ ] 一个用户每局只有一个参与 Agent；
-- [ ] Runtime success 不直接写 pool/inventory/payment；
+- [x] 一个用户每局只有一个参与 Agent；
+- [x] Runtime success 不直接写 pool/inventory/payment；
 - [ ] dispatch ACK、Result submit、Arena apply ACK 三个状态可独立恢复；
-- [ ] FCFS 只使用 Result Sink 的数据库 `result_received_at`；
-- [ ] `accept` 只进入 pending settlement；
-- [ ] secret/PII/strategy 明显片段触发中性模板，原 message 不进入任何持久化或日志；
-- [ ] 正常公开 message 仍按长度与文本安全规则展示；
+- [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`；
+- [x] `accept` 只进入 pending settlement；
+- [x] secret/PII/strategy 明显片段触发中性模板，原 message 不进入任何持久化或日志；
+- [x] 正常公开 message 仍按长度与文本安全规则展示；
 - [ ] 创建页明确展示语义推断残余风险。
 
 ## 14. Phase 7：PaymentMandate 与 Settlement 依赖
@@ -1155,9 +1162,9 @@ Owner-only：
 - [ ] Agent 无钱包私钥；
 - [ ] 超单笔/总额/期限/范围的 Deal 无法提交；
 - [ ] revoke 后不能创建新支付；
-- [ ] 重复请求不能双花或双记库存；
+- [x] 单笔 Intent 的重复请求不能双花或双记库存；
 - [ ] 链上确认前 UI 不显示 completed trade；
-- [ ] 当前实现仍准确标注 testnet direct settlement，而非完整 x402。
+- [x] 当前实现仍准确标注 testnet direct settlement，而非完整 x402。
 
 ## 15. Phase 8：部署、E2E 与延迟校准
 
@@ -1476,12 +1483,12 @@ Agent Studio 不进入本次 MVP 的代码范围。
 - [ ] Decide/Negotiate 失败确定性收敛；
 - [ ] duplicate/late result 不改变业务终态；
 - [ ] Agent 不直接通信，所有交互由 Arena Gateway 中转；
-- [ ] Runtime success、协议达成、链上确认和库存提交状态分离；
+- [x] Runtime success、协议达成、链上确认和库存提交状态分离；
 - [ ] PaymentMandate 的 reserve/consume/release、额度、期限、范围和 revoke 已实现；
 - [ ] Sandbox Signer 与 Hosted Worker 权限完全分离；
 - [ ] accepted Deal 经真实 Injective EVM testnet 确认；
 - [ ] 链上确认后 Arena 库存只幂等提交一次，unknown/reorg 可恢复；
-- [ ] testnet-only、EIP-3009 与 x402 的能力边界准确；
+- [x] testnet-only、EIP-3009 与 x402 的能力边界准确；
 - [ ] 生产 Compose、真实 PostgreSQL、真实 Secret Store、真实 Provider 和公网 E2E
       均有脱敏证据；
 - [ ] README、product、game-design、roadmap、agent-onboarding 和 settlement 文档已同步；

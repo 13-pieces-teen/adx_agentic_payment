@@ -32,11 +32,14 @@ from .models import (
     CredentialStatus,
     HostedAgentCreation,
     HostedAgentRecord,
+    HostedProvisioningStatus,
     ReservationDisposition,
 )
 
 
 RepositoryErrorCode: TypeAlias = Literal[
+    "agent_not_found",
+    "agent_not_ready",
     "credential_not_found",
     "credential_not_usable",
     "idempotency_conflict",
@@ -46,6 +49,8 @@ RepositoryErrorCode: TypeAlias = Literal[
 
 _REPOSITORY_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
+        "agent_not_found",
+        "agent_not_ready",
         "credential_not_found",
         "credential_not_usable",
         "idempotency_conflict",
@@ -56,6 +61,7 @@ _REPOSITORY_ERROR_CODES: Final[frozenset[str]] = frozenset(
 
 _CREDENTIAL_OPERATION: Final[str] = "model_credentials.create"
 _HOSTED_AGENT_OPERATION: Final[str] = "hosted_agents.create"
+_HOSTED_AGENT_UPDATE_OPERATION: Final[str] = "hosted_agents.update"
 _HASH_IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^sha256:[0-9a-f]{64}$"
 )
@@ -122,6 +128,23 @@ class HostedAgentControlRepository(Protocol):
         idempotency_key_digest: str,
         request_hash: str,
     ) -> HostedAgentCreation: ...
+
+    async def get_hosted_agent_update_replay(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key_digest: str,
+        request_hash: str,
+    ) -> HostedAgentRecord | None: ...
+
+    async def update_hosted_agent(
+        self,
+        *,
+        agent: HostedAgentRecord,
+        expected_config_hash: str,
+        idempotency_key_digest: str,
+        request_hash: str,
+    ) -> HostedAgentRecord: ...
 
     async def get_hosted_agent_for_owner(
         self,
@@ -418,6 +441,90 @@ class MemoryHostedAgentControlRepository:
                 disposition=ReservationDisposition.CREATED,
                 agent=agent,
             )
+
+    async def update_hosted_agent(
+        self,
+        *,
+        agent: HostedAgentRecord,
+        expected_config_hash: str,
+        idempotency_key_digest: str,
+        request_hash: str,
+    ) -> HostedAgentRecord:
+        self._require_safe_hash(expected_config_hash)
+        self._require_safe_hash(idempotency_key_digest)
+        self._require_safe_hash(request_hash)
+        async with self._lock:
+            replay = self._idempotency_result(
+                entries=self._idempotency,
+                operation=_HOSTED_AGENT_UPDATE_OPERATION,
+                owner_user_id=agent.owner_user_id,
+                idempotency_key_digest=idempotency_key_digest,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return self._agents[replay.result_id]
+
+            current = self._agents.get(agent.agent_id)
+            if current is None or current.owner_user_id != agent.owner_user_id:
+                raise ControlRepositoryError("agent_not_found")
+            if (
+                current.provisioning_status
+                is not HostedProvisioningStatus.READY
+                or current.route_status is not HostedProvisioningStatus.READY
+                or current.config_hash != expected_config_hash
+            ):
+                raise ControlRepositoryError("agent_not_ready")
+            credential = self._credentials.get(current.credential_id)
+            if (
+                credential is None
+                or credential.owner_user_id != agent.owner_user_id
+            ):
+                raise ControlRepositoryError("credential_not_found")
+            if credential.status is not CredentialStatus.VALID:
+                raise ControlRepositoryError("credential_not_usable")
+
+            self._agents[agent.agent_id] = agent
+            self._credentials[credential.credential_id] = credential.model_copy(
+                update={
+                    "status": CredentialStatus.PENDING_VALIDATION,
+                    "updated_at": self._clock(),
+                }
+            )
+            self._idempotency[
+                (
+                    _HOSTED_AGENT_UPDATE_OPERATION,
+                    agent.owner_user_id,
+                    idempotency_key_digest,
+                )
+            ] = _IdempotencyEntry(
+                request_hash=request_hash,
+                result_id=agent.agent_id,
+            )
+            return agent
+
+    async def get_hosted_agent_update_replay(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key_digest: str,
+        request_hash: str,
+    ) -> HostedAgentRecord | None:
+        self._require_safe_hash(idempotency_key_digest)
+        self._require_safe_hash(request_hash)
+        async with self._lock:
+            replay = self._idempotency_result(
+                entries=self._idempotency,
+                operation=_HOSTED_AGENT_UPDATE_OPERATION,
+                owner_user_id=owner_user_id,
+                idempotency_key_digest=idempotency_key_digest,
+                request_hash=request_hash,
+            )
+            if replay is None:
+                return None
+            agent = self._agents.get(replay.result_id)
+            if agent is None or agent.owner_user_id != owner_user_id:
+                raise ControlRepositoryError("idempotency_conflict")
+            return agent
 
     async def get_hosted_agent_for_owner(
         self,

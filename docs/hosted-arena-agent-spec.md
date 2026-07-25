@@ -1,10 +1,14 @@
 # Arena 402 Hosted Arena Agent 产品与技术规格
 
-> 文档状态：已批准实施；Phase 0/1 已完成，Phase 2 端口/能力注册表与 Phase 3 Fake Provider/PromptBuilder/DirectModelDriver 测试基础已落地；真实 Secret Manager、真实 Provider 与 durable Worker 尚未接入
-> 最后更新：2026-07-24
+> 文档状态：已批准实施；Hosted control/runtime、DeepSeek/OpenAI-compatible
+> Provider、durable Worker 与 Pawnhouse Adapter 已实现。Local Connector 游戏
+> Adapter、生产 Tencent SSM/CAM 验收和完整支付授权仍待完成
+> 最后更新：2026-07-25
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
 > 相关入口：[Agent 入场与 Runtime 绑定](./agent-onboarding.md)
+> 前端边界：产品 UI 由外部 `sunruize93-cmyk/arena402` 负责并计划通过 Vercel
+> 部署；本仓库 Next.js 页面仅是尚未完成外部切换前的 Compose 过渡壳
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本规格同步
 > 设计优先级：本规格以最终 Hosted/Local 统一 Runtime 目标为准；现有 Game Design
 > 仅作为背景和待迁移输入，不作为阻止目标架构调整的严格约束
@@ -1158,9 +1162,9 @@ hash；使用排除 Key 的 canonical request metadata 与独立 pepper HMAC fin
 - `POST /api/hosted-agents/{agent_id}/disable`
   - 阻止未来 Task，不删除历史比赛和支付证据。
 
-旧 `POST /api/agents/register` 保持 legacy/BYO profile 语义，迁移前不得静默改成 Hosted
-Agent 创建接口。前端的一次“Create”点击顺序调用 Credential 与 Hosted Agent 两个
-幂等 API；这是一个用户步骤，而不是把 Secret 混回 Agent request。
+旧 `POST /api/agents/register` 已随内存 matching/ELO 原型移除。前端的一次
+“Create”点击顺序调用 Credential 与 Hosted Agent 两个幂等 API；这是一个用户
+步骤，而不是把 Secret 混回 Agent request。
 
 ### 14.4 参赛
 
@@ -1281,24 +1285,24 @@ External:
 
 ## 18. 当前实现矩阵
 
-截至 2026-07-24：
+截至 2026-07-25：
 
 | 能力 | 当前状态 | 说明 |
 |---|---|---|
-| Agent 静态注册 | 原型存在 | `matching/agent.py` 与 `/api/agents/register`，生产仍为内存 |
-| Hosted Agent 创建 UI | 最小功能壳已实现 | `/agents` 保留 Local Connector，并提供受 readiness/auth 控制的两阶段 Hosted 创建与状态列表；后续可重写视觉设计 |
-| Provider contract/Fake Provider/PromptBuilder/DirectModelDriver | 测试基础已实现 | 已覆盖安全边界、结构化动作、deadline 和 retry；没有真实 LLM 网络调用，AttemptRecorder 仍为测试内存实现 |
-| 真实 Provider Adapter | 未实现 | 当前没有真实 LLM 网络调用路径 |
-| 用户 API Key ingress | 测试控制面已实现，生产关闭 | write-only service、严格 HTTP body、摘要幂等与无回显测试已存在；尚无生产 PostgreSQL repository/真实 SSM 组合 |
-| Tencent Secret Manager | 未实现 | 只有始终 fail-closed 的未验证 adapter 骨架；生产依赖、地域和 CAM 尚未接入 |
-| thinking 配置 | 基础与 UI 已实现 | capability registry 与创建表单已表达 unsupported/optional/always-on 和 Provider 默认强度；真实 Provider 映射未实现 |
-| usage/latency/attempt | 持久化与纯执行基础已实现 | Attempt/usage 表与受限函数已存在，Driver 单测写入 MemoryAttemptRecorder；Hosted Worker 尚未 durable 写入 |
-| Persistent AgentTask | Phase 1 已实现 | 有版本化契约、Memory/PostgreSQL repository、lease/CAS；尚未接入 Game Core/Connector |
-| Result Sink/Consumer/Finalizer | Phase 1 已实现 | durable terminal Result、数据库权威时间、默认收敛和 exactly-once 投影已实现；尚未接入完整游戏 |
-| Credential validation/lifecycle jobs | 持久化与 create service 基础已实现 | 表、claim/CAS、数据库权限和原子 create repository contract 已存在；生产 repository/Controller/Worker 未实现 |
-| Hosted Worker | 未实现 | Compose 中没有独立 Worker |
-| Game Agent 单局唯一 | Phase 1 已实现 | 最小 Game/Round/Game Agent 表和唯一约束已实现；完整游戏状态仍缺 |
-| Arena `decide`/`negotiate` adapter | 未实现 | 当前 matching schema 与新游戏契约不一致 |
+| Legacy Agent/matching/ELO API | 已移除 | 不再存在第二套内存业务权威或 Supabase 工厂 |
+| Hosted Agent 创建 UI | 已实现 | `/agents` 同时保留 Local Connector，并提供受 readiness/auth 控制的 Hosted 创建、列表、详情和 Runtime PATCH |
+| Provider contract/PromptBuilder/DirectModelDriver | 已实现 | 覆盖结构化动作、deadline、单次 retry、usage 与安全出站边界 |
+| 真实 Provider Adapter | 已实现，本地验收 | DeepSeek/OpenAI-compatible HTTPS Adapter 已完成真实五回合与 accepted negotiation；不等于生产服务器验收 |
+| 用户 API Key ingress | 已实现 | write-only ingress、摘要幂等、PostgreSQL control repository 与无回显边界已接线 |
+| Tencent Secret Manager | 生产组合已实现，实机待验收 | SSM Writer/Reader/Controller 权限端口与 fail-closed 组合存在；真实 CAM 身份和部署证据仍缺 |
+| thinking 配置 | 已实现 | capability registry、UI、快照和 Provider 映射覆盖 unsupported/optional/always-on |
+| usage/latency/attempt | 已持久化 | Hosted Worker 将安全 Attempt 元数据与 usage 写入 PostgreSQL，不保存 reasoning text |
+| Persistent AgentTask | 已接入游戏 | 版本化契约、lease/CAS 与 Pawnhouse Runtime Run 已完成 |
+| Result Sink/Consumer/Finalizer | 已接入游戏 | 数据库权威时间、默认收敛、late/duplicate 处理和 exactly-once 投影已完成 |
+| Credential validation/lifecycle jobs | 核心路径已实现 | durable validation、claim/CAS、Credential Controller 和创建/Runtime PATCH 已实现；其余生命周期操作仍待完成 |
+| Hosted Worker | 已实现 | 独立无公网端口 Worker 已进入 Compose，并通过本地多回合恢复路径 |
+| Game Agent 单局唯一 | 已实现 | 数据库约束、入局快照和当前 Runtime/config 冻结已实现 |
+| Arena `decide`/`negotiate` adapter | Hosted/rule 已实现 | Local Connector 游戏 Adapter 仍未实现 |
 | Local Connector 控制面 | Self-hosted beta 已实现 | 仍缺 Arena typed task/result 适配 |
 | Native A2A Endpoint | 未实现 | 作为后续第三 Adapter |
 | EIP-3009 testnet direct settlement | 原型存在 | 不等于完整 x402 或 PaymentMandate |
@@ -1310,13 +1314,13 @@ External:
 - FastAPI、PostgreSQL、Next.js、Caddy 与 Docker Compose 部署壳；
 - Settlement 的 testnet direct-transfer 原型。
 
-当前不能直接复用为 Hosted 业务权威的能力：
+已删除或明确不能作为 Hosted 业务权威的能力：
 
-- legacy Supabase `agents`/ELO/battle schema；
-- 内存 `AgentRegistry`、`matching.engine` 和自动接受式 negotiation；
+- legacy Supabase `agents`/ELO/battle schema（已删除）；
+- 内存 AgentRegistry、matching engine 和自动接受式 negotiation（已删除）；
 - Connector Command `succeeded`；
 - 任意一条 Runtime stdout/event；
-- `matching/calibration.py` 中要求 `reasoning` 的旧 schema；
+- 要求持久化 `reasoning` 的旧 schema（已删除）；
 - `REAL`/float 金额字段。
 
 ## 19. 验收门槛

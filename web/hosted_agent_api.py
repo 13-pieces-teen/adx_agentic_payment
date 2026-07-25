@@ -27,6 +27,7 @@ from hosted_agent_control_plane import (
     CredentialIngressService,
     HostedAgentCreateRequest,
     HostedAgentService,
+    HostedAgentUpdateRequest,
     HostedControlPlaneError,
 )
 
@@ -55,6 +56,13 @@ class _CredentialIngressBody(_StrictApiBody):
 class _HostedAgentCreateBody(_StrictApiBody):
     display_name: str
     credential_id: str
+    provider_id: str
+    model_id: str
+    thinking_enabled: bool
+    strategy_instructions: str = ""
+
+
+class _HostedAgentUpdateBody(_StrictApiBody):
     provider_id: str
     model_id: str
     thinking_enabled: bool
@@ -169,6 +177,7 @@ def _service_error(exc: HostedControlPlaneError) -> HTTPException:
     elif exc.code == "idempotency_conflict":
         status = 409
     elif exc.code in {
+        "agent_not_ready",
         "credential_not_usable",
         "provider_mismatch",
     }:
@@ -343,6 +352,39 @@ def create_hosted_agent_router(
                 )
                 value = await agent_service.create_hosted_agent(
                     owner_user_id=principal.user_id,
+                    request=command,
+                )
+            except (ValidationError, HostedControlPlaneError) as exc:
+                if isinstance(exc, HostedControlPlaneError):
+                    raise _service_error(exc) from None
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "invalid_request"},
+                ) from None
+            return _public(value)
+
+        @router.patch(
+            "/api/hosted-agents/{agent_id}",
+            status_code=202,
+        )
+        async def update_hosted_agent(
+            agent_id: str,
+            request: Request,
+        ) -> dict[str, Any]:
+            principal = await _principal(auth, request, csrf=True)
+            body = await _safe_body(
+                request,
+                _HostedAgentUpdateBody,
+                max_bytes=_MAX_AGENT_BODY_BYTES,
+            )
+            try:
+                command = HostedAgentUpdateRequest(
+                    **body.model_dump(),
+                    idempotency_key=_idempotency_key(request),
+                )
+                value = await agent_service.update_hosted_agent(
+                    owner_user_id=principal.user_id,
+                    agent_id=agent_id,
                     request=command,
                 )
             except (ValidationError, HostedControlPlaneError) as exc:

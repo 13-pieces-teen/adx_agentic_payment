@@ -104,8 +104,9 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 新的游戏业务内核以 **王城典当行（The King's Pawnhouse）** 为游戏内叙事：
 四种货物为粮草、精铁、战马与宝石；每名玩家用等值 20 金自由配置初始现金和
 持仓。事件逐回合改变公开市场参考价和终场估值，品牌名 `Arena 402` 不进入游戏内
-叙事文案。新内核位于 `arena_game/` 与 PostgreSQL `arena402` schema；旧
-`matching/` 只保留为尚未删除的历史原型。
+叙事文案。当前游戏内核位于 `arena_game/` 与 PostgreSQL `arena402` schema。
+旧的内存 `matching/`、Supabase 业务适配和 ELO API 已删除，避免形成第二套业务
+权威。
 
 ## 当前实现状态
 
@@ -115,12 +116,11 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | 模块 | 当前状态 |
 |------|----------|
 | 王城典当行 Game Core | 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
-| Python matching/Arena | `matching/` 与 `web/api.py` 提供内存版 Agent、listing/intent、matching、有限 negotiation 和 ELO/Arena 原型；它不是新游戏的持久化回合引擎 |
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；尚未接入 `arena.decide` / `arena.negotiate` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；Local Connector 游戏适配仍待实现 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
-| 静态 Arena 前端 | `arena402/index.html` 已有 Supabase 驱动的 Agent、Battle、Market 和 ELO 页面；新的 `/game` 回合视图、数据表和实时状态机尚未实现 |
+| 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)；外部 `main` 已更新为 Next.js 15.5.21 并包含 Vercel 配置。Vercel 发布与当前 Pawnhouse/Hosted API、Cookie/CORS 的切换验收尚未完成；本仓库 `frontend/` 仅作为 Compose 过渡壳 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
 | 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
 | 标准 HTTP x402 | 尚未实现 `402 Payment Required` challenge、支付 header、paid retry 或标准公共 Facilitator 兼容 |
@@ -133,16 +133,15 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 
 | 路径 | 用途 |
 |------|------|
-| `matching/`, `web/` | 现有内存 matching、negotiation 和 Arena/ELO 原型 |
+| `web/` | 当前 HTTP 组合根：Connector、Hosted Agent、Arena participation 与 Pawnhouse API |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`012` Pawnhouse 市场、Hosted orchestration、确认后结算、完整游戏和参赛容量迁移 |
-| `arena402/` | 根 Vercel 部署使用的 CDN-only 静态前端 |
+| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`013` Pawnhouse 市场、Hosted orchestration、确认后结算、完整游戏、参赛容量和 Hosted Runtime PATCH 迁移 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
 | `hosted_agent_runtime/` | Secret Store、durable Attempt recorder、Provider/Model/thinking capability registry、安全 Prompt/Driver，以及 DeepSeek/OpenAI-compatible HTTPS Provider |
-| `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、PostgreSQL repository、Tencent SSM 生产组合与显式 local-development 组合 |
+| `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、同 Provider Runtime PATCH、PostgreSQL repository、Tencent SSM 生产组合与显式 local-development 组合 |
 | `docs/hosted-arena-agent-*.md` | Hosted/Local 统一 Runtime 的已批准规格、实施计划与当前阶段状态 |
-| `frontend/` | Connector onboarding、控制台，以及默认受 readiness 关闭的最小 Hosted Agent 创建壳 |
+| `frontend/` | 当前 Compose 仍依赖的临时 Next.js 集成壳；新产品 UI 在外部 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402) 开发和部署，完成切换后删除本目录 |
 | `deploy/`, `docker-compose.production.yml` | Connector 控制面，以及可选 Hosted Worker、Credential Controller、Arena Worker 的 fail-closed 单机部署 |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 结算原型 |
 | `agent-arena/specs/` | 已完成且冻结的 settlement 开发记录 |
@@ -200,23 +199,24 @@ docker compose -f docker-compose.local.yml down -v
 
 ## 快速检查现有模块
 
-### Python prototype
+### Python services
 
-仓库的 setup script 会设置本地 Git hook 并运行内存 smoke check。请在 Bash
+仓库的 setup script 会设置本地 Git hook，编译当前 Python 包并验证 API 组合根。请在 Bash
 环境中从仓库根目录运行：
 
 ```bash
 ./setup.sh
 ```
 
-启动现有 FastAPI wrapper：
+启动当前 FastAPI 组合根：
 
 ```bash
 pip install fastapi uvicorn
 python3 -c 'from web.api import create_app; import uvicorn; uvicorn.run(create_app(), port=8000)'
 ```
 
-这些命令只启动旧的 Python prototype，不会启动完整 Arena 402 游戏。
+默认启动只挂载安全的公共能力与健康检查；持久化 Arena、Hosted 和生产 Connector
+表面仍需按 `.env.example` 或 Compose 显式启用。
 
 ### Local Connector
 
@@ -249,7 +249,7 @@ Settlement 的环境、命令、链上部署信息和验证证据见：
 - Hosted/Arena 生产运行：[`docs/hosted-arena-production-runbook.md`](docs/hosted-arena-production-runbook.md)
 - Connector 规格：[`docs/local-agent-connector-spec.md`](docs/local-agent-connector-spec.md)
 - Connector 部署：[`docs/self-hosted-connector-deployment.md`](docs/self-hosted-connector-deployment.md)
-- 前端目标：[`arena402/FRONTEND_GUIDE.md`](arena402/FRONTEND_GUIDE.md)
+- 前端迁移边界：[`frontend/README.md`](frontend/README.md)
 - 历史文档：[`docs/archive/README.md`](docs/archive/README.md)
 
 ## 项目协作
@@ -267,3 +267,4 @@ python scripts/sync_skills.py --check
 - [A2A Protocol](https://github.com/a2aproject/A2A)
 - [x402](https://github.com/coinbase/x402)
 - [Injective](https://injective.com)
+- [Arena 402 frontend](https://github.com/sunruize93-cmyk/arena402)

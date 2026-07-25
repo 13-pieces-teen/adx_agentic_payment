@@ -1,5 +1,9 @@
 # Arena 402 frontend integration
 
+> Transitional record: product frontend ownership has moved to
+> `sunruize93-cmyk/arena402`. This local Next.js integration remains only for
+> Compose compatibility until the external Vercel/API cutover is complete.
+
 The visual system in this directory is based on
 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402) at
 commit `f72dcc9239dd323e1723e2d1103c48b960a07e0a`.
@@ -18,7 +22,7 @@ to the Arena 402 backend as follows:
 
 | Upstream concern | Integrated implementation |
 | --- | --- |
-| `js/supabase.js` | `src/lib/arena-api.ts` and `src/lib/game-api.ts` |
+| `js/supabase.js` | removed; `src/lib/game-api.ts` reads Arena-owned HTTP APIs |
 | `js/auth.js` | `src/lib/connector-api.ts` and `/connect` |
 | `js/game-state.js` | public game snapshot and timeline API polling |
 | `js/render.js` | App Router pages and React components |

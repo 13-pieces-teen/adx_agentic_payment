@@ -12,15 +12,28 @@ round-based AI trading game:
 - accepted trades settle point-to-point on Injective EVM testnet;
 - after N rounds, final event-driven prices determine net-worth ranking.
 
-The repository contains three implemented but not yet integrated foundations:
+The repository contains three maintained foundations:
 
-- an in-memory Python matching, negotiation, and Arena/ELO prototype;
-- a self-hosted Local Agent Connector and Gateway control plane;
-- an Injective EVM testnet EIP-3009 direct-settlement prototype.
+- a persistent Pawnhouse Game Core integrated with the Hosted Arena Runtime,
+  AgentTask/Result pipeline, bounded negotiation, and round orchestration;
+- a self-hosted Local Agent Connector and Gateway control plane whose
+  game-specific Runtime adapter is not yet complete;
+- an Injective EVM testnet EIP-3009 direct-settlement prototype integrated
+  through immutable single-payment intents and confirmation-gated inventory
+  commit.
 
-The Hosted Arena Agent, persistent Arena AgentTask/Result foundation,
-persistent round engine, game-specific Runtime adapters, PaymentMandate,
-settlement-to-inventory commit, and full game frontend are not complete yet.
+The bounded/revocable PaymentMandate, unattended signer authority, Local
+Connector game adapter, Realtime frontend projection, and complete production
+E2E acceptance are not complete yet. The former in-memory `matching/` and
+Supabase/ELO business path have been removed.
+
+Frontend product development is owned by the separate
+`sunruize93-cmyk/arena402` repository and will be deployed through Vercel.
+Until that deployment and backend API/CORS cutover are verified, this
+repository's `frontend/` is a temporary Compose integration shell, not the
+frontend source of truth. Do not add new product UI here. Remove the shell only
+after local/production Compose no longer depends on it and the external
+frontend passes end-to-end integration.
 
 ## Read first and documentation authority
 

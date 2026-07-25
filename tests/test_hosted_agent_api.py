@@ -13,8 +13,10 @@ from connector_gateway.production import build_production_connector
 from connector_gateway.repository import MemoryConnectorRepository
 from hosted_agent_control_plane import (
     CapabilityCatalogService,
+    CredentialStatus,
     CredentialIngressService,
     HostedAgentService,
+    HostedProvisioningStatus,
     MemoryHostedAgentControlRepository,
 )
 from hosted_agent_runtime import (
@@ -86,6 +88,7 @@ def _test_app(invite: str = "hosted-api-invite-that-is-long-enough"):
         credential_ingress_configured=True,
     )
     app = FastAPI()
+    app.state.hosted_control_repository = control_repository
     app.include_router(connector.router)
     app.include_router(
         create_hosted_agent_router(
@@ -308,6 +311,83 @@ def test_credential_and_agent_create_replay_without_secret_exposure() -> None:
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
     assert "strategyInstructions" not in listed.text
+
+
+def test_owner_can_patch_ready_agent_strategy_without_resending_key() -> None:
+    invite = "hosted-api-update-invite-that-is-long-enough"
+    client, _ = _test_app(invite)
+    csrf = _register(client, invite=invite, username="update-owner")
+    credential = client.post(
+        "/api/model-credentials",
+        json={
+            "providerId": "test-provider",
+            "apiKey": "update-owner-test-key",
+        },
+        headers={
+            "Idempotency-Key": "update-owner-credential",
+            "X-CSRF-Token": csrf,
+        },
+    )
+    created = client.post(
+        "/api/hosted-agents",
+        json={
+            "displayName": "Updatable hosted trader",
+            "credentialId": credential.json()["credentialId"],
+            "providerId": "test-provider",
+            "modelId": "test-model-2026-07-24",
+            "thinkingEnabled": True,
+            "strategyInstructions": "",
+        },
+        headers={
+            "Idempotency-Key": "update-owner-agent",
+            "X-CSRF-Token": csrf,
+        },
+    )
+    repository = client.app.state.hosted_control_repository
+    agent_id = created.json()["agentId"]
+    credential_id = credential.json()["credentialId"]
+    repository._agents[agent_id] = repository._agents[agent_id].model_copy(
+        update={
+            "provisioning_status": HostedProvisioningStatus.READY,
+            "route_status": HostedProvisioningStatus.READY,
+        }
+    )
+    repository._credentials[credential_id] = repository._credentials[
+        credential_id
+    ].model_copy(update={"status": CredentialStatus.VALID})
+
+    headers = {
+        "Idempotency-Key": "update-owner-strategy-1",
+        "X-CSRF-Token": csrf,
+    }
+    body = {
+        "providerId": "test-provider",
+        "modelId": "test-model-2026-07-24",
+        "thinkingEnabled": False,
+        "strategyInstructions": (
+            "Buy iron. Propose 7.000000 and accept at or below it."
+        ),
+    }
+    updated = client.patch(
+        f"/api/hosted-agents/{agent_id}",
+        json=body,
+        headers=headers,
+    )
+    replay = client.patch(
+        f"/api/hosted-agents/{agent_id}",
+        json=body,
+        headers=headers,
+    )
+
+    assert updated.status_code == replay.status_code == 202
+    assert updated.json() == replay.json()
+    assert updated.json()["provisioningStatus"] == "provisioning"
+    assert updated.json()["routeStatus"] == "provisioning"
+    assert updated.json()["strategyInstructions"] == body[
+        "strategyInstructions"
+    ]
+    assert "apiKey" not in updated.text
+    assert "credentialId" in updated.json()
 
 
 def test_cross_owner_agent_detail_is_indistinguishable_from_absence() -> None:

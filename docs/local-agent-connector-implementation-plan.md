@@ -5,6 +5,8 @@
 > 对应规格：[`local-agent-connector-spec.md`](./local-agent-connector-spec.md)
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
 > 统一 Runtime 计划：[`hosted-arena-agent-implementation-plan.md`](./hosted-arena-agent-implementation-plan.md)
+> 前端边界：产品 UI 已迁移到外部 `sunruize93-cmyk/arena402` 并计划由 Vercel
+> 部署；本计划中的本地 Next.js/Caddy 是当前 Compose 过渡实现
 
 ## 1. 交付策略
 
@@ -214,7 +216,9 @@ payload 见 [`local-agent-connector-spec.md`](./local-agent-connector-spec.md)�
 - bootstrap invite hash 缺失或格式错误；
 - CORS origin 使用 `*`。
 
-`create_app_with_db()` 是遗留 Supabase/开发工厂。在 `ADX_ENV=production` 或 Connector production mode 下显式抛错，不能成为绕过 self-hosted Auth 的替代入口。
+遗留 Supabase/开发工厂已删除。`create_app()` 是唯一 HTTP 组合根，并在
+`ADX_ENV=production` 或 Connector production mode 下先构建和校验 production
+bundle，不能绕过 self-hosted Auth。
 
 ### 5.2 Auth 与 CSRF
 
@@ -367,7 +371,7 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 #### 仓库级
 
 - [x] Python production Auth、object authorization、rate limit、bounded Pairing 和 durable delivery 有专项测试。
-- [x] `create_app_with_db()` 生产 fail-closed 有回归测试。
+- [x] 遗留 Supabase 工厂和业务路由已删除，回归测试断言这些路径不再挂载。
 - [x] Go Connector discovery/transport/store/supervisor 有单元测试。
 - [x] Next.js 已固定为 15.5.21，前端使用 lockfile。
 - [x] Docker Compose、Dockerfile、Caddy、migration、installer 和运维脚本已进入仓库。
@@ -498,7 +502,7 @@ Native A2A Endpoint 适合已经运行在公网或可被平台代理访问、并
 - Arena 402 Agent identity 与 ownership；
 - versioned AgentTask/Result、correlation/idempotency/Result Sink/audit；
 - capability 与 event projection；
-- matching/negotiation/payment 的业务边界。
+- Arena negotiation 与 Settlement 的权威边界。
 
 不可复用：
 

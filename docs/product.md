@@ -127,8 +127,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 
 ## 当前实现边界
 
-- Python `matching/` 已有 listing/intent、matching、有限 negotiation 和 ELO
-  原型，但不具备新游戏要求的持久化回合、FCFS 池、事件、持仓和终场清算。
+- 游戏业务只以 `arena_game/`、`arena_core/` 和 PostgreSQL `arena402` schema
+  为权威；旧内存 matching/ELO 与 Supabase 业务链路已删除。
 - Connector 已有较完整的设备/Runtime 控制面，但尚未实现 Arena 游戏
   `decide`/`negotiate` 业务适配。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only Tencent SSM
@@ -146,8 +146,11 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Settlement 已验证既有 testnet EIP-3009 direct relay，并已实现游戏冻结快照、
   只读链上恢复与确认后持仓幂等提交；尚未实现通用 PaymentMandate，也尚未执行
   当前完整链路的一笔新鲜 testnet 交易。
-- `arena402/index.html` 是现有 Supabase 静态展示页，仍包含旧 ELO/Battle
-  视图；新的 Game Lobby、Game View 和 Result 页面尚未实现。
+- 产品前端已迁移到外部
+  [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，目标由
+  Vercel 部署；外部 `main` 已是 Next.js 15.5.21 并包含 Vercel 配置。当前仍需把
+  legacy Agent/listing/ELO API client 切换到 Pawnhouse/Hosted/Connector API，并
+  完成 Cookie/CORS 与部署验收。本仓库 `frontend/` 只是 Compose 过渡壳。
 - 标准 HTTP x402 challenge/retry/header 与公共 Facilitator 兼容尚未实现。
 - TEE、主网资金、链上 escrow、退款、争议、生产手续费和多链不属于已实现能力。
 

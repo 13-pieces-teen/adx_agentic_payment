@@ -20,6 +20,7 @@ from hosted_agent_control_plane import (
     CredentialStatus,
     HostedAgentCreateRequest,
     HostedAgentService,
+    HostedAgentUpdateRequest,
     HostedControlPlaneError,
     HostedProvisioningStatus,
     MemoryHostedAgentControlRepository,
@@ -510,6 +511,63 @@ def test_hosted_agent_creation_is_atomic_provisioning_and_idempotent() -> None:
             )
         )
     assert exc.value.code == "idempotency_conflict"
+
+
+def test_ready_hosted_agent_can_begin_same_provider_strategy_update() -> None:
+    repository = MemoryHostedAgentControlRepository.for_testing()
+    credential_service, _ = _credential_service(repository)
+    credential = _create_credential(credential_service)
+    service = _agent_service(repository)
+    created = _run(
+        service.create_hosted_agent(
+            owner_user_id="user-a",
+            request=_agent_request(
+                credential_id=credential.credential_id,
+                strategy_instructions="",
+            ),
+        )
+    )
+    repository._agents[created.agent_id] = repository._agents[
+        created.agent_id
+    ].model_copy(
+        update={
+            "provisioning_status": HostedProvisioningStatus.READY,
+            "route_status": HostedProvisioningStatus.READY,
+        }
+    )
+    repository._credentials[credential.credential_id] = repository._credentials[
+        credential.credential_id
+    ].model_copy(update={"status": CredentialStatus.VALID})
+
+    updated = _run(
+        service.update_hosted_agent(
+            owner_user_id="user-a",
+            agent_id=created.agent_id,
+            request=HostedAgentUpdateRequest(
+                provider_id="provider-a",
+                model_id="model-2026-07-01",
+                thinking_enabled=False,
+                strategy_instructions=(
+                    "Buy iron.\nPropose 7.000000 and accept at or below it."
+                ),
+                idempotency_key="hosted-agent-update-0001",
+            ),
+        )
+    )
+
+    assert updated.provisioning_status is HostedProvisioningStatus.PROVISIONING
+    assert updated.route_status is HostedProvisioningStatus.PROVISIONING
+    assert updated.strategy_instructions == (
+        "Buy iron. Propose 7.000000 and accept at or below it."
+    )
+    pending_credential = _run(
+        repository.get_credential_for_owner(
+            owner_user_id="user-a",
+            credential_id=credential.credential_id,
+        )
+    )
+    assert pending_credential is not None
+    assert pending_credential.status is CredentialStatus.PENDING_VALIDATION
 
 
 def test_completed_agent_replay_precedes_mutable_prerequisite_validation() -> None:

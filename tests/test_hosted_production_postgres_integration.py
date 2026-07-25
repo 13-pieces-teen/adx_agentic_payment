@@ -13,6 +13,7 @@ from hosted_agent_control_plane import (
     CredentialIngressService,
     HostedAgentCreateRequest,
     HostedAgentService,
+    HostedAgentUpdateRequest,
     PostgresHostedAgentControlRepository,
 )
 from hosted_agent_runtime import MemorySecretStore
@@ -25,7 +26,11 @@ from hosted_agent_runtime.production_providers import (
     ProductionProviderBundle,
     build_production_capability_registry,
 )
-from hosted_agent_runtime.providers import ProviderResponse, ProviderUsage
+from hosted_agent_runtime.providers import (
+    ProviderInvocationError,
+    ProviderResponse,
+    ProviderUsage,
+)
 
 
 ADMIN_URL = os.getenv("ADX_TEST_POSTGRES_ADMIN_URL")
@@ -51,6 +56,13 @@ class _ValidationAdapter:
                 complete=True,
             ),
         )
+
+
+class _FailingValidationAdapter:
+    adapter_id = "deepseek-openai-chat-v1"
+
+    async def invoke(self, *_: object) -> ProviderResponse:
+        raise ProviderInvocationError("authentication_failed")
 
 
 def test_create_validate_and_join_survive_process_boundaries() -> None:
@@ -129,6 +141,67 @@ def test_create_validate_and_join_survive_process_boundaries() -> None:
             )
             assert ready.provisioning_status.value == "ready"
             assert ready.route_status.value == "ready"
+
+            updating = await agent_service.update_hosted_agent(
+                owner_user_id=owner_id,
+                agent_id=created.agent_id,
+                request=HostedAgentUpdateRequest(
+                    provider_id="deepseek",
+                    model_id="deepseek-v4-flash",
+                    thinking_enabled=False,
+                    strategy_instructions=(
+                        "Buy iron. Propose 7.000000 and accept at or below it."
+                    ),
+                    idempotency_key=f"agent-update-{suffix}",
+                ),
+            )
+            assert updating.provisioning_status.value == "provisioning"
+            assert updating.route_status.value == "provisioning"
+            assert await worker.run_once() == 1
+
+            updated = await agent_service.get_hosted_agent(
+                owner_user_id=owner_id,
+                agent_id=created.agent_id,
+            )
+            assert updated.provisioning_status.value == "ready"
+            assert updated.route_status.value == "ready"
+            assert updated.strategy_instructions.startswith("Buy iron.")
+
+            failing_update = await agent_service.update_hosted_agent(
+                owner_user_id=owner_id,
+                agent_id=created.agent_id,
+                request=HostedAgentUpdateRequest(
+                    provider_id="deepseek",
+                    model_id="deepseek-v4-flash",
+                    thinking_enabled=False,
+                    strategy_instructions="This candidate must not be applied.",
+                    idempotency_key=f"agent-update-failing-{suffix}",
+                ),
+            )
+            assert failing_update.provisioning_status.value == "provisioning"
+            failing_worker = DurableHostedWorker(
+                repository=worker_repository,
+                providers=ProductionProviderBundle(
+                    registry=CapabilityRegistry(),
+                    adapters={"deepseek": _FailingValidationAdapter()},
+                ),
+                secret_reader=secrets.reader,
+                worker_id=f"failing-worker-{suffix}",
+            )
+            assert await failing_worker.run_once() == 1
+
+            preserved = await agent_service.get_hosted_agent(
+                owner_user_id=owner_id,
+                agent_id=created.agent_id,
+            )
+            assert preserved.provisioning_status.value == "ready"
+            assert preserved.route_status.value == "ready"
+            assert preserved.strategy_instructions.startswith("Buy iron.")
+            preserved_credential = await credential_service.get_credential(
+                owner_user_id=owner_id,
+                credential_id=credential.credential_id,
+            )
+            assert preserved_credential.status.value == "valid"
 
             game_id = f"game-{suffix}"
             await admin.execute(

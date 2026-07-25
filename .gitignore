@@ -30,10 +30,6 @@ __pycache__/
 htmlcov/
 coverage/
 
-# Local payment-service state
-payment_service/data/
-payment_service/dist-client/
-
 # Logs and operating-system files
 *.log
 .DS_Store

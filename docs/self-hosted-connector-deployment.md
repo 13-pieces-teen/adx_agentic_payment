@@ -1,5 +1,10 @@
 # Arena 402 Connector 云端控制面部署与运维
 
+> 前端迁移说明（2026-07-25）：产品前端权威已迁移到
+> [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，目标由
+> Vercel 部署。本文的 Next.js/Caddy web 拓扑仍描述当前可运行的 Compose 过渡栈；
+> 外部前端与 API/CORS 切换验收完成后需要删除该 web service 并更新本文。
+
 本文档描述当前仓库的单机生产拓扑，目标是让外部用户完成“一次安装、一次授权、自动上线”。部署不依赖 Supabase：Connector 身份、配对、设备、Runtime、命令、事件和审计数据均落在自托管 PostgreSQL。
 
 这套部署只覆盖 Connector/Gateway 控制面，不会部署完整 Arena 402 游戏。

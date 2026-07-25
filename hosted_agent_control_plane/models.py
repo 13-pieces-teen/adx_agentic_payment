@@ -154,6 +154,19 @@ class HostedAgentCreateRequest(StrictControlModel):
     idempotency_key: IdempotencyKey
 
 
+class HostedAgentUpdateRequest(StrictControlModel):
+    """Full same-Provider Runtime candidate for an existing Hosted Agent."""
+
+    provider_id: ProviderId
+    model_id: ModelId
+    thinking_enabled: bool
+    strategy_instructions: Annotated[
+        str,
+        StringConstraints(max_length=4000),
+    ] = Field(default="", repr=False)
+    idempotency_key: IdempotencyKey
+
+
 class CredentialRecord(StrictControlModel):
     """Internal persistence model; it can reference but never contain a key."""
 
@@ -307,6 +320,7 @@ __all__ = [
     "CredentialReservation",
     "CredentialStatus",
     "HostedAgentCreateRequest",
+    "HostedAgentUpdateRequest",
     "HostedAgentCreation",
     "HostedAgentDetail",
     "HostedAgentRecord",

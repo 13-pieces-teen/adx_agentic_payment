@@ -165,12 +165,20 @@ class OpenAICompatibleChatAdapter:
         else:
             response_format = {"type": "json_object"}
 
+        system_instructions = request.system_instructions
+        if self._settings.response_format_mode == "json_object":
+            system_instructions = (
+                f"{system_instructions}\n"
+                "Trusted outputSchema (return exactly one matching object): "
+                f"{json.dumps(output_schema, separators=(',', ':'), sort_keys=True)}"
+            )
+
         body: dict[str, object] = {
             "model": request.model_id,
             "messages": [
                 {
                     "role": "system",
-                    "content": request.system_instructions,
+                    "content": system_instructions,
                 },
                 {"role": "user", "content": request.input_json},
             ],
