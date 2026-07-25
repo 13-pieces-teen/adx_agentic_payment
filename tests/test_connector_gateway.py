@@ -244,10 +244,12 @@ def test_outbound_socket_inventory_binding_command_and_event_flow():
                 "runtime_id": "codex-default",
                 "agent_id": "agent-alice",
                 "display_name": "Alice Codex",
+                "working_directory": "E:\\workspace",
             },
         )
         assert binding_response.status_code == 201
         binding = binding_response.json()
+        assert binding["working_directory"] == "E:\\workspace"
 
         command_response = client.post(
             f"/api/connectors/bindings/{binding['binding_id']}/commands",
@@ -530,6 +532,32 @@ async def _enrolled_service():
         credential["device_id"], "codex-default", None, None
     )
     return service, credential, binding
+
+
+def test_existing_binding_can_freeze_working_directory_once():
+    async def scenario():
+        service, credential, binding = await _enrolled_service()
+
+        upgraded = await service.create_binding(
+            credential["device_id"],
+            "codex-default",
+            None,
+            None,
+            "E:\\arena-workspace",
+        )
+
+        assert upgraded["binding_id"] == binding["binding_id"]
+        assert upgraded["working_directory"] == "E:\\arena-workspace"
+        with pytest.raises(ConnectorError, match="working directory"):
+            await service.create_binding(
+                credential["device_id"],
+                "codex-default",
+                None,
+                None,
+                "E:\\different-workspace",
+            )
+
+    asyncio.run(scenario())
 
 
 def test_typed_arena_task_dispatch_is_accepted_without_free_prompt():

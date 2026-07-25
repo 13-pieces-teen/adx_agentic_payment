@@ -1,4 +1,4 @@
-"""Durable Arena coordinator for Hosted Agent market execution."""
+"""Durable Arena coordinator for task-driven Agent market execution."""
 
 from __future__ import annotations
 
@@ -60,8 +60,8 @@ def _public_events(
     return events
 
 
-class PawnhouseHostedCoordinator:
-    """Create Hosted tasks, consume authoritative results, and advance Arena."""
+class PawnhouseAgentRuntimeCoordinator:
+    """Coordinate Hosted and Connector tasks through one Arena Result Sink."""
 
     def __init__(
         self,
@@ -97,7 +97,9 @@ class PawnhouseHostedCoordinator:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                _LOGGER.error("pawnhouse_hosted_coordinator_cycle_failed")
+                _LOGGER.error(
+                    "pawnhouse_agent_runtime_coordinator_cycle_failed"
+                )
                 processed = False
             if not processed:
                 try:
@@ -345,4 +347,11 @@ class PawnhouseHostedCoordinator:
         )
 
 
-__all__ = ["PawnhouseHostedCoordinator"]
+# Compatibility for existing deployment entrypoints and imports.
+PawnhouseHostedCoordinator = PawnhouseAgentRuntimeCoordinator
+
+
+__all__ = [
+    "PawnhouseAgentRuntimeCoordinator",
+    "PawnhouseHostedCoordinator",
+]

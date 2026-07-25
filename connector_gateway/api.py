@@ -123,6 +123,7 @@ def create_connector_router(
                 req.runtime_id,
                 req.agent_id if auth is None else None,
                 req.display_name,
+                req.working_directory,
             )
         )
         if arena_registrar is not None and principal is not None:

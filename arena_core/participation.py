@@ -28,6 +28,16 @@ class GameParticipation:
     config_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class LocalAgentRegistration:
+    agent_id: str
+    display_name: str
+    runtime_binding_id: str
+    connector_binding_id: str
+    connector_binding_epoch: int
+    route_status: str
+
+
 class PostgresArenaParticipationRepository:
     def __init__(self, dsn: str, *, pool: object | None = None) -> None:
         if not dsn and pool is None:
@@ -176,8 +186,10 @@ class PostgresArenaParticipationRepository:
                     await self._complete_idempotency(
                         connection,
                         owner_user_id=owner_user_id,
+                        route_key="game_participants.create",
                         key_digest=key_digest,
                         request_digest=request_digest,
+                        resource_kind="game_agent",
                         game_agent_id=existing.game_agent_id,
                     )
                     return existing
@@ -369,8 +381,10 @@ class PostgresArenaParticipationRepository:
                 await self._complete_idempotency(
                     connection,
                     owner_user_id=owner_user_id,
+                    route_key="game_participants.create",
                     key_digest=key_digest,
                     request_digest=request_digest,
+                    resource_kind="game_agent",
                     game_agent_id=game_agent_id,
                 )
                 return GameParticipation(
@@ -382,6 +396,163 @@ class PostgresArenaParticipationRepository:
                     status="joined",
                     config_hash=config_hash,
                 )
+
+    async def register_local_agent(
+        self,
+        *,
+        owner_user_id: str,
+        connector_binding_id: str,
+        display_name: str,
+        key_digest: str,
+        request_digest: str,
+    ) -> LocalAgentRegistration:
+        if not display_name.strip() or len(display_name) > 120:
+            raise ArenaParticipationError("invalid_display_name")
+        pool = self._require_pool()
+        try:
+            async with pool.acquire() as connection:
+                async with connection.transaction():
+                    reservation = await connection.fetchrow(
+                        """
+                        SELECT * FROM reserve_local_agent_idempotency(
+                            $1, $2, $3, 3600
+                        )
+                        """,
+                        owner_user_id,
+                        key_digest,
+                        request_digest,
+                    )
+                    if reservation["disposition"] == "conflict":
+                        raise ArenaParticipationError(
+                            "idempotency_conflict"
+                        )
+                    if reservation["disposition"] in {
+                        "replay",
+                        "retry",
+                        "in_progress",
+                    }:
+                        resource_id = reservation["resource_id"]
+                        if not resource_id:
+                            raise ArenaParticipationError(
+                                "idempotency_conflict"
+                            )
+                        existing = await self._get_local_agent(
+                            connection,
+                            owner_user_id,
+                            str(resource_id),
+                        )
+                        if existing is None:
+                            raise ArenaParticipationError(
+                                "idempotency_conflict"
+                            )
+                        return existing
+
+                    route = await connection.fetchrow(
+                        """
+                        SELECT *
+                        FROM resolve_connector_binding_for_arena($1, $2)
+                        """,
+                        owner_user_id,
+                        connector_binding_id,
+                    )
+                    if route is None:
+                        raise ArenaParticipationError(
+                            "connector_binding_not_found"
+                        )
+                    existing_row = await connection.fetchrow(
+                        """
+                        SELECT
+                            a.agent_id,
+                            a.name AS display_name,
+                            b.runtime_binding_id,
+                            b.connector_binding_id,
+                            b.connector_binding_epoch,
+                            b.route_status
+                        FROM arena_agents AS a
+                        JOIN arena_runtime_bindings AS b
+                          ON b.agent_id = a.agent_id
+                        WHERE a.owner_user_id = $1
+                          AND b.runtime_kind = 'connector'
+                          AND b.connector_binding_id = $2
+                          AND b.connector_binding_epoch = $3
+                          AND b.disabled_at IS NULL
+                        """,
+                        owner_user_id,
+                        connector_binding_id,
+                        route["binding_epoch"],
+                    )
+                    if existing_row is not None:
+                        existing = self._local_agent(existing_row)
+                        if existing.display_name != display_name:
+                            raise ArenaParticipationError(
+                                "connector_binding_already_registered"
+                            )
+                        await self._complete_local_agent_idempotency(
+                            connection,
+                            owner_user_id=owner_user_id,
+                            key_digest=key_digest,
+                            request_digest=request_digest,
+                            agent_id=existing.agent_id,
+                        )
+                        return existing
+
+                    agent_id = str(route["agent_id"])
+                    runtime_binding_id = (
+                        f"rbind-connector-{uuid.uuid4().hex}"
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena_agents (
+                            agent_id, owner_user_id, name, status
+                        )
+                        VALUES ($1, $2, $3, 'active')
+                        """,
+                        agent_id,
+                        owner_user_id,
+                        display_name,
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena_runtime_bindings (
+                            runtime_binding_id,
+                            agent_id,
+                            runtime_kind,
+                            connector_binding_id,
+                            connector_binding_epoch,
+                            route_status
+                        )
+                        VALUES ($1, $2, 'connector', $3, $4, 'ready')
+                        """,
+                        runtime_binding_id,
+                        agent_id,
+                        connector_binding_id,
+                        route["binding_epoch"],
+                    )
+                    await self._complete_local_agent_idempotency(
+                        connection,
+                        owner_user_id=owner_user_id,
+                        key_digest=key_digest,
+                        request_digest=request_digest,
+                        agent_id=agent_id,
+                    )
+                    return LocalAgentRegistration(
+                        agent_id=agent_id,
+                        display_name=display_name,
+                        runtime_binding_id=runtime_binding_id,
+                        connector_binding_id=connector_binding_id,
+                        connector_binding_epoch=int(
+                            route["binding_epoch"]
+                        ),
+                        route_status="ready",
+                    )
+        except ArenaParticipationError:
+            raise
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "23505":
+                raise ArenaParticipationError(
+                    "connector_binding_already_registered"
+                ) from exc
+            raise
 
     async def list_for_owner(
         self,
@@ -428,6 +599,15 @@ class PostgresArenaParticipationRepository:
                 "max_context_items": row["max_context_items"],
                 "max_output_tokens": row["max_output_tokens"],
             }
+        if runtime_kind == "connector":
+            return {
+                "runtime_kind": "connector",
+                "credential_id": None,
+                "connector_binding_id": row["connector_binding_id"],
+                "connector_binding_epoch": row[
+                    "connector_binding_epoch"
+                ],
+            }
         return {
             "runtime_kind": runtime_kind,
             "credential_id": None,
@@ -463,25 +643,56 @@ class PostgresArenaParticipationRepository:
         )
         return None if row is None else self._participation(row)
 
+    async def _get_local_agent(
+        self,
+        connection: Any,
+        owner_user_id: str,
+        agent_id: str,
+    ) -> LocalAgentRegistration | None:
+        row = await connection.fetchrow(
+            """
+            SELECT
+                a.agent_id,
+                a.name AS display_name,
+                b.runtime_binding_id,
+                b.connector_binding_id,
+                b.connector_binding_epoch,
+                b.route_status
+            FROM arena_agents AS a
+            JOIN arena_runtime_bindings AS b
+              ON b.agent_id = a.agent_id
+            WHERE a.owner_user_id = $1
+              AND a.agent_id = $2
+              AND b.runtime_kind = 'connector'
+              AND b.disabled_at IS NULL
+            """,
+            owner_user_id,
+            agent_id,
+        )
+        return None if row is None else self._local_agent(row)
+
     @staticmethod
     async def _complete_idempotency(
         connection: Any,
         *,
         owner_user_id: str,
+        route_key: str,
         key_digest: str,
         request_digest: str,
+        resource_kind: str,
         game_agent_id: str,
     ) -> None:
         attached = await connection.fetchrow(
             """
             SELECT * FROM attach_arena_api_idempotency_resource(
-                $1, 'game_participants.create', $2, $3,
-                'game_agent', $4
+                $1, $2, $3, $4, $5, $6
             )
             """,
             owner_user_id,
+            route_key,
             key_digest,
             request_digest,
+            resource_kind,
             game_agent_id,
         )
         if attached["disposition"] not in {"attached", "replay"}:
@@ -489,14 +700,38 @@ class PostgresArenaParticipationRepository:
         completed = await connection.fetchrow(
             """
             SELECT * FROM complete_arena_api_idempotency(
-                $1, 'game_participants.create', $2, $3,
-                'game_agent', $4, 201
+                $1, $2, $3, $4, $5, $6, 201
+            )
+            """,
+            owner_user_id,
+            route_key,
+            key_digest,
+            request_digest,
+            resource_kind,
+            game_agent_id,
+        )
+        if completed["disposition"] not in {"completed", "replay"}:
+            raise ArenaParticipationError("idempotency_conflict")
+
+    @staticmethod
+    async def _complete_local_agent_idempotency(
+        connection: Any,
+        *,
+        owner_user_id: str,
+        key_digest: str,
+        request_digest: str,
+        agent_id: str,
+    ) -> None:
+        completed = await connection.fetchrow(
+            """
+            SELECT * FROM complete_local_agent_idempotency(
+                $1, $2, $3, $4
             )
             """,
             owner_user_id,
             key_digest,
             request_digest,
-            game_agent_id,
+            agent_id,
         )
         if completed["disposition"] not in {"completed", "replay"}:
             raise ArenaParticipationError("idempotency_conflict")
@@ -513,9 +748,25 @@ class PostgresArenaParticipationRepository:
             config_hash=row["config_hash"],
         )
 
+    @staticmethod
+    def _local_agent(
+        row: Mapping[str, Any],
+    ) -> LocalAgentRegistration:
+        return LocalAgentRegistration(
+            agent_id=row["agent_id"],
+            display_name=row["display_name"],
+            runtime_binding_id=row["runtime_binding_id"],
+            connector_binding_id=row["connector_binding_id"],
+            connector_binding_epoch=int(
+                row["connector_binding_epoch"]
+            ),
+            route_status=row["route_status"],
+        )
+
 
 __all__ = [
     "ArenaParticipationError",
     "GameParticipation",
+    "LocalAgentRegistration",
     "PostgresArenaParticipationRepository",
 ]

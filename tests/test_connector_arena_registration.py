@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from arena_core.connector_registration import PostgresConnectorArenaRegistrar
 from connector_gateway.api import create_connector_router
 from connector_gateway.auth import AuthPrincipal
 
@@ -31,8 +34,10 @@ class _Service:
         runtime_id: str,
         agent_id: str | None,
         display_name: str | None,
+        working_directory: str | None,
     ) -> dict[str, object]:
         assert agent_id is None
+        assert working_directory is None
         return {
             "binding_id": "binding-1",
             "device_id": device_id,
@@ -90,3 +95,93 @@ def test_binding_creation_registers_the_arena_agent_for_the_session_owner() -> N
         "owner_user_id": "user-1",
         "connector_binding_id": "binding-1",
     }
+
+
+class _Transaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
+class _Connection:
+    def __init__(self) -> None:
+        self.executions: list[tuple[str, tuple[object, ...]]] = []
+
+    def transaction(self) -> _Transaction:
+        return _Transaction()
+
+    async def fetchrow(self, query: str, *args: object):
+        if "FROM connector_bindings AS cb" in query:
+            return {
+                "binding_id": "binding-1",
+                "agent_id": "agent-1",
+                "binding_status": "available",
+                "binding_record": {
+                    "binding_epoch": 1,
+                    "display_name": "Local Codex",
+                },
+                "owner_id": "user-1",
+                "revoked_at": None,
+                "available": True,
+                "runtime_record": {
+                    "capabilities": ["session.start", "task.dispatch"],
+                },
+            }
+        if "FROM arena_runtime_bindings" in query:
+            return None
+        raise AssertionError(query)
+
+    async def fetchval(self, query: str, *args: object):
+        if query.lstrip().startswith("SELECT owner_user_id"):
+            return None
+        if "INSERT INTO arena_agents" in query:
+            return "user-1"
+        raise AssertionError(query)
+
+    async def execute(self, query: str, *args: object) -> str:
+        self.executions.append((query, args))
+        return "OK"
+
+
+class _Acquire:
+    def __init__(self, connection: _Connection) -> None:
+        self.connection = connection
+
+    async def __aenter__(self) -> _Connection:
+        return self.connection
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
+class _Pool:
+    def __init__(self, connection: _Connection) -> None:
+        self.connection = connection
+
+    def acquire(self) -> _Acquire:
+        return _Acquire(self.connection)
+
+
+def test_task_dispatch_capability_activates_the_compatibility_route() -> None:
+    connection = _Connection()
+    registrar = PostgresConnectorArenaRegistrar(
+        "",
+        pool=_Pool(connection),
+    )
+
+    registration = asyncio.run(
+        registrar.register_connector_binding(
+            owner_user_id="user-1",
+            connector_binding_id="binding-1",
+        )
+    )
+
+    assert registration["routeStatus"] == "ready"
+    route_insert = next(
+        args
+        for query, args in connection.executions
+        if "INSERT INTO arena_runtime_bindings" in query
+    )
+    assert route_insert[-1] == "ready"

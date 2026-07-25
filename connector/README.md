@@ -20,11 +20,14 @@ the existing top-level `task.dispatch` action and returns a separate
 before transport, replayed after reconnect, and removed only after
 `agent_task.result.ack`.
 
-The remaining Arena integration work is the Local Arena Agent identity bridge,
-automatic Connector-owned Arena session startup, queued AgentTask dispatch,
-and Hosted/Connector mixed-Runtime round orchestration. Until those pieces are
-complete, the typed adapter is an implementation foundation rather than a
-complete playable Local Agent path.
+The backend integration now includes owner-scoped Local Arena Agent
+registration, frozen Connector binding epochs, authenticated game
+participation, automatic Connector-owned Arena session startup, leased
+AgentTask dispatch, and one coordinator for Hosted-only, Connector-only, or
+Hosted/Connector mixed rounds. Each task still returns through the Arena
+Result Sink and Deadline Finalizer. A real CC/Codex full-game and production
+reconnect E2E has not yet been accepted, so this is an implemented backend path
+rather than production acceptance evidence.
 
 The authority boundaries remain:
 
@@ -125,6 +128,9 @@ The equivalent local environment gates are
 On Windows, repeat `--allow-root` for each directory that Arena-managed
 sessions may access. A requested working directory is resolved through
 symlinks and rejected unless it is contained by one of these local roots.
+An older Binding without a workspace may freeze `working_directory` on its
+next create request exactly once; changing that frozen directory requires a
+new Binding epoch rather than silently moving an active Agent.
 
 ## Credential injection
 

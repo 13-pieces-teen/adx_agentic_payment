@@ -29,10 +29,11 @@ from arena_core import (
 from arena_game import (
     EvmJsonRpcConfirmationReader,
     PawnhouseGameOrchestrator,
-    PawnhouseHostedCoordinator,
+    PawnhouseAgentRuntimeCoordinator,
     PostgresPawnhouseRepository,
 )
 from connector_gateway import (
+    ConnectorArenaTaskDispatcher,
     ConnectorGateway,
     ProductionConnectorBundle,
     build_production_connector,
@@ -50,6 +51,7 @@ from web.arena_participation_api import create_arena_participation_router
 from web.game_operator_api import create_game_operator_router
 from web.hosted_agent_api import create_hosted_agent_router
 from web.pawnhouse_api import (
+    create_pawnhouse_participation_router,
     create_pawnhouse_read_router,
     create_pawnhouse_router,
 )
@@ -255,7 +257,9 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
 
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
     connector_result_core: PostgresArenaCoreRepository | None = None
-    pawnhouse_coordinator: PawnhouseHostedCoordinator | None = None
+    connector_task_dispatcher: ConnectorArenaTaskDispatcher | None = None
+    connector_task_dispatcher_task: asyncio.Task[None] | None = None
+    pawnhouse_coordinator: PawnhouseAgentRuntimeCoordinator | None = None
     pawnhouse_coordinator_task: asyncio.Task[None] | None = None
     pawnhouse_orchestrator: PawnhouseGameOrchestrator | None = None
     pawnhouse_orchestrator_task: asyncio.Task[None] | None = None
@@ -277,6 +281,10 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             connector_result_core = PostgresArenaCoreRepository(pawnhouse_dsn)
             connector_bundle.service.bind_agent_task_result_sink(
                 ArenaResultSink(connector_result_core)
+            )
+            connector_task_dispatcher = ConnectorArenaTaskDispatcher(
+                repository=connector_result_core,
+                gateway=connector_bundle.service,
             )
 
     if pawnhouse_dev_enabled:
@@ -312,11 +320,11 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 settlement_rpc_url,
                 blockscout_base_url=blockscout_url or None,
             )
-        if hosted_bundle is not None and _hosted_local_dev_requested():
-            pawnhouse_coordinator = PawnhouseHostedCoordinator(
+        if connector_bundle is not None:
+            pawnhouse_coordinator = PawnhouseAgentRuntimeCoordinator(
                 pawnhouse=pawnhouse_repository,
                 arena_core=PostgresArenaCoreRepository(pawnhouse_dsn),
-                worker_id="pawnhouse-coordinator-local-dev",
+                worker_id="pawnhouse-agent-runtime-coordinator-local-dev",
                 lease_seconds=600,
             )
 
@@ -335,7 +343,16 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         if connector_result_core is not None:
             await connector_result_core.initialize()
 
-        nonlocal pawnhouse_coordinator_task, pawnhouse_orchestrator_task
+        nonlocal pawnhouse_coordinator_task
+        nonlocal pawnhouse_orchestrator_task
+        nonlocal connector_task_dispatcher_task
+        if connector_task_dispatcher is not None:
+            connector_task_dispatcher_task = asyncio.create_task(
+                connector_task_dispatcher.run_forever(
+                    poll_seconds=0.25
+                ),
+                name="arena-connector-task-dispatcher",
+            )
         if pawnhouse_orchestrator is not None:
             pawnhouse_orchestrator_task = asyncio.create_task(
                 pawnhouse_orchestrator.run_forever(poll_seconds=0.1),
@@ -345,11 +362,16 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await pawnhouse_coordinator.initialize()
             pawnhouse_coordinator_task = asyncio.create_task(
                 pawnhouse_coordinator.run_forever(poll_seconds=0.1),
-                name="pawnhouse-hosted-coordinator-local-dev",
+                name="pawnhouse-agent-runtime-coordinator-local-dev",
             )
         try:
             yield
         finally:
+            if connector_task_dispatcher is not None:
+                connector_task_dispatcher.stop()
+                if connector_task_dispatcher_task is not None:
+                    await connector_task_dispatcher_task
+                    connector_task_dispatcher_task = None
             if pawnhouse_orchestrator is not None:
                 pawnhouse_orchestrator.stop()
                 if pawnhouse_orchestrator_task is not None:
@@ -466,6 +488,13 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             app.include_router(
                 create_pawnhouse_read_router(repository=pawnhouse_repository)
             )
+            if connector_bundle is not None:
+                app.include_router(
+                    create_pawnhouse_participation_router(
+                        repository=pawnhouse_repository,
+                        auth=connector_bundle.auth,
+                    )
+                )
 
     @app.get("/api/health")
     async def health() -> dict[str, object]:

@@ -116,9 +116,9 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | 模块 | 当前状态 |
 |------|----------|
 | 王城典当行 Game Core | 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
-| Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed `arena.decide` / `arena.negotiate`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink 基础接线；创建 Connector Binding 时会注册 `arena_agents` 与 `arena_runtime_bindings`，session/task dispatcher 和 mixed-Runtime 编排待实现 |
+| Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide` / `arena.negotiate`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；真实 CC/Codex 完整比赛 E2E 尚待部署验收 |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
-| 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult` 和 Result Sink/独立 Finalizer；通用 Join API 已同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件；Local Connector 完整游戏调度仍待实现 |
+| 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、统一回合 coordinator、Result Sink 与独立 Finalizer；Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；SDK 已增加不暴露私钥的 guest-wallet 签名接缝与显式 test-only Fake adapter，未配置真实 backend 时 fail closed |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
@@ -135,7 +135,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `web/` | 当前 HTTP 组合根：Connector、Hosted Agent、Arena participation 与 Pawnhouse API |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | Connector、Hosted Agent/Runtime/Task、`014` Connector terminal Result inbox、`006`–`013` Pawnhouse 游戏链路，以及 GitHub OAuth 与加密 credential vault 迁移 |
+| `db/` | Connector、Hosted Agent/Runtime/Task、`014` Connector terminal Result inbox、`015` Local Agent identity/mixed Runtime 接线、`006`–`013` Pawnhouse 游戏链路，以及 GitHub OAuth 与加密 credential vault 迁移 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
 | `hosted_agent_runtime/` | Secret Store、durable Attempt recorder、Provider/Model/thinking capability registry、安全 Prompt/Driver，以及 DeepSeek/OpenAI-compatible HTTPS Provider |

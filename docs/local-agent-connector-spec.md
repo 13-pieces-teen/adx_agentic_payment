@@ -30,8 +30,8 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 [`game-design.md`](game-design.md) 定义的 `arena.decide`、`arena.negotiate`
 typed transport adapter：dispatch ACK 与唯一 terminal `AgentTaskResult` 分离，
 结果经过本地 durable outbox、Gateway PostgreSQL inbox 和 Arena Result Sink。
-但 Local Arena Agent 身份创建、Connector-owned Arena session lifecycle、queued
-AgentTask 自动调度与 mixed-Runtime 回合编排尚未实现。Connector 的成功回执仍不能
+Local Arena Agent 身份创建、Connector-owned Arena session lifecycle、leased
+AgentTask 自动调度与 mixed-Runtime 回合编排也已接入。Connector 的成功回执仍不能
 证明候选动作合法、Agent 已成交或链上支付已确认。
 
 这表示“控制面代码与单机部署路径已具备”，不表示某台真实服务器已经部署完成，也不表示已经通过外部网络端到端验收。
@@ -41,12 +41,13 @@ AgentTask 自动调度与 mixed-Runtime 回合编排尚未实现。Connector 的
 1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
 2. Arena 的 Game/Round/Pool/Negotiation/Inventory 已由 PostgreSQL 持久化；
    Connector terminal Result 只能进入 Arena-owned Result Sink，不能直接修改这些
-   状态；完整自动游戏调度仍待接入。
+   状态；真实 CC/Codex 完整自动比赛仍待 E2E 验收。
 3. Runtime task 默认 detection-only；fixed-argv Codex/Claude runner 不具备完整的平台审批闭环。
 4. 安装包目前有 HTTPS 传输与 SHA-256 校验，但签名发布、SBOM、独立信任根和安全自动更新仍是后续。
 5. Connector WSS 已实现版本化 `arena.agent-task.v1` /
    `arena.agent-result.v1` 映射与 Arena Result Sink 接线；统一 Finalizer 已由 Arena
-   独立运行，但 Connector Task dispatcher 与 mixed-Runtime coordinator 尚未完成。
+   独立运行，Connector Task dispatcher 与 mixed-Runtime coordinator 已完成代码
+   接线，但尚未形成生产重连证据。
 
 ## 2. 产品边界
 
@@ -135,7 +136,7 @@ Internet -> Caddy :80/:443
 
 只有 Caddy 映射宿主机端口。Next.js、FastAPI 和 PostgreSQL 不直接暴露公网端口。Docker Compose 为 2 vCPU / 4 GB RAM 的单机 beta 配置了健康检查、资源上限、只读根文件系统（适用服务）和日志轮转。
 
-目标 Arena 扩展尚未实现，其逻辑边界为：
+当前 Arena 扩展已按以下逻辑边界完成代码接线：
 
 ```text
 Arena Runtime Adapter
@@ -375,10 +376,10 @@ Connector 心跳丢失后的重连窗口是 30 秒与当前行动剩余时间中
 default，不留下缺失行动，也不自动切换到 Hosted。
 
 上述 typed variant、显式 terminal Result、本地 durable outbox、Gateway
-PostgreSQL inbox 与 Arena Result Sink 接线已经实现。现有 `task.dispatch` v1
-`{session_id, prompt, request_id?}` 继续作为兼容能力。尚未完成的是 Local Agent
-identity/join、Session 自动建立、数据库 AgentTask dispatcher 和 mixed-Runtime
-回合编排，因此不能把当前基础接线误报为完整可玩的 Local Agent 路径。
+PostgreSQL inbox、Arena Result Sink、Local Agent identity/join、Session 自动建立、
+数据库 AgentTask dispatcher 和 mixed-Runtime 回合编排已经实现。现有
+`task.dispatch` v1 `{session_id, prompt, request_id?}` 继续作为兼容能力。真实
+CC/Codex 完整比赛和生产重连尚未验收，不能把代码接线误报为生产可用证据。
 
 ### 8.4 Driver 边界
 
@@ -413,13 +414,15 @@ identity/join、Session 自动建立、数据库 AgentTask dispatcher 和 mixed-
 | `GET` | `/api/connectors/devices` | 列出当前用户 Device |
 | `GET` | `/api/connectors/devices/{device_id}` | 读取拥有的 Device 与 inventory |
 | `POST` | `/api/connectors/devices/{device_id}/revoke` | 撤销拥有的 Device；CSRF |
-| `POST` | `/api/connectors/devices/{device_id}/bindings` | 创建 Binding；CSRF |
+| `POST` | `/api/connectors/devices/{device_id}/bindings` | 创建 Binding 并记录 Arena session 所需 `working_directory`；CSRF |
 | `GET` | `/api/connectors/bindings` | 仅列出拥有的 Device 下的 Binding |
 | `POST` | `/api/connectors/bindings/{binding_id}/commands` | 创建 typed command；CSRF |
 | `GET` | `/api/connectors/bindings/{binding_id}/commands` | 查询 Command |
 | `GET` | `/api/connectors/bindings/{binding_id}/events` | 查询 Runtime Event |
 | `GET` | `/api/connectors/audit` | 查询当前用户控制审计 |
 | `WS` | `/api/connectors/ws?device_id=...` | `Authorization: Device <token>` |
+| `POST` | `/api/local-agents` | 把 owner-scoped Connector Binding 注册为 Arena Agent；CSRF + Idempotency-Key |
+| `POST` | `/api/v1/pawnhouse/games/{game_id}/connector-participants` | 用已注册 Local Agent 加入 Game 并冻结 binding epoch；CSRF |
 
 设备 token 不得出现在 URL query、浏览器 storage、普通日志或 Runtime prompt 中。
 
@@ -439,8 +442,8 @@ identity/join、Session 自动建立、数据库 AgentTask dispatcher 和 mixed-
 - Runtime 文本或工具事件只是可观察证据，不能证明支付或交付完成。
 
 Hosted/rule Runtime 与 Local Connector typed adapter 已使用以下由 Arena 拥有的
-业务结果链；Local Connector 的自动 Task dispatcher 与 mixed-Runtime 编排仍需
-接入：
+业务结果链；Local Connector 的自动 Task dispatcher 与 mixed-Runtime coordinator
+同样只投递候选 Result，不拥有 Game 状态：
 
 ```text
 AgentTask created
@@ -490,7 +493,7 @@ private chain-of-thought。
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |
 | Signed release / SBOM | `deploy/artifacts/` | 未实现；当前仅 HTTPS + SHA-256 |
 | Native A2A Endpoint | 未接入 | 第二方案，后续独立实现 |
-| Arena typed task/result | `arena_agent_contracts/`、`arena_core/`、`connector_gateway/arena_adapter.py`、`connector/` | 统一 schema、typed WSS、durable terminal Result 与 Result Sink 已实现；identity/session/task dispatcher 和 mixed-Runtime 编排待实现 |
+| Arena typed task/result | `arena_agent_contracts/`、`arena_core/`、`connector_gateway/arena_adapter.py`、`connector/` | 统一 schema、Local identity/join、自动 Session、leased dispatcher、typed WSS、durable terminal Result、Result Sink 与 mixed-Runtime 编排已实现；真实完整比赛待验收 |
 
 ## 13. 验收门槛
 
@@ -505,6 +508,9 @@ private chain-of-thought。
 - [x] Command 在 WSS 发送前持久化，重试保持幂等。
 - [x] 任意 shell/argv、跨 binding session、云端 resume token 和 stale epoch 被拒绝。
 - [x] Connector event outbox、receipt fail-closed、重连和 replacement/revoke 退出语义。
+- [x] owner-scoped Local Agent 注册与参赛冻结 binding epoch。
+- [x] Connector-owned Session 自动启动、数据库 leased Task dispatch 和
+      Hosted/Connector mixed Runtime Run。
 - [x] 安装器拒绝远程 HTTP、拒绝降级重定向并校验 SHA-256。
 
 ### 13.2 部署前必须重新运行
@@ -549,23 +555,19 @@ npm run build
 - [x] FCFS 只使用 Result Sink 数据库时间；
 - [x] late/duplicate Result 不重复入池或写协商；
 - [x] Connector 断线超过 deadline 后由独立 Finalizer 产生明确 default；
-- [ ] 同局各 Runtime 使用相同、经测试校准的 deadline；
-- [ ] 一名 User 每局只有一个 Game Agent，活动 Game 不切换 binding；
+- [x] 同局各 Runtime 使用相同的 `action_timeout_ms`；真实负载校准仍待执行；
+- [x] 一名 User 每局只有一个 Game Agent，活动 Game 不切换 binding；
 - [x] Connector 不接收 Hosted BYOK、钱包私钥或 PaymentMandate signer 密钥。
 
 ## 14. 后续优先级
 
-1. 完成目标服务器部署和外部 E2E，收集安装到 online 的耗时与失败点。
-2. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
-3. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。
-4. 将 Connector Binding 与真实、持久化的 Arena 402 Agent registry 对接，只通过
-   binding id + epoch 路由。
-5. 完成 Local Agent identity/join、Session 自动建立、数据库 AgentTask dispatcher
-   和 mixed-Runtime 回合编排。
-6. 将 Game/Round/Pool/Pairing/Negotiation/Inventory 从进程内状态迁移到独立业务
-   持久层，并保持与支付最终性解耦。
-7. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository
+1. 用真实 CC/Codex 完成 Connector-only 与 Hosted/Connector mixed 完整比赛，
+   保存断线重连、deadline default 和 Result replay 证据。
+2. 完成目标服务器部署和外部 E2E，收集安装到 online 的耗时与失败点。
+3. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
+4. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。
+5. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository
    和多实例 drain 后再扩展 worker。
-8. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
-9. 以独立入口设计 Native A2A Endpoint，复用业务身份、任务关联和审计模型，但不
+6. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
+7. 以独立入口设计 Native A2A Endpoint，复用业务身份、任务关联和审计模型，但不
    复用 Device pairing 或本地 process supervisor。

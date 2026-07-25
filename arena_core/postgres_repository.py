@@ -33,6 +33,7 @@ from .models import (
     AppliedArenaAction,
     ArenaResultRecord,
     ArenaTaskRecord,
+    ConnectorTaskClaim,
     ResultApplyStatus,
     ResultSubmissionReceipt,
     SubmissionDisposition,
@@ -537,6 +538,125 @@ class PostgresArenaCoreRepository:
             task_id,
         )
         return None if row is None else _task_record(row)
+
+    async def claim_connector_tasks(
+        self,
+        *,
+        worker_id: str,
+        limit: int,
+        lease_seconds: int,
+    ) -> tuple[ConnectorTaskClaim, ...]:
+        if not worker_id or len(worker_id) > 200:
+            raise ValueError("Connector dispatcher worker_id is invalid")
+        if limit < 1 or limit > 50:
+            raise ValueError("Connector task claim limit must be between 1 and 50")
+        if lease_seconds < 1 or lease_seconds > 600:
+            raise ValueError("Connector task lease must be between 1 and 600 seconds")
+        rows = await self._require_pool().fetch(
+            """
+            WITH candidates AS (
+                SELECT t.task_id
+                FROM arena_agent_tasks AS t
+                JOIN arena_runtime_bindings AS b
+                  ON b.runtime_binding_id = t.runtime_binding_id
+                WHERE t.deadline_at > clock_timestamp()
+                  AND b.runtime_kind = 'connector'
+                  AND b.route_status = 'ready'
+                  AND b.disabled_at IS NULL
+                  AND (
+                      t.status = 'queued'
+                      OR (
+                          t.status = 'leased'
+                          AND t.lease_expires_at <= clock_timestamp()
+                      )
+                  )
+                ORDER BY t.deadline_at, t.created_at, t.task_id
+                FOR UPDATE OF t SKIP LOCKED
+                LIMIT $2
+            ),
+            updated AS (
+                UPDATE arena_agent_tasks AS t
+                SET status = 'leased',
+                    leased_by = $1,
+                    lease_expires_at = (
+                        clock_timestamp()
+                        + $3 * interval '1 second'
+                    )
+                FROM candidates AS c
+                WHERE t.task_id = c.task_id
+                RETURNING t.*
+            ),
+            event_rows AS (
+                INSERT INTO arena_agent_task_events (
+                    event_id,
+                    task_id,
+                    event_type,
+                    created_at,
+                    safe_metadata
+                )
+                SELECT
+                    u.task_id || ':event:connector-leased:'
+                        || txid_current()::text,
+                    u.task_id,
+                    'leased',
+                    clock_timestamp(),
+                    jsonb_build_object('worker_id', $1)
+                FROM updated AS u
+                ON CONFLICT (event_id) DO NOTHING
+                RETURNING task_id
+            )
+            SELECT
+                u.*,
+                b.connector_binding_id,
+                b.connector_binding_epoch
+            FROM updated AS u
+            JOIN arena_runtime_bindings AS b
+              ON b.runtime_binding_id = u.runtime_binding_id
+            ORDER BY u.deadline_at, u.task_id
+            """,
+            worker_id,
+            limit,
+            lease_seconds,
+        )
+        return tuple(
+            ConnectorTaskClaim(
+                task=_task_record(row).task,
+                connector_binding_id=str(row["connector_binding_id"]),
+                connector_binding_epoch=int(
+                    row["connector_binding_epoch"]
+                ),
+            )
+            for row in rows
+        )
+
+    async def defer_connector_task(
+        self,
+        *,
+        task_id: str,
+        worker_id: str,
+        delay_seconds: int,
+    ) -> None:
+        if delay_seconds < 1 or delay_seconds > 600:
+            raise ValueError(
+                "Connector task defer delay must be between 1 and 600 seconds"
+            )
+        await self._require_pool().fetchval(
+            """
+            UPDATE arena_agent_tasks
+            SET lease_expires_at = (
+                clock_timestamp()
+                + $3 * interval '1 second'
+            )
+            WHERE task_id = $1
+              AND leased_by = $2
+              AND status = 'leased'
+              AND deadline_at > clock_timestamp()
+            RETURNING true
+            """,
+            task_id,
+            worker_id,
+            delay_seconds,
+        )
 
     async def get_result_for_task(
         self, task_id: str

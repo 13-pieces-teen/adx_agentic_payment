@@ -1,10 +1,11 @@
 # Arena 402 Agent 入场与 Runtime 绑定
 
 > 状态：Hosted Runtime、统一 Task/Result、生产 Game Operator API、通用 Join 的
-> Game Core 投影，以及 Connector Binding 到 Arena identity/route 的注册桥已实现；
-> Local Connector 的 `arena.decide` / `arena.negotiate` typed transport、终态 Result
-> durable 回传和 Result Sink 接线已实现，Connector-owned session、task dispatcher
-> 与 mixed-Runtime 编排仍未完成。
+> Game Core 投影和 Arena 接线已实现；Local Connector 已完成 Local Agent identity、
+> 冻结 route、Connector-owned session、数据库 Task
+> dispatcher、`arena.decide` / `arena.negotiate` typed transport、终态 Result
+> durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排。真实 CC/Codex
+> 完整比赛与生产重连仍待 E2E 验收。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
@@ -82,9 +83,19 @@ chain-of-thought；Provider 若返回 reasoning text 或私有推理载荷，应
 3. 用户在浏览器批准 Device；
 4. 平台显示本地 Runtime inventory；
 5. 用户选择 Runtime、允许目录和本地能力；
-6. Connector Gateway 创建自己的 Binding，Arena route 只引用
+6. Connector Gateway 通过
+   `POST /api/connectors/devices/{device_id}/bindings` 创建自己的 Binding，并记录
+   `working_directory`；旧 Binding 可补齐一次该目录，已冻结目录不能静默修改。
+   Arena route 只引用
    `connector_binding_id + binding_epoch`；
-7. 用户加入 Game 时，Arena 创建 Game Agent 并冻结该引用。
+7. 用户通过 `POST /api/local-agents` 把 owner-scoped Connector Binding 注册为
+   Arena Agent；
+8. 用户通过
+   `POST /api/v1/pawnhouse/games/{game_id}/connector-participants` 加入 Game，
+   Arena 创建 Game Agent 并冻结该引用；
+9. 回合创建 AgentTask 后，Dispatcher 在没有 Session 时先幂等排队
+   `session.start`，获得 Connector-owned `session_id` 后再排队 typed
+   `task.dispatch`。Session 和本地 `working_directory` 不复制进 Arena 业务状态。
 
 `adx-connector`、`ADX_*` 和现有协议消息名属于兼容标识，不做破坏性重命名。
 Connector 路径的模型凭据、OAuth、钱包私钥和本地环境秘密始终留在用户设备上，

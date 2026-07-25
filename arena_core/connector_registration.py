@@ -30,7 +30,7 @@ class ConnectorAgentRegistration:
 
 
 class PostgresConnectorArenaRegistrar:
-    def __init__(self, dsn: str, *, pool: object | None = None) -> None:
+    def __init__(self, dsn: str, *, pool: Any | None = None) -> None:
         if not dsn and pool is None:
             raise ValueError("Connector Arena registration DSN is required")
         self._dsn = dsn
@@ -127,8 +127,8 @@ class PostgresConnectorArenaRegistrar:
                         and binding["binding_status"]
                         in {"available", "running"}
                         and {
-                            "arena.decide",
-                            "arena.negotiate",
+                            "session.start",
+                            "task.dispatch",
                         }.issubset(capability_set)
                     )
                     else "provisioning"

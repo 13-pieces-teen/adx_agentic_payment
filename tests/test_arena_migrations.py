@@ -15,6 +15,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATE_PATH = ROOT / "deploy" / "scripts" / "migrate.py"
 ARENA_SQL_PATH = ROOT / "db" / "migrations" / "003_arena_agent_runtime.sql"
+LOCAL_CONNECTOR_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "015_arena_local_connector_runtime.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -287,3 +293,41 @@ def test_arena_sql_uses_cas_functions_and_keeps_worker_least_privileged():
     assert "GRANT EXECUTE ON FUNCTION submit_agent_task_result(" not in worker_grants
     assert "GRANT EXECUTE ON FUNCTION submit_hosted_agent_task_result(" in worker_grants
     assert "GRANT EXECUTE" in worker_grants
+
+
+def test_local_connector_migration_is_owner_scoped_and_supports_mixed_runs():
+    sql = LOCAL_CONNECTOR_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "'local_agents.create'" in sql
+    assert "FUNCTION reserve_local_agent_idempotency(" in sql
+    assert "FUNCTION complete_local_agent_idempotency(" in sql
+    assert "FUNCTION resolve_connector_binding_for_arena(" in sql
+    assert "d.owner_id = p_owner_user_id" in sql
+    assert "(r.record -> 'capabilities') ? 'session.start'" in sql
+    assert "(r.record -> 'capabilities') ? 'task.dispatch'" in sql
+    assert "UPDATE arena_runtime_bindings AS route" in sql
+    assert "u.disabled_at IS NULL" in sql
+    assert "v_active_count >= 256" in sql
+    assert "runtime_kind IN ('hosted', 'mixed')" in sql
+    assert "SET search_path = pg_catalog, public" in sql
+    assert (
+        "GRANT EXECUTE ON FUNCTION "
+        "resolve_connector_binding_for_arena(TEXT, TEXT)"
+    ) in sql
+    function_owner_grants = sql.split(
+        "ALTER FUNCTION resolve_connector_binding_for_arena", maxsplit=1
+    )[1]
+    assert "GRANT INSERT ON" not in function_owner_grants
+
+
+def test_local_connector_migration_is_selected_by_arena_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+
+    assert LOCAL_CONNECTOR_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )

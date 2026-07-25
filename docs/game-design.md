@@ -2,8 +2,9 @@
 
 > 状态：王城典当行新业务内核的当前游戏契约；后端已完成 1–10 回合可配置自动编排、
 > Hosted/rule Runtime 接线、FCFS、多组协商、Round close、终场估值与排名。
-> Local Connector typed Task/Result 与 Result Sink 基础接线已完成，但 identity、
-> session、自动 Task dispatcher 和 mixed-Runtime 回合编排尚未完成；通用
+> Local Connector 的 identity、冻结 route、Connector-owned session、数据库 Task
+> dispatcher、typed Task/Result、Result Sink 和 Hosted/Connector mixed-Runtime
+> 回合编排已接线；真实 CC/Codex 完整比赛、通用
 > PaymentMandate 和真实生产验收也尚未完成。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >

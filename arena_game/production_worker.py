@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from arena_core.postgres_repository import PostgresArenaCoreRepository
 
 from .evm_confirmation import EvmJsonRpcConfirmationReader
-from .hosted_coordinator import PawnhouseHostedCoordinator
+from .hosted_coordinator import PawnhouseAgentRuntimeCoordinator
 from .orchestrator import PawnhouseGameOrchestrator
 from .postgres import PostgresPawnhouseRepository
 from .settlement_worker import SettlementRecoveryWorker
@@ -45,7 +45,7 @@ class ArenaProductionWorker:
         self,
         *,
         game_orchestrator: PawnhouseGameOrchestrator,
-        coordinator: PawnhouseHostedCoordinator,
+        coordinator: PawnhouseAgentRuntimeCoordinator,
         arena_core: PostgresArenaCoreRepository,
         settlement_recovery: SettlementRecoveryWorker,
         coordinator_poll_seconds: float = 0.25,
@@ -143,7 +143,7 @@ async def main() -> None:
     )
     pawnhouse = PostgresPawnhouseRepository(database_url)
     arena_core = PostgresArenaCoreRepository(database_url)
-    coordinator = PawnhouseHostedCoordinator(
+    coordinator = PawnhouseAgentRuntimeCoordinator(
         pawnhouse=pawnhouse,
         arena_core=arena_core,
         worker_id=os.getenv("ADX_ARENA_WORKER_ID") or None,

@@ -276,10 +276,15 @@ class PersistentConnectorGateway(ConnectorGateway):
         runtime_id: str,
         agent_id: Optional[str],
         display_name: Optional[str],
+        working_directory: Optional[str] = None,
     ) -> dict[str, Any]:
         await self.initialize()
         result = await super().create_binding(
-            device_id, runtime_id, agent_id, display_name
+            device_id,
+            runtime_id,
+            agent_id,
+            display_name,
+            working_directory,
         )
         await self._persist_current()
         return result

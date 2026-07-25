@@ -26,8 +26,10 @@ class PawnhouseGameOrchestrator:
         for game_id in game_ids:
             state = await self._repository.automation_state(game_id=game_id)
             action = state.get("action")
-            if action == "enqueue_hosted":
-                await self._repository.enqueue_hosted_run(game_id=game_id)
+            if action == "enqueue_agent_runtime":
+                await self._repository.enqueue_agent_runtime_run(
+                    game_id=game_id
+                )
             elif action == "run_rule":
                 await self._repository.run_rule_market(game_id=game_id)
             elif action == "advance_round":

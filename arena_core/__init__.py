@@ -13,6 +13,7 @@ from .ingress_security import (
     validate_runtime_result_identifiers,
 )
 from .postgres_repository import PostgresArenaCoreRepository
+from .models import ConnectorTaskClaim
 from .public_output_policy import (
     PUBLIC_OUTPUT_POLICY_VERSION,
     PublicOutputDecision,
@@ -32,6 +33,7 @@ from .task_factory import ArenaTaskFactory
 from .participation import (
     ArenaParticipationError,
     GameParticipation,
+    LocalAgentRegistration,
     PostgresArenaParticipationRepository,
 )
 
@@ -39,6 +41,7 @@ __all__ = [
     "ArenaCoreRepository",
     "ConnectorAgentRegistration",
     "ConnectorRegistrationError",
+    "ConnectorTaskClaim",
     "ArenaDeadlineFinalizer",
     "ArenaIdempotencyConflictError",
     "ArenaIngressSecurityError",
@@ -51,6 +54,7 @@ __all__ = [
     "ArenaTaskNotFoundError",
     "MemoryArenaCoreRepository",
     "GameParticipation",
+    "LocalAgentRegistration",
     "PostgresArenaParticipationRepository",
     "PostgresArenaCoreRepository",
     "PostgresConnectorArenaRegistrar",

@@ -3,8 +3,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from connector_gateway.auth import AuthPrincipal
 from web.api import create_app
 from web.pawnhouse_api import (
+    create_pawnhouse_participation_router,
     create_pawnhouse_read_router,
     create_pawnhouse_router,
 )
@@ -29,6 +31,10 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
+    async def add_connector_participant(self, **values):
+        self.participants.append(values)
+        return f"gp:{values['game_id']}:{values['agent_id']}"
+
     async def start_game(self, *, game_id):
         return {
             "gameId": game_id,
@@ -44,7 +50,7 @@ class _Repository:
             "negotiations": [],
         }
 
-    async def enqueue_hosted_run(self, *, game_id):
+    async def enqueue_agent_runtime_run(self, *, game_id):
         return {
             "gameId": game_id,
             "roundId": f"round:{game_id}:1",
@@ -140,6 +146,33 @@ def _client() -> tuple[TestClient, _Repository]:
     return TestClient(app), repository
 
 
+class _Auth:
+    async def authenticate(self, _: object) -> AuthPrincipal:
+        return AuthPrincipal(
+            user_id="user-local",
+            username="owner",
+            temporary=False,
+            session_token_hash="s" * 64,
+            csrf_hash="c" * 64,
+        )
+
+    async def require_csrf(self, _: object, __: object) -> None:
+        return None
+
+
+def _authenticated_client() -> tuple[TestClient, _Repository]:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_router(
+            repository=repository,  # type: ignore[arg-type]
+            dev_token="development-token-for-tests",
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+    return TestClient(app), repository
+
+
 def test_read_router_exposes_game_state_without_dev_mutations() -> None:
     repository = _Repository()
     app = FastAPI()
@@ -183,6 +216,66 @@ def test_app_mounts_read_only_game_api_without_dev_control(
     assert "/api/v1/pawnhouse/games/{game_id}" in paths
     assert "/api/dev/pawnhouse/games" not in paths
     assert app.state.pawnhouse_mode == "read_only"
+
+
+def test_owner_can_add_registered_connector_agent_to_game() -> None:
+    client, repository = _authenticated_client()
+
+    response = client.post(
+        "/api/v1/pawnhouse/games/game_1/connector-participants",
+        json={
+            "agentId": "agent-local-1",
+            "portfolio": {
+                "cash": "20.000000",
+                "holdings": {},
+            },
+            "settlementAccount": {
+                "chainId": 1439,
+                "address": "0x1111111111111111111111111111111111111111",
+                "custodyMode": "wallet",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "gameId": "game_1",
+        "participantId": "gp:game_1:agent-local-1",
+        "runtimeKind": "connector",
+    }
+    assert repository.participants[-1]["user_id"] == "user-local"
+    assert repository.participants[-1]["agent_id"] == "agent-local-1"
+    assert (
+        repository.participants[-1]["settlement_account"].chain_id
+        == 1439
+    )
+
+
+def test_authenticated_participation_router_excludes_dev_controls() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+    client = TestClient(app)
+
+    joined = client.post(
+        "/api/v1/pawnhouse/games/game_1/connector-participants",
+        json={
+            "agentId": "agent-local-1",
+            "portfolio": {"cash": "20.000000", "holdings": {}},
+        },
+    )
+    dev_mutation = client.post(
+        "/api/dev/pawnhouse/games",
+        json={"gameId": "game_1", "eventSeed": "fixed-demo-seed"},
+    )
+
+    assert joined.status_code == 201
+    assert dev_mutation.status_code == 404
 
 
 def test_development_mutations_require_the_explicit_token() -> None:

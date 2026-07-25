@@ -127,9 +127,11 @@ Verified local PostgreSQL evidence on 2026-07-25:
 > 状态：当前跨模块实施状态与建议顺序。
 
 Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游戏的本地开发闭环，并已建立
-确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 已完成 typed
-Task/Result 传输、durable result outbox、Gateway inbox 与 Arena Result Sink 基础接线；
-Arena Agent 身份创建、自动 Task 调度和 mixed-Runtime 回合编排仍未完成。通用
+确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 已完成
+owner-scoped Arena Agent identity、参赛快照、Connector-owned session、数据库
+Task dispatcher、typed Task/Result、durable result outbox、Gateway inbox、Arena
+Result Sink 与 Hosted/Connector mixed-Runtime 回合编排；真实 CC/Codex 完整比赛和
+生产重连 E2E 尚未验收。通用
 PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
@@ -223,8 +225,11 @@ create game
       deadline、binding epoch 和固定业务 prompt 传给本地 CC/Codex child。
 - [x] Connector 已返回与 dispatch ACK 分离的唯一 typed AgentTaskResult；结果先写
       本地 durable outbox，再经 WSS/Gateway PostgreSQL inbox 进入 Arena Result Sink。
-- [ ] 尚缺 Connector-owned Arena session 启动、queued AgentTask 自动 dispatch，
-      以及 Hosted/Connector mixed-Runtime 回合编排。
+- [x] Local Arena Agent identity 创建、owner-scoped Connector route 解析、
+      Connector-owned Arena session 启动、leased AgentTask 自动 dispatch，以及
+      Hosted/Connector mixed-Runtime 回合编排已实现。
+- [ ] 使用真实 CC/Codex 跑通 Connector-only 与 Hosted/Connector mixed 完整比赛，
+      并保存断线重连、deadline default 与 Result replay 证据。
 - [ ] PaymentMandate 的额度、期限、范围、撤销和
       `reserve / consume / release` 尚未实现。
 - [ ] Hosted 上线目标要求 platform-managed testnet guest wallet、入局一次授权和
@@ -334,13 +339,15 @@ create game
       terminal structured result 进入严格 action parser，普通 stdout/Event 不作为动作。
 - [x] terminal Result 使用本地 durable outbox、Gateway PostgreSQL inbox 与 Arena
       Result Sink；重复提交按 Task/Result hash 幂等恢复。
-- [ ] 实现 Local Arena Agent identity bridge、Arena session lifecycle、Task dispatcher
-      和 Hosted/Connector mixed-Runtime Round coordinator。
+- [x] 实现 Local Arena Agent identity bridge、Arena session lifecycle、Task
+      dispatcher 和 Hosted/Connector mixed-Runtime Round coordinator；`015`
+      迁移增加最小 Local Agent 幂等函数和 mixed Runtime Run。
 - [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`。
 - [x] 实现完整 N 回合的持久化 Round、Pool、Pairing、Negotiation、Inventory、
       Event、Round portfolio snapshot、final settlement price 和排名闭环。
-- [x] Arena Worker 自动排队每轮 Hosted Runtime；所有 Decide Task 先创建，
-      Provider Task 有界并发，不同 pairing 并发协商、每个 pairing 内保持 turn 顺序。
+- [x] Arena Worker 自动排队每轮 Hosted/Connector task-driven Runtime；所有 Decide
+      Task 先创建，分别由 Hosted Worker 或 Connector Dispatcher 按冻结 Binding
+      领取，不同 pairing 并发协商、每个 pairing 内保持 turn 顺序。
 - [x] 未结算的 accepted pairing 将回合保持在 `settle`，不会进入下一回合。
 - [x] 建立公开协商/结算时间线与 owner-only usage/latency/Attempt 投影。
 

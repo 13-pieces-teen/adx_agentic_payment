@@ -644,10 +644,14 @@ def test_cross_tenant_device_binding_command_event_and_audit_are_hidden():
     assert asyncio.run(bundle.service.list_bindings()) == []
     binding = owner.post(
         f"/api/connectors/devices/{credential['device_id']}/bindings",
-        json={"runtime_id": "codex-default"},
+        json={
+            "runtime_id": "codex-default",
+            "working_directory": "E:\\arena",
+        },
         headers={"X-CSRF-Token": owner_csrf},
     )
     assert binding.status_code == 201
+    assert binding.json()["working_directory"] == "E:\\arena"
     binding_id = binding.json()["binding_id"]
     command = owner.post(
         f"/api/connectors/bindings/{binding_id}/commands",

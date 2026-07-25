@@ -109,6 +109,15 @@ class AddHostedParticipantBody(_Body):
     )
 
 
+class AddConnectorParticipantBody(_Body):
+    agent_id: _Id = Field(alias="agentId")
+    portfolio: PortfolioBody
+    settlement_account: "SettlementAccountBody | None" = Field(
+        default=None,
+        alias="settlementAccount",
+    )
+
+
 class SettlementConfigBody(_Body):
     authorization_mode: Literal["none", "single_eip3009"] = Field(
         default="none",
@@ -179,6 +188,7 @@ class RecordSettlementApprovalBody(_Body):
 
 CreateGameBody.model_rebuild()
 AddHostedParticipantBody.model_rebuild()
+AddConnectorParticipantBody.model_rebuild()
 
 
 def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
@@ -282,6 +292,132 @@ def create_pawnhouse_read_router(
     return router
 
 
+def create_pawnhouse_participation_router(
+    *,
+    repository: PostgresPawnhouseRepository,
+    auth: ConnectorAuth,
+) -> APIRouter:
+    """Expose authenticated participant mutations without dev controls."""
+
+    router = APIRouter(tags=["pawnhouse-participation"])
+
+    @router.post(
+        "/api/v1/pawnhouse/games/{game_id}/hosted-participants",
+        status_code=201,
+    )
+    async def add_hosted_participant(
+        game_id: _Id,
+        body: AddHostedParticipantBody,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            principal = await auth.authenticate(request)
+            await auth.require_csrf(request, principal)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from None
+        try:
+            settlement_account = (
+                None
+                if body.settlement_account is None
+                else SettlementAccount(
+                    chain_id=body.settlement_account.chain_id,
+                    address=body.settlement_account.address,
+                    custody_mode=body.settlement_account.custody_mode,
+                )
+            )
+            portfolio = Portfolio.initial(
+                cash_atomic=gold(body.portfolio.cash),
+                holdings=body.portfolio.holdings,
+            )
+            participant_id = await repository.add_hosted_participant(
+                game_id=game_id,
+                user_id=principal.user_id,
+                agent_id=body.agent_id,
+                portfolio=portfolio,
+                settlement_account=settlement_account,
+            )
+        except (PortfolioError, SettlementError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": (
+                        "invalid_portfolio"
+                        if isinstance(exc, PortfolioError)
+                        else str(exc)
+                    )
+                },
+            ) from exc
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        return {
+            "gameId": game_id,
+            "participantId": participant_id,
+            "runtimeKind": "hosted",
+        }
+
+    @router.post(
+        "/api/v1/pawnhouse/games/{game_id}/connector-participants",
+        status_code=201,
+    )
+    async def add_connector_participant(
+        game_id: _Id,
+        body: AddConnectorParticipantBody,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            principal = await auth.authenticate(request)
+            await auth.require_csrf(request, principal)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from None
+        try:
+            settlement_account = (
+                None
+                if body.settlement_account is None
+                else SettlementAccount(
+                    chain_id=body.settlement_account.chain_id,
+                    address=body.settlement_account.address,
+                    custody_mode=body.settlement_account.custody_mode,
+                )
+            )
+            portfolio = Portfolio.initial(
+                cash_atomic=gold(body.portfolio.cash),
+                holdings=body.portfolio.holdings,
+            )
+            participant_id = await repository.add_connector_participant(
+                game_id=game_id,
+                user_id=principal.user_id,
+                agent_id=body.agent_id,
+                portfolio=portfolio,
+                settlement_account=settlement_account,
+            )
+        except (PortfolioError, SettlementError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": (
+                        "invalid_portfolio"
+                        if isinstance(exc, PortfolioError)
+                        else str(exc)
+                    )
+                },
+            ) from exc
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        return {
+            "gameId": game_id,
+            "participantId": participant_id,
+            "runtimeKind": "connector",
+        }
+
+    return router
+
+
 def create_pawnhouse_router(
     *,
     repository: PostgresPawnhouseRepository,
@@ -296,6 +432,13 @@ def create_pawnhouse_router(
     router.include_router(
         create_pawnhouse_read_router(repository=repository)
     )
+    if auth is not None:
+        router.include_router(
+            create_pawnhouse_participation_router(
+                repository=repository,
+                auth=auth,
+            )
+        )
 
     def authorize(value: str | None) -> None:
         if value != dev_token:
@@ -397,67 +540,6 @@ def create_pawnhouse_router(
             "runtimeKind": "rule",
         }
 
-    if auth is not None:
-
-        @router.post(
-            "/api/v1/pawnhouse/games/{game_id}/hosted-participants",
-            status_code=201,
-        )
-        async def add_hosted_participant(
-            game_id: _Id,
-            body: AddHostedParticipantBody,
-            request: Request,
-        ) -> dict[str, object]:
-            try:
-                principal = await auth.authenticate(request)
-                await auth.require_csrf(request, principal)
-            except AuthError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail=exc.detail,
-                ) from None
-            try:
-                settlement_account = (
-                    None
-                    if body.settlement_account is None
-                    else SettlementAccount(
-                        chain_id=body.settlement_account.chain_id,
-                        address=body.settlement_account.address,
-                        custody_mode=(
-                            body.settlement_account.custody_mode
-                        ),
-                    )
-                )
-                portfolio = Portfolio.initial(
-                    cash_atomic=gold(body.portfolio.cash),
-                    holdings=body.portfolio.holdings,
-                )
-                participant_id = await repository.add_hosted_participant(
-                    game_id=game_id,
-                    user_id=principal.user_id,
-                    agent_id=body.agent_id,
-                    portfolio=portfolio,
-                    settlement_account=settlement_account,
-                )
-            except (PortfolioError, SettlementError) as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "code": (
-                            "invalid_portfolio"
-                            if isinstance(exc, PortfolioError)
-                            else str(exc)
-                        )
-                    },
-                ) from exc
-            except PawnhouseRepositoryError as exc:
-                raise _repository_error(exc) from None
-            return {
-                "gameId": game_id,
-                "participantId": participant_id,
-                "runtimeKind": "hosted",
-            }
-
     @router.post("/api/dev/pawnhouse/games/{game_id}/start")
     async def start_game(
         game_id: _Id,
@@ -484,13 +566,15 @@ def create_pawnhouse_router(
         "/api/dev/pawnhouse/games/{game_id}/run-hosted-market",
         status_code=202,
     )
-    async def run_hosted_market(
+    async def run_agent_market(
         game_id: _Id,
         x_arena_dev_token: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
         authorize(x_arena_dev_token)
         try:
-            return await repository.enqueue_hosted_run(game_id=game_id)
+            return await repository.enqueue_agent_runtime_run(
+                game_id=game_id
+            )
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
@@ -614,6 +698,7 @@ def create_pawnhouse_router(
 
 
 __all__ = [
+    "create_pawnhouse_participation_router",
     "create_pawnhouse_read_router",
     "create_pawnhouse_router",
 ]

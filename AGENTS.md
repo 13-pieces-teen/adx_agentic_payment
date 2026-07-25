@@ -16,16 +16,17 @@ The repository contains three maintained foundations:
 
 - a persistent Pawnhouse Game Core integrated with the Hosted Arena Runtime,
   AgentTask/Result pipeline, bounded negotiation, and round orchestration;
-- a self-hosted Local Agent Connector and Gateway control plane whose
-  game-specific Runtime adapter is not yet complete;
+- a self-hosted Local Agent Connector and Gateway control plane integrated
+  through owner-scoped identity, frozen routes, Connector-owned sessions,
+  leased task dispatch, and the Arena Result Sink;
 - an Injective EVM testnet EIP-3009 direct-settlement prototype integrated
   through immutable single-payment intents and confirmation-gated inventory
   commit.
 
-The bounded/revocable PaymentMandate, unattended signer authority, Local
-Connector game adapter, Realtime frontend projection, and complete production
-E2E acceptance are not complete yet. The former in-memory `matching/` and
-Supabase/ELO business path have been removed.
+The bounded/revocable PaymentMandate, unattended signer authority, real
+CC/Codex Connector game E2E, Realtime frontend projection, and complete
+production acceptance are not complete yet. The former in-memory `matching/`
+and Supabase/ELO business path have been removed.
 
 Frontend product development is owned by the separate
 `sunruize93-cmyk/arena402` repository and will be deployed through Vercel.

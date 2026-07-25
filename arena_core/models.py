@@ -52,6 +52,13 @@ class ArenaTaskRecord:
     completed_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ConnectorTaskClaim:
+    task: ArenaAgentTaskV1
+    connector_binding_id: str
+    connector_binding_epoch: int
+
+
 @dataclass(slots=True)
 class ArenaResultRecord:
     result: AgentTaskResultV1

@@ -591,6 +591,212 @@ class PostgresPawnhouseRepository:
                 )
         return participant_id
 
+    async def add_connector_participant(
+        self,
+        *,
+        game_id: str,
+        user_id: str,
+        agent_id: str,
+        portfolio: Portfolio,
+        settlement_account: SettlementAccount | None = None,
+    ) -> str:
+        participant_id = f"gp:{game_id}:{agent_id}"
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                phase = await connection.fetchrow(
+                    """
+                    SELECT phase, max_participants, config_snapshot
+                    FROM arena402.games
+                    WHERE game_id = $1
+                    FOR UPDATE
+                    """,
+                    game_id,
+                )
+                if phase is None:
+                    raise PawnhouseRepositoryError("game_not_found")
+                if phase["phase"] not in (
+                    "registration",
+                    "portfolio_setup",
+                ):
+                    raise PawnhouseRepositoryError("game_not_joinable")
+                participant_count = int(
+                    await connection.fetchval(
+                        """
+                        SELECT count(*)
+                        FROM arena402.game_participants
+                        WHERE game_id = $1
+                        """,
+                        game_id,
+                    )
+                )
+                if participant_count >= int(phase["max_participants"]):
+                    raise PawnhouseRepositoryError(
+                        "game_participant_limit_reached"
+                    )
+                game_config = (
+                    json.loads(phase["config_snapshot"])
+                    if isinstance(phase["config_snapshot"], str)
+                    else dict(phase["config_snapshot"])
+                )
+                settlement_config = self._settlement_config(game_config)
+                if settlement_config.authorization_mode != "none":
+                    if settlement_account is None:
+                        raise PawnhouseRepositoryError(
+                            "settlement_account_required"
+                        )
+                    if (
+                        settlement_account.chain_id
+                        != settlement_config.chain_id
+                    ):
+                        raise PawnhouseRepositoryError(
+                            "settlement_account_chain_mismatch"
+                        )
+                connector = await connection.fetchrow(
+                    """
+                    SELECT
+                        a.agent_id,
+                        b.runtime_binding_id,
+                        b.connector_binding_id,
+                        b.connector_binding_epoch
+                    FROM public.arena_agents AS a
+                    JOIN public.arena_runtime_bindings AS b
+                      ON b.agent_id = a.agent_id
+                     AND b.runtime_kind = 'connector'
+                     AND b.disabled_at IS NULL
+                    JOIN LATERAL
+                        resolve_connector_binding_for_arena(
+                            a.owner_user_id,
+                            b.connector_binding_id
+                        ) AS route
+                      ON route.binding_epoch = b.connector_binding_epoch
+                    WHERE a.agent_id = $1
+                      AND a.owner_user_id = $2
+                      AND a.status = 'active'
+                      AND b.route_status = 'ready'
+                    """,
+                    agent_id,
+                    user_id,
+                )
+                if connector is None:
+                    raise PawnhouseRepositoryError(
+                        "connector_agent_not_ready"
+                    )
+                config_snapshot = {
+                    "runtime_kind": "connector",
+                    "credential_id": None,
+                    "connector_binding_id": connector[
+                        "connector_binding_id"
+                    ],
+                    "connector_binding_epoch": int(
+                        connector["connector_binding_epoch"]
+                    ),
+                }
+                config_hash = sha256_identifier(config_snapshot)
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.game_participants (
+                        game_participant_id, game_id, user_id, agent_id,
+                        runtime_binding_id, runtime_kind,
+                        portfolio_locked_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, 'connector',
+                        clock_timestamp()
+                    )
+                    """,
+                    participant_id,
+                    game_id,
+                    user_id,
+                    agent_id,
+                    connector["runtime_binding_id"],
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO public.game_agents (
+                        game_agent_id, game_id, user_id, agent_id,
+                        runtime_binding_id, config_snapshot, config_hash,
+                        initial_cash_atomic, initial_inventory
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6::jsonb, $7, $8,
+                        $9::jsonb
+                    )
+                    """,
+                    participant_id,
+                    game_id,
+                    user_id,
+                    agent_id,
+                    connector["runtime_binding_id"],
+                    _json(config_snapshot),
+                    config_hash,
+                    portfolio.cash_atomic,
+                    _json(portfolio.holdings),
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.balances (
+                        game_participant_id,
+                        cash_atomic,
+                        initial_cash_atomic
+                    )
+                    VALUES ($1, $2, $2)
+                    """,
+                    participant_id,
+                    portfolio.cash_atomic,
+                )
+                for good_id in GOOD_IDS:
+                    quantity = portfolio.holdings[good_id]
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.holdings (
+                            game_participant_id, game_id, good_id,
+                            quantity, initial_quantity
+                        )
+                        VALUES ($1, $2, $3, $4, $4)
+                        """,
+                        participant_id,
+                        game_id,
+                        good_id,
+                        quantity,
+                    )
+                if settlement_account is not None:
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.participant_settlement_accounts (
+                            game_participant_id, game_id, chain_id,
+                            account_address, custody_mode
+                        )
+                        VALUES ($1, $2, $3, $4, $5)
+                        """,
+                        participant_id,
+                        game_id,
+                        settlement_account.chain_id,
+                        settlement_account.address,
+                        settlement_account.custody_mode,
+                    )
+                await connection.execute(
+                    """
+                    UPDATE arena402.games
+                    SET phase = 'portfolio_setup'
+                    WHERE game_id = $1
+                      AND phase = 'registration'
+                    """,
+                    game_id,
+                )
+                await self._event(
+                    connection,
+                    game_id=game_id,
+                    event_type="participant.joined",
+                    source_key=f"{game_id}:{participant_id}:joined",
+                    public_payload={
+                        "participantId": participant_id,
+                        "agentId": agent_id,
+                        "runtimeKind": "connector",
+                    },
+                )
+        return participant_id
+
     async def start_game(
         self,
         *,
@@ -884,7 +1090,13 @@ class PostgresPawnhouseRepository:
             "negotiations": negotiations,
         }
 
-    async def enqueue_hosted_run(self, *, game_id: str) -> dict[str, object]:
+    async def enqueue_agent_runtime_run(
+        self,
+        *,
+        game_id: str,
+    ) -> dict[str, object]:
+        """Queue one task-driven run for Hosted and/or Connector Agents."""
+
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
@@ -908,30 +1120,40 @@ class PostgresPawnhouseRepository:
                     SELECT
                         count(*) AS total,
                         count(*) FILTER (
-                            WHERE runtime_kind = 'hosted'
-                        ) AS hosted
+                            WHERE runtime_kind IN ('hosted', 'connector')
+                        ) AS agent_runtime,
+                        count(*) FILTER (
+                            WHERE runtime_kind = 'connector'
+                        ) AS connector
                     FROM arena402.game_participants
                     WHERE game_id = $1
                       AND status = 'active'
                     """,
                     game_id,
                 )
-                if counts["total"] < 2 or counts["total"] != counts["hosted"]:
+                if (
+                    counts["total"] < 2
+                    or counts["total"] != counts["agent_runtime"]
+                ):
                     raise PawnhouseRepositoryError(
-                        "hosted_run_requires_only_hosted_participants"
+                        "agent_runtime_run_requires_hosted_or_connector_participants"
                     )
-                run_id = f"hosted-run:{round_row['round_id']}"
+                runtime_kind = (
+                    "mixed" if counts["connector"] else "hosted"
+                )
+                run_id = f"{runtime_kind}-run:{round_row['round_id']}"
                 await connection.execute(
                     """
                     INSERT INTO arena402.runtime_runs (
                         runtime_run_id, game_id, round_id, runtime_kind
                     )
-                    VALUES ($1, $2, $3, 'hosted')
+                    VALUES ($1, $2, $3, $4)
                     ON CONFLICT (round_id, runtime_kind) DO NOTHING
                     """,
                     run_id,
                     game_id,
                     round_row["round_id"],
+                    runtime_kind,
                 )
                 await self._event(
                     connection,
@@ -941,7 +1163,7 @@ class PostgresPawnhouseRepository:
                     source_key=f"{run_id}:queued",
                     public_payload={
                         "runtimeRunId": run_id,
-                        "runtimeKind": "hosted",
+                        "runtimeKind": runtime_kind,
                     },
                 )
         return {
@@ -950,6 +1172,11 @@ class PostgresPawnhouseRepository:
             "runtimeRunId": run_id,
             "status": "queued",
         }
+
+    async def enqueue_hosted_run(self, *, game_id: str) -> dict[str, object]:
+        """Compatibility wrapper for the former Hosted-only entrypoint."""
+
+        return await self.enqueue_agent_runtime_run(game_id=game_id)
 
     async def claim_hosted_run(
         self,
@@ -963,7 +1190,7 @@ class PostgresPawnhouseRepository:
             WITH candidate AS (
                 SELECT runtime_run_id
                 FROM arena402.runtime_runs
-                WHERE runtime_kind = 'hosted'
+                WHERE runtime_kind IN ('hosted', 'mixed')
                   AND (
                       status = 'queued'
                       OR (
@@ -1130,7 +1357,7 @@ class PostgresPawnhouseRepository:
                 JOIN public.game_agents AS ga
                   ON ga.game_agent_id = p.game_participant_id
                 WHERE p.game_id = $1
-                  AND p.runtime_kind = 'hosted'
+                  AND p.runtime_kind IN ('hosted', 'connector')
                   AND p.status = 'active'
                 ORDER BY p.joined_at, p.game_participant_id
                 """,
@@ -2719,12 +2946,14 @@ class PostgresPawnhouseRepository:
                 str(row["runtime_kind"]): int(row["participant_count"])
                 for row in runtime_rows
             }
-            hosted_run = await connection.fetchrow(
+            runtime_run = await connection.fetchrow(
                 """
                 SELECT status, stage, safe_error_code
                 FROM arena402.runtime_runs
                 WHERE round_id = $1
-                  AND runtime_kind = 'hosted'
+                  AND runtime_kind IN ('hosted', 'mixed')
+                ORDER BY runtime_kind
+                LIMIT 1
                 """,
                 round_row["round_id"],
             )
@@ -2756,28 +2985,29 @@ class PostgresPawnhouseRepository:
 
         action = "idle"
         phase = str(round_row["phase"])
-        if len(runtime_kinds) != 1:
-            action = "wait_runtime_adapter"
-        elif phase == "decide":
-            if "rule" in runtime_kinds:
+        task_runtime_game = bool(runtime_kinds) and set(
+            runtime_kinds
+        ).issubset({"hosted", "connector"})
+        if phase == "decide":
+            if set(runtime_kinds) == {"rule"}:
                 action = "run_rule"
-            elif "hosted" in runtime_kinds:
-                if hosted_run is None:
-                    action = "enqueue_hosted"
-                elif hosted_run["status"] == "failed":
+            elif task_runtime_game:
+                if runtime_run is None:
+                    action = "enqueue_agent_runtime"
+                elif runtime_run["status"] == "failed":
                     action = "blocked_runtime_failure"
                 else:
                     action = "wait_runtime"
             else:
                 action = "wait_runtime_adapter"
         elif phase in {"negotiate", "settle", "round_close"}:
-            if "hosted" in runtime_kinds and (
-                hosted_run is None or hosted_run["status"] != "completed"
+            if task_runtime_game and (
+                runtime_run is None or runtime_run["status"] != "completed"
             ):
                 action = (
                     "blocked_runtime_failure"
-                    if hosted_run is not None
-                    and hosted_run["status"] == "failed"
+                    if runtime_run is not None
+                    and runtime_run["status"] == "failed"
                     else "wait_runtime"
                 )
             elif active_negotiations:
@@ -2795,15 +3025,15 @@ class PostgresPawnhouseRepository:
             "activeNegotiations": active_negotiations,
             "pendingSettlements": pending_settlements,
             "runtimeRunStatus": (
-                None if hosted_run is None else str(hosted_run["status"])
+                None if runtime_run is None else str(runtime_run["status"])
             ),
             "runtimeRunStage": (
-                None if hosted_run is None else str(hosted_run["stage"])
+                None if runtime_run is None else str(runtime_run["stage"])
             ),
             "runtimeErrorCode": (
                 None
-                if hosted_run is None
-                else hosted_run["safe_error_code"]
+                if runtime_run is None
+                else runtime_run["safe_error_code"]
             ),
             "action": action,
         }
@@ -2865,13 +3095,17 @@ class PostgresPawnhouseRepository:
                 runtime_kinds = {
                     str(value["runtime_kind"]) for value in runtime_rows
                 }
-                if runtime_kinds == {"hosted"}:
+                if runtime_kinds and runtime_kinds.issubset(
+                    {"hosted", "connector"}
+                ):
                     run_status = await connection.fetchval(
                         """
                         SELECT status
                         FROM arena402.runtime_runs
                         WHERE round_id = $1
-                          AND runtime_kind = 'hosted'
+                          AND runtime_kind IN ('hosted', 'mixed')
+                        ORDER BY runtime_kind
+                        LIMIT 1
                         """,
                         round_id,
                     )

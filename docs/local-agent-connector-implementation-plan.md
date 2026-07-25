@@ -1,7 +1,7 @@
 # Arena 402 本地 Agent Connector Implementation Plan
 
 > 文档状态：Self-hosted beta 实施状态与后续计划
-> 最后更新：2026-07-24
+> 最后更新：2026-07-25
 > 对应规格：[`local-agent-connector-spec.md`](./local-agent-connector-spec.md)
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
 > 统一 Runtime 计划：[`hosted-arena-agent-implementation-plan.md`](./hosted-arena-agent-implementation-plan.md)
@@ -167,8 +167,8 @@ task.dispatch Arena branch
 applied/rejected ACK 建模为三个可独立恢复的状态。不得从 stdout、
 `runtime.message`、普通 Event 或 Command `succeeded` 推断 Arena action。完整
 payload 见 [`local-agent-connector-spec.md`](./local-agent-connector-spec.md)；
-typed variant 已实现，identity/session/task dispatcher 与 mixed-Runtime 编排仍待
-完成。
+typed variant、identity、Connector-owned session、leased task dispatcher 与
+mixed-Runtime 编排均已完成代码接线，真实 CC/Codex 完整比赛和生产重连仍待验收。
 
 ### 3.4 投递与幂等
 
@@ -201,7 +201,7 @@ typed variant 已实现，identity/session/task dispatcher 与 mixed-Runtime 编
 | Phase 5A：Self-hosted persistence/auth | 已完成 beta | PostgreSQL、Auth、CSRF、owner scope、rate limit、bounded Pairing 和 durable barrier 已实现 |
 | Phase 5B：Single-host deployment assets | 已完成代码 | Docker/Caddy、domain/IP TLS、artifact 与运维脚本已实现；真实服务器部署待验收 |
 | Phase 5C：GA/HA hardening | 未完成 | signed release、SBOM、共享限流、multi-worker ownership、隐私治理和容量测试待实现 |
-| Phase 6：Arena typed Runtime Adapter | 进行中 | typed Task/Result、binding epoch、durable result outbox、Gateway inbox 与 Result Sink 基础接线已完成；identity/session/task dispatcher 与 mixed-Runtime 编排待实现 |
+| Phase 6：Arena typed Runtime Adapter | 已完成代码接线 | identity/join、自动 Session、leased Task dispatcher、typed Task/Result、durable result outbox、Gateway inbox、Result Sink 与 Hosted/Connector mixed-Runtime 编排已实现；真实完整比赛待验收 |
 | Phase 7：Native A2A Endpoint | 未开始 | 保持独立入口，不混入本地 Device 模型 |
 
 ## 5. 已完成的安全加固
@@ -410,21 +410,24 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 - 设计安全 updater、分阶段 rollout 和回滚；
 - 增加发布 provenance。
 
-### P1：Local Arena 编排闭环
+### P1：Local Arena 编排真实验收
 
-- 将真实 Arena 402 Agent registry 与 Connector Binding 对接；
-- Arena route 只引用 Connector-owned `connector_binding_id + binding_epoch`，
+- [x] 将 Arena 402 Agent registry 与 Connector Binding 对接；
+- [x] Arena route 只引用 Connector-owned `connector_binding_id + binding_epoch`，
   不复制 Device/Runtime/Session 权威；
-- 数据库原子保证一名 User 每局只有一个 Game Agent，并在入局时冻结 binding epoch；
-- 为入局后的 Local Agent 自动建立 Connector-owned Session，并从数据库
+- [x] 数据库原子保证一名 User 每局只有一个 Game Agent，并在入局时冻结 binding epoch；
+- [x] 为入局后的 Local Agent 自动建立 Connector-owned Session，并从数据库
   AgentTask 驱动 typed dispatch；
-- 让 Hosted/Local/rule 参与者经过同一个 mixed-Runtime Round coordinator；
-- 保持 Runtime telemetry、Business Event 和 Payment finality 三类权威来源分离；
-- 同一 Game 的 Hosted/Local/rule Runtime 使用同一、经真实 P95/P99 和负载测试
+- [x] 让 Hosted/Local 参与者经过同一个 mixed-Runtime Round coordinator；rule
+  Runtime 保留独立确定性开发路径；
+- [x] 保持 Runtime telemetry、Business Event 和 Payment finality 三类权威来源分离；
+- [ ] 用真实 CC/Codex 跑通 Connector-only 与 Hosted/Connector mixed 完整比赛，
+  保存重连、default 和 Result replay 证据；
+- [ ] 同一 Game 的 Hosted/Local Runtime 使用同一、经真实 P95/P99 和负载测试
   校准的 `action_timeout_ms`；每个逻辑 AgentTask 最多一次重试；
-- `accept` 只进入 pending settlement；PaymentMandate/链上确认与库存提交仍由
+- [x] `accept` 只进入 pending settlement；PaymentMandate/链上确认与库存提交仍由
   Settlement/Arena 负责；
-- 未完成前禁止真实资金或不可逆金融动作。
+- [x] 未完成真实验收前禁止真实资金或不可逆金融动作。
 
 ### P1：隐私与审计
 

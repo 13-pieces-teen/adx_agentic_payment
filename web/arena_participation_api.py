@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 from arena_core import (
     ArenaParticipationError,
     GameParticipation,
+    LocalAgentRegistration,
     PostgresArenaParticipationRepository,
 )
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
@@ -43,6 +44,16 @@ class _JoinBody(BaseModel):
     agent_id: _Identifier
 
 
+class _LocalAgentBody(BaseModel):
+    model_config = _JoinBody.model_config
+
+    connector_binding_id: _Identifier
+    display_name: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=120),
+    ]
+
+
 async def _principal(
     auth: ConnectorAuth,
     request: Request,
@@ -72,7 +83,11 @@ def _idempotency_digest(request: Request) -> str:
 
 
 def _error(exc: ArenaParticipationError) -> HTTPException:
-    if exc.code in {"game_not_found", "agent_not_found"}:
+    if exc.code in {
+        "game_not_found",
+        "agent_not_found",
+        "connector_binding_not_found",
+    }:
         status_code = 404
     elif exc.code in {
         "game_not_open",
@@ -80,6 +95,7 @@ def _error(exc: ArenaParticipationError) -> HTTPException:
         "user_already_joined",
         "idempotency_conflict",
         "invalid_game_config",
+        "connector_binding_already_registered",
     }:
         status_code = 409
     else:
@@ -103,12 +119,52 @@ def _public(value: GameParticipation) -> dict[str, str]:
     }
 
 
+def _public_local_agent(
+    value: LocalAgentRegistration,
+) -> dict[str, str | int]:
+    return {
+        "agentId": value.agent_id,
+        "displayName": value.display_name,
+        "runtimeBindingId": value.runtime_binding_id,
+        "runtimeKind": "connector",
+        "connectorBindingId": value.connector_binding_id,
+        "connectorBindingEpoch": value.connector_binding_epoch,
+        "routeStatus": value.route_status,
+        "schemaVersion": "arena.local-agent.v1",
+    }
+
+
 def create_arena_participation_router(
     *,
     auth: ConnectorAuth,
     repository: PostgresArenaParticipationRepository,
 ) -> APIRouter:
     router = APIRouter(tags=["arena-participation"])
+
+    @router.post("/api/local-agents", status_code=201)
+    async def register_local_agent(
+        body: _LocalAgentBody,
+        request: Request,
+    ) -> dict[str, str | int]:
+        principal = await _principal(auth, request, csrf=True)
+        key_digest = _idempotency_digest(request)
+        request_digest = sha256_identifier(
+            {
+                "connectorBindingId": body.connector_binding_id,
+                "displayName": body.display_name,
+            }
+        )
+        try:
+            value = await repository.register_local_agent(
+                owner_user_id=principal.user_id,
+                connector_binding_id=body.connector_binding_id,
+                display_name=body.display_name,
+                key_digest=key_digest,
+                request_digest=request_digest,
+            )
+        except ArenaParticipationError as exc:
+            raise _error(exc) from None
+        return _public_local_agent(value)
 
     @router.get("/api/game-participations")
     async def list_participations(request: Request) -> dict[str, object]:

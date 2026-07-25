@@ -19,7 +19,7 @@ class _Repository:
     async def automation_state(self, *, game_id: str) -> dict[str, object]:
         return self.states[game_id]
 
-    async def enqueue_hosted_run(self, *, game_id: str) -> object:
+    async def enqueue_agent_runtime_run(self, *, game_id: str) -> object:
         self.queued.append(game_id)
         return {}
 
@@ -32,12 +32,30 @@ class _Repository:
         return {}
 
 
-def test_running_hosted_game_queues_its_decide_round_automatically() -> None:
+def test_running_agent_game_queues_its_decide_round_automatically() -> None:
     repository = _Repository(
         {
             "game-1": {
-                "action": "enqueue_hosted",
+                "action": "enqueue_agent_runtime",
                 "roundId": "round:game-1:1",
+            }
+        }
+    )
+    orchestrator = PawnhouseGameOrchestrator(repository=repository)
+
+    assert asyncio.run(orchestrator.run_once()) == 1
+    assert repository.queued == ["game-1"]
+    assert repository.rule_runs == []
+    assert repository.advanced == []
+
+
+def test_mixed_hosted_connector_game_uses_one_runtime_run() -> None:
+    repository = _Repository(
+        {
+            "game-1": {
+                "action": "enqueue_agent_runtime",
+                "roundId": "round:game-1:1",
+                "runtimeKinds": {"hosted": 1, "connector": 1},
             }
         }
     )

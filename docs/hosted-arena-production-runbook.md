@@ -414,6 +414,12 @@ AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 P
 本文已先把现有服务默认值压到 2C4G 基线，但以下 Settlement Worker 接线是上线前的
 代码阻塞项，不能用文档配置替代。
 
+`ADX_ARENA_CORE_ENABLED=true` 同时挂载经过认证的 Pawnhouse participation
+入口，并在 API 进程启动 Connector dispatcher。dispatcher 必须留在 API
+进程，因为活跃 Connector WebSocket ownership 是进程内状态；独立的
+`arena-worker` 继续负责 Arena coordination、deadline finalization、Game
+推进和链上确认恢复，不能从 Connector ACK 推断游戏动作或支付结果。
+
 在现有 production Compose 中增加：
 
 - `settlement-worker` profile/service；

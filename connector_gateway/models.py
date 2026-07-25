@@ -93,6 +93,11 @@ class CreateBindingRequest(BaseModel):
     runtime_id: str = Field(min_length=1, max_length=128)
     agent_id: Optional[str] = Field(default=None, max_length=128)
     display_name: Optional[str] = Field(default=None, max_length=128)
+    working_directory: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+    )
 
 
 class CreateCommandRequest(BaseModel):

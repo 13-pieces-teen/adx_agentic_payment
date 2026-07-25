@@ -239,6 +239,59 @@ def test_create_task_uses_frozen_game_agent_config_and_database_created_at():
     asyncio.run(scenario())
 
 
+def test_connector_task_claim_freezes_route_and_can_be_deferred():
+    async def scenario():
+        task, config = _task()
+        leased = _task_row(
+            task,
+            config,
+            status="leased",
+            leased_by="connector-dispatcher-1",
+            lease_expires_at=DB_TIME + timedelta(seconds=5),
+        )
+        leased.update(
+            {
+                "connector_binding_id": "binding-local-1",
+                "connector_binding_epoch": 9,
+            }
+        )
+
+        def handler(method, sql, args):
+            if method == "fetch" and "connector_binding_id" in sql:
+                assert args == ("connector-dispatcher-1", 25, 5)
+                return [leased]
+            if method == "fetchval" and "SET lease_expires_at" in sql:
+                assert args == (
+                    task.task_id,
+                    "connector-dispatcher-1",
+                    1,
+                )
+                return True
+            raise AssertionError((method, sql, args))
+
+        repository = PostgresArenaCoreRepository(
+            "postgresql://unused",
+            pool=FakePool(ScriptedConnection(handler)),
+        )
+        claims = await repository.claim_connector_tasks(
+            worker_id="connector-dispatcher-1",
+            limit=25,
+            lease_seconds=5,
+        )
+
+        assert len(claims) == 1
+        assert claims[0].task == task
+        assert claims[0].connector_binding_id == "binding-local-1"
+        assert claims[0].connector_binding_epoch == 9
+        await repository.defer_connector_task(
+            task_id=task.task_id,
+            worker_id="connector-dispatcher-1",
+            delay_seconds=1,
+        )
+
+    asyncio.run(scenario())
+
+
 def test_create_task_rejects_raw_config_secret_before_sql():
     async def scenario():
         connection = ScriptedConnection(

@@ -537,7 +537,17 @@ class ConnectorGateway:
         runtime_id: str,
         agent_id: Optional[str],
         display_name: Optional[str],
+        working_directory: Optional[str] = None,
     ) -> dict[str, Any]:
+        if working_directory is not None and (
+            not working_directory.strip()
+            or len(working_directory) > 2048
+        ):
+            raise ConnectorError(
+                422,
+                "Binding working directory must be a non-empty string "
+                "no longer than 2048 characters",
+            )
         async with self._lock:
             device = self._get_device(device_id)
             if device.get("revoked_at"):
@@ -557,6 +567,32 @@ class ConnectorGateway:
                     binding["device_id"] == device_id
                     and binding["runtime_id"] == runtime_id
                 ):
+                    existing_directory = binding.get(
+                        "working_directory"
+                    )
+                    if (
+                        working_directory is not None
+                        and existing_directory is None
+                    ):
+                        binding["working_directory"] = working_directory
+                        binding["updated_at"] = iso(utc_now())
+                        self._append_audit(
+                            "binding.working_directory_frozen",
+                            device["owner_id"],
+                            {
+                                "binding_id": binding["binding_id"],
+                                "device_id": device_id,
+                                "runtime_id": runtime_id,
+                            },
+                        )
+                    elif (
+                        working_directory is not None
+                        and existing_directory != working_directory
+                    ):
+                        raise ConnectorError(
+                            409,
+                            "Binding working directory is already frozen",
+                        )
                     return dict(binding)
 
             now = iso(utc_now())
@@ -568,6 +604,7 @@ class ConnectorGateway:
                 "runtime_kind": runtime["kind"],
                 "agent_id": agent_id or new_id("agent"),
                 "display_name": display_name or runtime["display_name"],
+                "working_directory": working_directory,
                 "status": BindingStatus.AVAILABLE.value,
                 "binding_epoch": device["binding_epoch"],
                 "created_at": now,
