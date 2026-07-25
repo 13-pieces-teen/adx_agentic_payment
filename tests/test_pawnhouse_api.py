@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from web.api import create_app
 from web.pawnhouse_api import (
     create_pawnhouse_read_router,
     create_pawnhouse_router,
 )
-from web.api import create_app
 
 
 class _Repository:
@@ -178,7 +178,7 @@ def test_app_mounts_read_only_game_api_without_dev_control(
     monkeypatch.delenv("ADX_ARENA_PARTICIPATION_ENABLED", raising=False)
 
     app = create_app(connector_demo_enabled=False)
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
 
     assert "/api/v1/pawnhouse/games/{game_id}" in paths
     assert "/api/dev/pawnhouse/games" not in paths

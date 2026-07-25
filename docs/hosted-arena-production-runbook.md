@@ -408,8 +408,9 @@ revoke command 只能由 Participant 所属用户发出，必须使用现有 Ses
 ### 5.5 Production Compose
 
 当前 `docker-compose.production.yml` 只包含已有 API、Hosted Worker、Credential
-Controller 和 Arena Worker；Arena Worker 默认启用，Hosted profile 仍需在
-Tencent SSM 三身份与真实 Provider 配置验收后显式启用。它还不能启动自动支付。
+Controller 和 Arena Worker；Arena Worker 默认启用，Hosted profile 使用单机
+AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 Provider
+配置验收后显式启用。腾讯 SSM 保留为可选高安全后端。它还不能启动自动支付。
 本文已先把现有服务默认值压到 2C4G 基线，但以下 Settlement Worker 接线是上线前的
 代码阻塞项，不能用文档配置替代。
 

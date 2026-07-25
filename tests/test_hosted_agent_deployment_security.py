@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -80,6 +79,8 @@ def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> N
     assert "ADX_HOSTED_AGENTS_ENABLED=false" in generator
     assert "ADX_ARENA_CORE_ENABLED=true" in generator
     assert "ADX_ENABLE_HOSTED_RUNTIME=false" in generator
+    assert "ADX_HOSTED_SECRET_BACKEND=postgres_aesgcm" in generator
+    assert "ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED=false" in generator
     assert "ADX_TENCENT_SSM_IAM_VERIFIED=false" in generator
     assert "ADX_ENABLE_ARENA_WORKER=true" in generator
 
@@ -96,7 +97,25 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
     ) in deploy
     assert "compose --profile arena up -d arena-worker" in deploy
     assert "Arena Worker requires ADX_ARENA_CORE_ENABLED=true." in deploy
-    assert "verified writer/reader/controller SSM IAM" in deploy
+    assert "PostgreSQL AES-GCM Hosted credentials" in deploy
+    assert "Tencent SSM Hosted credentials" in deploy
+    assert "hosted-master.key" in deploy
+
+
+def test_hosted_master_key_is_file_mounted_only_into_decryption_processes() -> None:
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    assert compose.count("target: /run/secrets/arena402") == 2
+    assert compose.count(
+        "ADX_HOSTED_MASTER_KEY_FILE: "
+        "/run/secrets/arena402/hosted-master.key"
+    ) == 2
+    controller = compose.split("  credential-controller:", 1)[1].split(
+        "\n  arena-worker:", 1
+    )[0]
+    assert "ADX_HOSTED_MASTER_KEY_FILE" not in controller
+    assert "target: /run/secrets/arena402" not in controller
 
 
 def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:

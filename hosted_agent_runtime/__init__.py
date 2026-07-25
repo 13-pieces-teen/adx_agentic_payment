@@ -1,9 +1,9 @@
 """Hosted Arena Agent runtime foundations.
 
 This package exposes the safe capability/Secret Store ports and the
-network-free Phase 3 execution foundation. The included Provider is a
-deterministic test fake; production Tencent SSM, a real HTTPS Provider adapter,
-and a durable Hosted Worker are intentionally not represented as complete.
+network-free Phase 3 execution foundation. Production composition includes the
+single-host encrypted PostgreSQL vault, optional Tencent SSM, real HTTPS
+Provider adapters, and the durable Hosted Worker.
 """
 
 from .capabilities import (

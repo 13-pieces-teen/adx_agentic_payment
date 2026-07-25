@@ -8,6 +8,7 @@ pydantic>=2.10,<3
 argon2-cffi>=21.3,<26
 itsdangerous>=2.2,<3
 asyncpg>=0.29,<1
+cryptography>=44,<46
 httpx>=0.28,<1
 tencentcloud-sdk-python-common>=3.0.1400,<4
 tencentcloud-sdk-python-ssm>=3.0.1400,<4

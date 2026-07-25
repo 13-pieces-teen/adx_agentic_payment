@@ -6,9 +6,10 @@ import asyncio
 import os
 import signal
 
-from hosted_agent_runtime.secret_store import (
-    TencentSecretController,
-    TencentSsmSettings,
+from hosted_agent_runtime.production_secrets import (
+    build_production_secret_controller,
+    close_secret_port,
+    initialize_secret_port,
 )
 
 from .credential_controller import (
@@ -24,35 +25,13 @@ def _required(name: str) -> str:
     return value
 
 
-def _true(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
-
-
 async def main() -> None:
-    if not _true("ADX_TENCENT_SSM_IAM_VERIFIED"):
-        raise RuntimeError(
-            "Role-specific Tencent SSM IAM validation is required"
-        )
-    repository = PostgresCredentialLifecycleRepository(
-        _required("ADX_CREDENTIAL_CONTROLLER_DATABASE_URL")
-    )
+    database_url = _required("ADX_CREDENTIAL_CONTROLLER_DATABASE_URL")
+    repository = PostgresCredentialLifecycleRepository(database_url)
+    secret_controller = build_production_secret_controller(database_url)
     controller = DurableCredentialController(
         repository=repository,
-        secret_controller=TencentSecretController(
-            TencentSsmSettings(
-                region=os.getenv(
-                    "ADX_TENCENT_SSM_REGION",
-                    "ap-guangzhou",
-                ),
-                recovery_window_days=int(
-                    os.getenv(
-                        "ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS",
-                        "0",
-                    )
-                ),
-                deployment_iam_verified=True,
-            )
-        ),
+        secret_controller=secret_controller,
         controller_id=os.getenv(
             "ADX_CREDENTIAL_CONTROLLER_ID"
         ) or None,
@@ -69,14 +48,15 @@ async def main() -> None:
             )
         ),
     )
-    await repository.initialize()
-    loop = asyncio.get_running_loop()
-    for signal_name in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(signal_name, controller.stop)
-        except NotImplementedError:
-            pass
     try:
+        await repository.initialize()
+        await initialize_secret_port(secret_controller)
+        loop = asyncio.get_running_loop()
+        for signal_name in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(signal_name, controller.stop)
+            except NotImplementedError:
+                pass
         await controller.run_forever(
             poll_seconds=float(
                 os.getenv(
@@ -86,6 +66,7 @@ async def main() -> None:
             )
         )
     finally:
+        await close_secret_port(secret_controller)
         await repository.close()
 
 

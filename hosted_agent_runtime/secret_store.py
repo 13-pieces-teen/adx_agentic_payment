@@ -6,9 +6,8 @@ redacted ``WorkerSecret`` handle, and only the Credential Controller receives
 the revoke and post-retention delete ports.
 
 There is deliberately no list operation and no production fallback to memory.
-The Tencent SSM adapter uses the official SDK and remains fail-closed until the
-deployment explicitly confirms that its process-specific CAM roles have been
-tested.
+Production composition can select the single-host encrypted PostgreSQL vault
+or Tencent SSM; both remain fail-closed until deployment verification.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ SecretStoreErrorCode: TypeAlias = Literal[
     "secret_not_found",
     "secret_revoked",
     "secret_value_closed",
+    "credential_backend_unverified",
     "tencent_ssm_adapter_unverified",
 ]
 

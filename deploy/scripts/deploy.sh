@@ -6,6 +6,7 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "${script_dir}/lib.sh"
 
 require_command docker
+require_command stat
 require_env_file
 
 tls_mode="$(env_value ADX_TLS_MODE)"
@@ -14,6 +15,10 @@ build_connector_artifacts="$(env_value ADX_BUILD_CONNECTOR_ARTIFACTS)"
 [ -n "${build_connector_artifacts}" ] || build_connector_artifacts=true
 enable_hosted_runtime="$(env_value ADX_ENABLE_HOSTED_RUNTIME)"
 [ -n "${enable_hosted_runtime}" ] || enable_hosted_runtime=false
+hosted_agents_enabled="$(env_value ADX_HOSTED_AGENTS_ENABLED)"
+[ -n "${hosted_agents_enabled}" ] || hosted_agents_enabled=false
+hosted_secret_backend="$(env_value ADX_HOSTED_SECRET_BACKEND)"
+[ -n "${hosted_secret_backend}" ] || hosted_secret_backend=tencent_ssm
 enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"
 [ -n "${enable_arena_worker}" ] || enable_arena_worker=false
 
@@ -40,14 +45,50 @@ if [ "${enable_arena_worker}" = "true" ]; then
 fi
 
 if [ "${enable_hosted_runtime}" = "true" ]; then
-  if [ "$(env_value ADX_HOSTED_AGENTS_ENABLED)" != "true" ]; then
+  if [ "${hosted_agents_enabled}" != "true" ]; then
     echo "Hosted runtime requires ADX_HOSTED_AGENTS_ENABLED=true." >&2
     exit 1
   fi
-  if [ "$(env_value ADX_TENCENT_SSM_IAM_VERIFIED)" != "true" ]; then
-    echo "Hosted runtime requires verified writer/reader/controller SSM IAM." >&2
-    exit 1
-  fi
+fi
+
+if [ "${hosted_agents_enabled}" = "true" ]; then
+  case "${hosted_secret_backend}" in
+    postgres_aesgcm)
+      if [ "$(env_value ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED)" != "true" ]; then
+        echo "PostgreSQL AES-GCM Hosted credentials require explicit verification." >&2
+        exit 1
+      fi
+      hosted_secret_dir="$(env_value ADX_HOSTED_SECRET_DIR_HOST_PATH)"
+      [ -n "${hosted_secret_dir}" ] || hosted_secret_dir="${repo_dir}/deploy/secrets"
+      hosted_key_file="${hosted_secret_dir}/hosted-master.key"
+      if [ ! -f "${hosted_key_file}" ]; then
+        echo "Missing Hosted master key file: ${hosted_key_file}" >&2
+        exit 1
+      fi
+      if [ "$(stat -c %s "${hosted_key_file}")" != "32" ]; then
+        echo "Hosted master key must contain exactly 32 raw bytes." >&2
+        exit 1
+      fi
+      if find "${hosted_key_file}" -perm /077 -print | grep -q .; then
+        echo "Hosted master key must have no group/world permissions." >&2
+        exit 1
+      fi
+      if find "${hosted_key_file}" -perm /200 -print | grep -q .; then
+        echo "Hosted master key must be mounted from a read-only host file." >&2
+        exit 1
+      fi
+      ;;
+    tencent_ssm)
+      if [ "$(env_value ADX_TENCENT_SSM_IAM_VERIFIED)" != "true" ]; then
+        echo "Tencent SSM Hosted credentials require verified role IAM." >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Unsupported ADX_HOSTED_SECRET_BACKEND: ${hosted_secret_backend}" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 case "${tls_mode}" in
