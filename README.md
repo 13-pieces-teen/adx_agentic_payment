@@ -119,12 +119,12 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；创建 Connector Binding 时会自动注册 `arena_agents` 与 `arena_runtime_bindings`，但尚未接入 `arena.decide` / `arena.negotiate`，因此 route 保持 `provisioning` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；通用 Join API 已同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件；Local Connector 游戏适配仍待实现 |
-| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；SDK 现含不暴露私钥的 guest-wallet 签名接缝、Fake adapter 与显式 testnet-only CSV adapter，未配置 backend 时 fail closed |
+| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
 | 钱包与 PaymentMandate | `018` 已实现 GitHub User 永久绑定平台 testnet 钱包、同局 Participant 钱包快照、Game/chain/token/payee/单笔/累计/期限约束，以及并发安全且幂等的 `reserve / consume / release` 与 revoke |
 | 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；自动链路已用 Fake 跑通 wallet → Mandate → x402 → facilitator → submitted → 链上恢复边界；新鲜真实 testnet 交易仍未执行 |
-| 标准 HTTP x402 | 已实现 V2 `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`、`eip155:<chainId>`、exact 原子金额、冻结 Intent 绑定，以及从隔离 CSV relay wallet 启动的自建 V2 `/verify`/`/settle` Facilitator；公共 Facilitator 尚未实网验收 |
+| 标准 HTTP x402 | 已实现 V2 `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`、`eip155:<chainId>`、exact 原子金额、冻结 Intent 绑定，以及隔离的密文钱包 signer 与自建 V2 `/verify`/`/settle` Facilitator；公共 Facilitator 尚未实网验收 |
 
 底层链上执行仍是 **EIP-3009 direct-relay prototype**；HTTP 外层已经按 x402 V2
 实现，但在标准公共 Facilitator 上完成实网验收前，不能声称生产兼容已经完成。

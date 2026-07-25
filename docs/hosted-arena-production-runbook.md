@@ -4,7 +4,7 @@
 >
 > 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排、
 > GitHub User 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
-> 隔离 CSV signer、自动提交编排、只读链上确认和确认后库存提交。
+> 隔离的 PostgreSQL 密文 signer、自动提交编排、只读链上确认和确认后库存提交。
 > 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自动链路已通过
 > Fake E2E；公共 Facilitator、新鲜 testnet 交易与完整生产 E2E 尚未验收。
 
@@ -90,7 +90,7 @@ Hosted Worker   Settlement Worker -> internal wallet-signer/facilitator
 | Credential Controller | 撤销 Hosted 模型 Secret | 读取模型 Key、访问钱包 Key |
 | Arena Worker | 回合编排、Result apply、Finalizer、只读查链、库存提交 | 读取钱包 Key、签名、广播交易 |
 | Settlement Worker | claim Intent、Mandate reserve、调用 signer/facilitator、记录 tx hash | 修改冻结价格、在确认前提交库存 |
-| Wallet signer | 按 wallet id 与冻结 x402 requirement 签署 EIP-3009 | 访问数据库、Provider 或直接广播交易 |
+| Wallet signer | 通过专用函数读取单钱包密文，按 wallet id 与冻结 x402 requirement 签署 EIP-3009 | 直接读表、访问业务状态/Provider 或广播交易 |
 | PostgreSQL | 唯一持久化队列和业务状态权威 | 保存原始模型 Key、钱包私钥、助记词或签名 |
 
 API 的公开 x402 paid retry 只把签名 payload 转发到 bearer-authenticated 的内网
@@ -101,9 +101,10 @@ Settlement ingress；API 不持有 signer token、Facilitator authorization，�
 外部 HTTPS 服务，或 Compose `testnet-facilitator` profile 中不发布宿主机端口的
 内网服务。Facilitator 未配置时 fail closed。签名器同样只加入 data network。
 
-自动支付新增的外部依赖只保留三个：
+自动支付新增的外部依赖只保留四个：
 
-- 仓库外、宿主机 `0600` 的 testnet wallet CSV，仅只读挂载给 signer 容器；
+- PostgreSQL 中的 per-wallet AES-256-GCM 信封密文；
+- 仓库外、宿主机 `0400` 的 32-byte wallet KEK，仅只读挂载给 signer；
 - 一个批准的外部 HTTPS 或内网 x402 V2 Facilitator；
 - 一个 Injective EVM RPC：提交、确认，并在结果未知时按 block/transaction
   扫描恢复。Blockscout 只作为运维查看工具，不是运行时依赖。
@@ -117,9 +118,14 @@ Settlement ingress；API 不持有 signer token、Facilitator authorization，�
 - 每个 GitHub 平台 User 首次读取钱包或入局时原子绑定一个预生成 testnet EVM
   地址；后续登录和 Game 继续使用同一钱包，不回收到空闲池；
 - 每个 Game Participant 冻结该 User 已绑定的钱包快照；
-- 私钥只由 wallet-signer 读取，数据库只保存地址和不透明 `secret_ref`；
-- Hosted Worker、Arena Worker、API 和前端都不能读取 CSV 或私钥；
-- signer 只允许配置的 testnet chain，并逐项校验 CSV 地址与私钥派生地址。
+- CSV 只由一次性 `wallet-admin` 导入任务读取；它逐项核对私钥派生地址后，在
+  应用层生成随机 DEK 并写入密文、nonce 和 KEK version；
+- PostgreSQL 不接收 KEK 或明文；长期 wallet-signer 通过
+  `adx_wallet_signer_login` 只能调用单钱包密文读取函数；
+- Hosted Worker、Arena Worker、API、Settlement Worker 和前端都不能读取 CSV、
+  KEK 或私钥；
+- signer 只允许配置的 testnet chain，并在每次签名前再次核对数据库地址、
+  私钥派生地址和冻结 payer。
 
 Game 启动前，平台为每个 guest wallet 自动准备该局最大初始现金对应的 mUSDC。
 EIP-3009 的 payer 不需要持有 gas；Facilitator relay account 负责 testnet
@@ -131,14 +137,17 @@ Wallet binding 使用 `wallet_inventory` 与 `user_wallets`：
 
 ```text
 validate external CSV without printing keys
-  -> import public wallet id/address/secret_ref
+  -> envelope-encrypt each key and import public identity + ciphertext
+  -> remove CSV from the runtime host path after verification
   -> first GitHub user access atomically binds one available row
   -> join freezes the same address into participant_settlement_accounts
 ```
 
 绑定以 `user_id`、不可变 GitHub numeric subject、`wallet_id` 和
 `(chain_id,address)` 唯一约束为幂等边界；并发登录使用 PostgreSQL row lock 与
-`SKIP LOCKED`。CSV 不复制进仓库、镜像、数据库或日志。
+`SKIP LOCKED`。CSV 不复制进仓库、镜像、长期容器或日志；数据库只保存 AES-GCM
+密文。KEK 轮换只解包/重包每个 DEK，不改钱包地址或私钥密文，并用旧 version
+条件更新避免并发覆盖。
 
 Secret 名称由 `game_participant_id` 确定。create 成功或返回 AlreadyExists 后，
 Worker 只读取这个确切 Secret、派生地址并写数据库；create 结果未知时等待后按同名
@@ -312,6 +321,12 @@ block 的 timestamp 已超过 authorization `validBefore`、且该 block 又获�
 5. SettlementIntent 的 token EIP-712 name/version 冻结字段；
 6. `payment_mandate` approval source 与 API/Core 最小表权限。
 
+`019_arena_wallet_encrypted_secret_vault.sql` 新增隔离
+`wallet_secret_vault` schema、per-wallet 信封密文、地址外键，以及
+`adx_wallet_signer` / `adx_wallet_importer` 的互斥函数权限：signer 可读取一个
+钱包的完整密文但不能直接读表；importer 可导入、禁用和读取/更新 wrapped DEK，
+不能读取私钥密文。
+
 `reserve / consume / release / revoke` 由 repository 在显式 PostgreSQL 事务与 row
 lock 中完成。自动循环使用 `x402_settlement_attempts` 的 `FOR UPDATE SKIP LOCKED`
 和 lease 恢复重启。
@@ -350,7 +365,8 @@ claim Intent
 - 使用冻结 Intent hash 派生确定性 nonce；
 - 崩溃后只从冻结的 domain、validity 与 nonce 重新生成同一 authorization；
 - 提交前重新验证 token、chain、payer、payee 和 amount；
-- signer 从仓库外 CSV 按 `wallet_id` 读取材料，其他服务只持 bearer token；
+- signer 从专用 PostgreSQL 函数按 `wallet_id` 读取密文并用本地 KEK 解密，
+  其他服务只持 bearer token；
 - 仅记录 tx hash、payload digest、安全错误码和时间；
 - 在日志和异常中禁止输出 private key、signature、raw nonce；
 - `submitting` 后结果不明时保持 reservation，不释放、不生成第二笔支付。
@@ -396,21 +412,56 @@ revoke command 只能由 Participant 所属用户发出，必须使用现有 Ses
 `docker-compose.production.yml` 已接入 payment migration、API、独立 Settlement
 Worker，以及可选 `wallet-signer` 和 `arena-facilitator`。后两者分别使用
 `testnet-signer` / `testnet-facilitator` profile，只加入 data network、无宿主机
-端口、只读文件系统与只读 CSV mount；自动支付默认关闭。Hosted profile 同时支持
+端口和只读文件系统；wallet-signer 只读挂载 `wallet-master.key`，不挂载 CSV。
+一次性 `wallet-admin` profile 才挂载导入 CSV。自动支付默认关闭。Hosted profile 同时支持
 单机 AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 Provider
 配置验收后显式启用；腾讯 SSM 保留为可选高安全后端。
 
 云端启用前必须：
 
-1. 把 agent wallet 与 facilitator CSV 放在仓库外固定绝对路径，设为容器 UID
-   `10001` 可读且权限 `0600`；
-2. 先运行 `deploy/scripts/import_wallet_inventory.py` dry-run，只输出计数，再用
-   `--apply` 导入公开地址和不透明引用；
-3. 配置外部 HTTPS 或 `http://arena-facilitator:4021`、唯一 facilitator id、
+1. 在仓库外创建独立 wallet secret 目录；生成恰好 32 raw bytes 的
+   `wallet-master.key`，设为容器 UID `10001` 可读、权限 `0400`，并保存加密离线备份；
+2. 把 agent wallet CSV 放在仓库外固定绝对路径，设为 UID `10001` 可读且权限
+   `0600`，配置 `ADX_WALLET_IMPORT_CSV_HOST_PATH`；
+3. 先执行 dry-run，只校验 CSV，不写数据库：
+
+   ```text
+   docker compose --profile wallet-admin run --rm --build wallet-vault-admin
+   ```
+
+   再显式执行一次导入：
+
+   ```text
+   docker compose --profile wallet-admin run --rm --build wallet-vault-admin \
+     npm run wallet:vault-import -- --apply
+   ```
+
+   验证数据库计数和 signer health 后，将 CSV 移出运行服务器或安全删除；系统不会
+   自动删除源文件；
+4. 配置外部 HTTPS 或 `http://arena-facilitator:4021`、唯一 facilitator id、
    内部 signer URL 与至少 32 字节 bearer token；
-4. 先保持 `ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false` 完成 API、数据库、
+5. 先保持 `ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false` 完成 API、数据库、
    signer health 与管理快照验收；
-5. 获得一次真实 testnet 交易的人工执行批准后再开启自动产品路径。
+6. 获得一次真实 testnet 交易的人工执行批准后再开启自动产品路径；产品运行后，
+   合法 PaymentMandate 内的 A2A 交易不逐笔人工确认。
+
+轮换 KEK 时先保留旧文件，准备新的 `0400` 32-byte 文件，配置 old/new filename
+和 version，然后执行 dry-run：
+
+```text
+docker compose --profile wallet-admin run --rm --build wallet-vault-rotate
+```
+
+确认所有 active wallet 都使用预期旧 version 后，加 `--apply` 完成只重包 DEK：
+
+```text
+docker compose --profile wallet-admin run --rm --build wallet-vault-rotate \
+  npm run wallet:vault-rotate -- --apply
+```
+
+随后把 signer 的文件和
+`ADX_WALLET_MASTER_KEY_VERSION` 一起切到新 version 并重启。确认 signer health
+和合成签名通过后才能销毁旧 KEK。
 
 ## 6. 2C4G/70GB MVP 容量配置
 

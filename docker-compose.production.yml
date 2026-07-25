@@ -134,6 +134,8 @@ services:
       ADX_ARENA_CORE_DATABASE_PASSWORD: ${ADX_ARENA_CORE_DATABASE_PASSWORD:?Set ADX_ARENA_CORE_DATABASE_PASSWORD in deploy/.env}
       ADX_SETTLEMENT_DATABASE_PASSWORD: ${ADX_SETTLEMENT_DATABASE_PASSWORD:?Set ADX_SETTLEMENT_DATABASE_PASSWORD in deploy/.env}
       ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD: ${ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD:?Set ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD in deploy/.env}
+      ADX_WALLET_SIGNER_DATABASE_PASSWORD: ${ADX_WALLET_SIGNER_DATABASE_PASSWORD:?Set ADX_WALLET_SIGNER_DATABASE_PASSWORD in deploy/.env}
+      ADX_WALLET_IMPORTER_DATABASE_PASSWORD: ${ADX_WALLET_IMPORTER_DATABASE_PASSWORD:?Set ADX_WALLET_IMPORTER_DATABASE_PASSWORD in deploy/.env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -388,13 +390,22 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      ADX_WALLET_SIGNER_CSV_PATH: /run/arena402/agent-wallets.csv
+      ADX_WALLET_SIGNER_BACKEND: postgres_aesgcm
+      ADX_WALLET_SIGNER_DATABASE_URL: postgresql://adx_wallet_signer_login:${ADX_WALLET_SIGNER_DATABASE_PASSWORD:?Set ADX_WALLET_SIGNER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_WALLET_MASTER_KEY_FILE: /run/secrets/wallet-vault/wallet-master.key
+      ADX_WALLET_MASTER_KEY_VERSION: ${ADX_WALLET_MASTER_KEY_VERSION:-1}
       ADX_WALLET_SIGNER_TOKEN: ${ADX_WALLET_SIGNER_TOKEN:-}
       ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID: ${ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID:-1439}
       ADX_WALLET_SIGNER_PORT: "8787"
       TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
     volumes:
-      - ${ADX_WALLET_SIGNER_CSV_HOST_PATH:-./deploy/secrets/agent-wallets.csv}:/run/arena402/agent-wallets.csv:ro
+      - type: bind
+        source: ${ADX_WALLET_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/wallet-vault
+        read_only: true
     networks:
       - data
     expose:
@@ -418,6 +429,78 @@ services:
       retries: 10
       start_period: 20s
     stop_grace_period: 15s
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  wallet-vault-admin:
+    profiles:
+      - wallet-admin
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.wallet-signer
+    restart: "no"
+    command: ["npm", "run", "wallet:vault-import"]
+    environment:
+      ADX_WALLET_VAULT_DATABASE_URL: postgresql://adx_wallet_importer_login:${ADX_WALLET_IMPORTER_DATABASE_PASSWORD:?Set ADX_WALLET_IMPORTER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_WALLET_VAULT_IMPORT_CSV_PATH: /run/import/agent-wallets.csv
+      ADX_WALLET_MASTER_KEY_FILE: /run/secrets/wallet-vault/wallet-master.key
+      ADX_WALLET_MASTER_KEY_VERSION: ${ADX_WALLET_MASTER_KEY_VERSION:-1}
+      ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID: ${ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID:-1439}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ${ADX_WALLET_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/wallet-vault
+        read_only: true
+      - type: bind
+        source: ${ADX_WALLET_IMPORT_CSV_HOST_PATH:-./deploy/secrets/agent-wallets.csv}
+        target: /run/import/agent-wallets.csv
+        read_only: true
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  wallet-vault-rotate:
+    profiles:
+      - wallet-admin
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.wallet-signer
+    restart: "no"
+    command: ["npm", "run", "wallet:vault-rotate"]
+    environment:
+      ADX_WALLET_VAULT_DATABASE_URL: postgresql://adx_wallet_importer_login:${ADX_WALLET_IMPORTER_DATABASE_PASSWORD:?Set ADX_WALLET_IMPORTER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_WALLET_OLD_MASTER_KEY_FILE: /run/secrets/wallet-vault/${ADX_WALLET_OLD_MASTER_KEY_FILENAME:-wallet-master.key}
+      ADX_WALLET_NEW_MASTER_KEY_FILE: /run/secrets/wallet-vault/${ADX_WALLET_NEW_MASTER_KEY_FILENAME:-wallet-master-next.key}
+      ADX_WALLET_OLD_MASTER_KEY_VERSION: ${ADX_WALLET_OLD_MASTER_KEY_VERSION:-1}
+      ADX_WALLET_NEW_MASTER_KEY_VERSION: ${ADX_WALLET_NEW_MASTER_KEY_VERSION:-2}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ${ADX_WALLET_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/wallet-vault
+        read_only: true
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
     cpus: 0.20
     mem_limit: 256m
     logging: *default-logging

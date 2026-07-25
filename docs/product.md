@@ -148,8 +148,9 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   只读链上恢复与确认后持仓幂等提交；SDK 已提供按稳定 wallet id 调用、核对冻结
   公开地址且不返回私钥的 EIP-3009 signer 接缝，以及显式 test-only 内存 Fake
   adapter。未配置 backend 时签名 fail closed；永久钱包绑定、PaymentMandate、
-  testnet-only CSV signer、x402 V2 与自动 Worker 已实现，当前完整链路的一笔新鲜
-  testnet 交易仍未完成。
+  x402 V2、自动 Worker 和 PostgreSQL AES-GCM 信封密文 signer 已实现。CSV 只用于
+  一次性导入，长期 signer 使用独立宿主机 KEK 和最小权限数据库函数；当前完整
+  链路的一笔新鲜 testnet 交易仍未完成。
 - 产品前端已迁移到外部
   [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
   Vercel 部署到 `www.arena402.com`。后端已实现同源 GitHub OAuth + PKCE、不可变

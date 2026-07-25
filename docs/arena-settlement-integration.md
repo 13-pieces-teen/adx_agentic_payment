@@ -38,7 +38,7 @@ state-changing transaction was broadcast as part of this milestone.
 
 The second-stage backend now also implements permanent GitHub User-to-wallet
 binding, bounded and revocable Game-scoped PaymentMandates, x402 V2
-challenge/response headers, an isolated unattended CSV testnet signer, and a
+challenge/response headers, an isolated unattended encrypted testnet signer, and a
 dedicated non-public Settlement Worker. A newly approved live testnet
 transaction against the currently deployed services remains outstanding.
 
@@ -115,7 +115,9 @@ remains authoritative.
 - 可覆盖一局多笔交易的 PaymentMandate，以及并发安全、幂等的额度
   `reserve / consume / release`；
 - revoke 阻止新 reserve，已 submitted 记录继续走确认恢复；
-- 与 Hosted Worker 隔离、无公网端口、bearer-authenticated 的 testnet CSV signer；
+- 与 Hosted Worker 隔离、无公网端口、bearer-authenticated 的密文 testnet signer；
+- 一次性 CSV 导入、PostgreSQL AES-256-GCM 信封密文、独立宿主机 KEK 与只重包
+  DEK 的版本轮换；运行时不挂载 CSV；
 - x402 V2 challenge/retry/header、CAIP-2 network、exact 原子金额和冻结 Intent 绑定；
 - 自动 Worker lease、`submitting` ambiguity boundary 与 Fake 全链路验收。
 

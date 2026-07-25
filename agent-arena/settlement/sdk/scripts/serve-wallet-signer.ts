@@ -2,12 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { timingSafeEqual } from "node:crypto";
 import { getAddress } from "viem";
 import { LocalCsvWalletSecretStore } from "../src/local-csv-wallet-secret-store.ts";
+import { PostgresEncryptedWalletSecretStore } from "../src/postgres-encrypted-wallet-secret-store.ts";
+import type { WalletSecretStore } from "../src/wallet-secret-store.ts";
 import {
   createX402PaymentPayload,
   type ArenaX402PaymentRequired,
 } from "../src/x402-v2.ts";
 
-const csvPath = required("ADX_WALLET_SIGNER_CSV_PATH");
 const token = required("ADX_WALLET_SIGNER_TOKEN");
 if (token.length < 32) throw new Error("ADX_WALLET_SIGNER_TOKEN is too short");
 const allowedChainId = Number(required("ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID"));
@@ -18,12 +19,40 @@ const port = Number(process.env.ADX_WALLET_SIGNER_PORT ?? "8787");
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
   throw new Error("ADX_WALLET_SIGNER_PORT is invalid");
 }
-const secrets = await LocalCsvWalletSecretStore.load(csvPath);
+const backend = required("ADX_WALLET_SIGNER_BACKEND");
+let secrets: WalletSecretStore;
+let healthCheck = async (): Promise<void> => {};
+let closeSecrets = async (): Promise<void> => {};
+if (backend === "postgres_aesgcm") {
+  const keyVersion = Number(required("ADX_WALLET_MASTER_KEY_VERSION"));
+  if (!Number.isSafeInteger(keyVersion) || keyVersion <= 0) {
+    throw new Error("ADX_WALLET_MASTER_KEY_VERSION is invalid");
+  }
+  const postgresStore = await PostgresEncryptedWalletSecretStore.create({
+    connectionString: required("ADX_WALLET_SIGNER_DATABASE_URL"),
+    masterKeyFile: required("ADX_WALLET_MASTER_KEY_FILE"),
+    keyVersion,
+  });
+  secrets = postgresStore;
+  healthCheck = () => postgresStore.checkHealth();
+  closeSecrets = () => postgresStore.close();
+} else if (backend === "local_csv") {
+  secrets = await LocalCsvWalletSecretStore.load(
+    required("ADX_WALLET_SIGNER_CSV_PATH"),
+  );
+} else {
+  throw new Error("ADX_WALLET_SIGNER_BACKEND is unsupported");
+}
 
 const server = createServer(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   if (request.method === "GET" && request.url === "/health") {
-    send(response, 200, { status: "ok" });
+    try {
+      await healthCheck();
+      send(response, 200, { status: "ok", backend });
+    } catch {
+      send(response, 503, { status: "unavailable" });
+    }
     return;
   }
   if (request.method !== "POST" || request.url !== "/v1/x402/sign") {
@@ -69,6 +98,13 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "0.0.0.0");
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    server.close(() => {
+      void closeSecrets().finally(() => process.exit(0));
+    });
+  });
+}
 
 function required(name: string): string {
   const value = process.env[name]?.trim();

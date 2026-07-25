@@ -15,7 +15,7 @@ COPY --chown=arena:arena agent-arena/settlement/sdk/package-lock.json ./package-
 RUN --mount=type=cache,target=/root/.npm npm ci --include=dev
 
 COPY --chown=arena:arena agent-arena/settlement/sdk/src ./src
-COPY --chown=arena:arena agent-arena/settlement/sdk/scripts/serve-wallet-signer.ts ./scripts/serve-wallet-signer.ts
+COPY --chown=arena:arena agent-arena/settlement/sdk/scripts/ ./scripts/
 
 USER arena
 

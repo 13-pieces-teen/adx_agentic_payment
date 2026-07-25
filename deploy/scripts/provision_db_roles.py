@@ -7,7 +7,6 @@ import os
 
 import asyncpg
 
-
 ROLE_BINDINGS = {
     "adx_api_login": (
         "ADX_API_DATABASE_PASSWORD",
@@ -28,6 +27,14 @@ ROLE_BINDINGS = {
     "adx_credential_controller_login": (
         "ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD",
         ("adx_credential_controller",),
+    ),
+    "adx_wallet_signer_login": (
+        "ADX_WALLET_SIGNER_DATABASE_PASSWORD",
+        ("adx_wallet_signer",),
+    ),
+    "adx_wallet_importer_login": (
+        "ADX_WALLET_IMPORTER_DATABASE_PASSWORD",
+        ("adx_wallet_importer",),
     ),
 }
 

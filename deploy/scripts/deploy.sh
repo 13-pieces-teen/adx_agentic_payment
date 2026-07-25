@@ -94,13 +94,23 @@ if [ "${enable_settlement_worker}" = "true" ] && \
 fi
 
 if [ "${enable_testnet_signer}" = "true" ]; then
-  signer_csv="$(env_value ADX_WALLET_SIGNER_CSV_HOST_PATH)"
-  if [ ! -f "${signer_csv}" ]; then
-    echo "Missing wallet signer CSV: ${signer_csv}" >&2
+  wallet_secret_dir="$(env_value ADX_WALLET_SECRET_DIR_HOST_PATH)"
+  [ -n "${wallet_secret_dir}" ] || wallet_secret_dir="${repo_dir}/deploy/secrets"
+  wallet_key_file="${wallet_secret_dir}/wallet-master.key"
+  if [ ! -f "${wallet_key_file}" ]; then
+    echo "Missing wallet signer master key: ${wallet_key_file}" >&2
     exit 1
   fi
-  if find "${signer_csv}" -perm /077 -print | grep -q .; then
-    echo "Wallet signer CSV must have no group/world permissions." >&2
+  if [ "$(stat -c %s "${wallet_key_file}")" != "32" ]; then
+    echo "Wallet signer master key must contain exactly 32 raw bytes." >&2
+    exit 1
+  fi
+  if find "${wallet_key_file}" -perm /077 -print | grep -q .; then
+    echo "Wallet signer master key must have no group/world permissions." >&2
+    exit 1
+  fi
+  if find "${wallet_key_file}" -perm /200 -print | grep -q .; then
+    echo "Wallet signer master key must be mounted from a read-only host file." >&2
     exit 1
   fi
 fi

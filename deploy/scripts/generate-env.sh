@@ -141,10 +141,13 @@ hosted_worker_database_password="$(openssl rand -hex 32)"
 arena_core_database_password="$(openssl rand -hex 32)"
 settlement_database_password="$(openssl rand -hex 32)"
 credential_controller_database_password="$(openssl rand -hex 32)"
+wallet_signer_database_password="$(openssl rand -hex 32)"
+wallet_importer_database_password="$(openssl rand -hex 32)"
 hosted_fingerprint_pepper_b64="$(openssl rand -base64 48 | tr -d '\n')"
 hosted_secret_dir="${repo_dir}/deploy/secrets"
 session_secret="$(openssl rand -hex 48)"
 settlement_service_token="$(openssl rand -hex 48)"
+wallet_signer_token="$(openssl rand -hex 48)"
 bootstrap_invite="$(openssl rand -hex 20)"
 bootstrap_invite_hash="$(
   printf '%s' "${bootstrap_invite}" | sha256sum | awk '{print $1}'
@@ -165,9 +168,12 @@ umask 077
   printf 'ADX_ARENA_CORE_DATABASE_PASSWORD=%s\n' "${arena_core_database_password}"
   printf 'ADX_SETTLEMENT_DATABASE_PASSWORD=%s\n' "${settlement_database_password}"
   printf 'ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD=%s\n' "${credential_controller_database_password}"
+  printf 'ADX_WALLET_SIGNER_DATABASE_PASSWORD=%s\n' "${wallet_signer_database_password}"
+  printf 'ADX_WALLET_IMPORTER_DATABASE_PASSWORD=%s\n' "${wallet_importer_database_password}"
   printf '\n'
   printf 'ADX_CONNECTOR_SESSION_SECRET=%s\n' "${session_secret}"
   printf 'ADX_SETTLEMENT_SERVICE_TOKEN=%s\n' "${settlement_service_token}"
+  printf 'ADX_WALLET_SIGNER_TOKEN=%s\n' "${wallet_signer_token}"
   printf 'ADX_GITHUB_OAUTH_CLIENT_ID=\n'
   printf 'ADX_GITHUB_OAUTH_CLIENT_SECRET=\n'
   printf 'ADX_GITHUB_OAUTH_CALLBACK_BASE_URL=%s\n' "${public_url}"
@@ -211,6 +217,11 @@ umask 077
   printf 'ADX_ENABLE_ARENA_WORKER=true\n'
   printf 'ADX_ENABLE_SETTLEMENT_WORKER=false\n'
   printf 'ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false\n'
+  printf 'ADX_ENABLE_TESTNET_SIGNER=false\n'
+  printf 'ADX_WALLET_SIGNER_URL=http://wallet-signer:8787\n'
+  printf 'ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID=1439\n'
+  printf 'ADX_WALLET_SECRET_DIR_HOST_PATH=/etc/arena402/wallet-secrets\n'
+  printf 'ADX_WALLET_MASTER_KEY_VERSION=1\n'
   printf 'ADX_ARENA_SETTLEMENT_RPC_URL=https://k8s.testnet.json-rpc.injective.network/\n'
   printf 'ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL=https://testnet.blockscout.injective.network/api/v2\n'
   printf 'ADX_ARENA_WORKER_LEASE_SECONDS=600\n'

@@ -6,7 +6,7 @@ The TypeScript source under this directory provides:
 - a guest-wallet signing seam that does not return private keys or a
   general-purpose account;
 - an x402 V2 exact-payment payload builder and header codec;
-- a testnet-only CSV wallet adapter plus isolated signer service entrypoint;
+- a one-time CSV import path plus isolated PostgreSQL ciphertext signer;
 - a shared `SettlementSDK` interface;
 - an in-memory `MockSettlement`;
 - a testnet-backed `RealSettlement` that calls the custom relay.
@@ -50,11 +50,24 @@ process-local keys, keeps one stable address per test wallet ID, and rejects
 unknown, disabled, or address-mismatched wallets.
 `createWalletSecretStore()` returns a disabled adapter by default.
 
-`LocalCsvWalletSecretStore` is an explicit testnet-only production export. It
+`LocalCsvWalletSecretStore` remains an explicit local-development adapter. It
 requires an absolute owner-only file, maps the CSV `index` to stable
 `agent-wallet-0001` identifiers, derives each address from its key, and rejects
-every mismatch or duplicate. It never returns a key. The CSV remains outside
-the repository and is mounted only into the optional signer container.
+every mismatch or duplicate.
+
+Production uses `PostgresEncryptedWalletSecretStore`. The one-time importer
+validates each CSV key/address pair, generates a random per-wallet DEK, encrypts
+the raw key with AES-256-GCM, wraps the DEK with a 32-byte KEK, and sends only
+ciphertext/nonces to PostgreSQL. The KEK is a separate raw 32-byte host file
+with mode `0400`; it is mounted only into the signer and manual admin profile.
+The long-running signer has a dedicated database login that can execute only
+the one-wallet ciphertext read function. It has no CSV mount and never returns
+a key or general-purpose account.
+
+`npm run wallet:vault-import` is dry-run by default and needs `--apply` to
+write. `npm run wallet:vault-rotate` likewise validates by default; `--apply`
+unwraps and rewraps only DEKs, leaving wallet addresses and private-key
+ciphertext unchanged. Both tools log counts only.
 
 The wallet-backed signing function requires a caller-supplied nonce; it never
 generates a fresh authorization on retry. The SDK also checks the adapter's
@@ -62,9 +75,9 @@ returned address against the frozen buyer and recovers the final signature
 before returning a payment authorization.
 
 Permanent user bindings, PaymentMandates, reservations, x402 attempts, leases,
-and unattended orchestration live in `arena_payments/`. The signer does not
-receive database access, Game mutation authority, or a general-purpose signing
-method.
+and unattended orchestration live in `arena_payments/`. The signer receives
+only its role-specific ciphertext function, not Game tables, Mandate mutation
+authority, a general-purpose signing method, or transaction broadcast access.
 
 ## Arena SettlementIntent bridge
 

@@ -337,12 +337,13 @@ create game
 ### Phase 7：PaymentMandate 与 Settlement
 
 - [x] 每个 GitHub 平台 User 首次钱包读取或入局时永久绑定一个 `sandbox_guest` testnet
-      wallet；后续 Game Participant 引用同一钱包，数据库只保存地址和不透明
-      signer key 引用，不在游戏结束后把钱包重新分配给其他用户。
+      wallet；后续 Game Participant 引用同一钱包。Arena 业务表只保存地址和不透明
+      signer key 引用；隔离 vault schema 保存信封密文，不在游戏结束后把钱包重新
+      分配给其他用户。
 - [x] Settlement SDK 已建立最小 guest-wallet signer 接缝：调用方只提交稳定
       `walletId`、冻结公开地址和 EIP-3009 授权字段；内存 Fake adapter 仅在显式
-      test-only 组合下启用，未配置 backend 时 fail closed；testnet-only CSV adapter
-      要求仓库外绝对路径、严格文件权限并逐项核对派生地址。
+      test-only 组合下启用，未配置 backend 时 fail closed；生产路径将仓库外 CSV
+      逐项核对后一次性导入 AES-256-GCM 信封密文，运行时 signer 不再挂载 CSV。
 - [x] 用户可通过认证 API 为已加入 Game 创建一次受限 Mandate，不做逐笔人工确认。
 - [x] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
       状态；payee 只能是同局 Arena 配对出的 seller。
@@ -365,8 +366,9 @@ create game
       复核 receipt block hash、calldata 与 Transfer event 后才提交库存。
 - [x] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
       取消或退款路径。
-- [x] Hosted Worker 无 signer 权限；CSV 仅挂载到独立 signer 容器，API/Arena
-      Worker 只使用 bearer-authenticated 窄签名端口。云端更强的密钥 backend 仍待替换。
+- [x] Hosted Worker 无 signer 权限；长期 signer 仅拥有密文读取函数和独立
+      `0400` KEK mount，CSV 只进入一次性 `wallet-admin` profile。API/Arena Worker
+      只使用 bearer-authenticated 窄签名端口；支持只重包 DEK 的 KEK 版本轮换。
 
 详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)，上线部署和实现

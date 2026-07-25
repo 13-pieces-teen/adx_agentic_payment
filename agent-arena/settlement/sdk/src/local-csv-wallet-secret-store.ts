@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { getAddress, type Address } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
@@ -36,68 +37,10 @@ export class LocalCsvWalletSecretStore implements WalletSecretStore {
   ) {}
 
   static async load(path: string): Promise<LocalCsvWalletSecretStore> {
-    if (!isAbsolute(path)) {
-      throw new LocalCsvWalletStoreError(
-        "wallet_secret_path_must_be_absolute",
-      );
-    }
-    const metadata = await stat(path);
-    if (!metadata.isFile()) {
-      throw new LocalCsvWalletStoreError("wallet_secret_file_not_regular");
-    }
-    if ((metadata.mode & 0o077) !== 0) {
-      throw new LocalCsvWalletStoreError("wallet_secret_file_permissions");
-    }
-    const content = await readFile(path, "utf8");
-    const rows = parseCsv(content);
-    const header = rows.shift();
-    if (!header) {
-      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
-    }
-    const indexColumn = header.indexOf("index");
-    const addressColumn = header.indexOf("ethereum_address");
-    const keyColumn = header.indexOf("private_key");
-    if (Math.min(indexColumn, addressColumn, keyColumn) < 0) {
-      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
-    }
+    const records = await loadWalletCsvRecords(path);
     const accounts = new Map<string, PrivateKeyAccount>();
-    const addresses = new Set<string>();
-    for (const row of rows) {
-      if (row.length !== header.length) {
-        throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
-      }
-      const rawIndex = row[indexColumn]?.trim();
-      const rawAddress = row[addressColumn]?.trim();
-      const rawKey = row[keyColumn]?.trim();
-      if (
-        !rawIndex ||
-        !/^[0-9]+$/.test(rawIndex) ||
-        !rawAddress ||
-        !rawKey ||
-        !/^0x[0-9a-fA-F]{64}$/.test(rawKey)
-      ) {
-        throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
-      }
-      let account: PrivateKeyAccount;
-      try {
-        account = privateKeyToAccount(rawKey as `0x${string}`);
-        if (getAddress(account.address) !== getAddress(rawAddress)) {
-          throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
-        }
-      } catch (error) {
-        if (error instanceof LocalCsvWalletStoreError) throw error;
-        throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
-      }
-      const walletId = `agent-wallet-${rawIndex.padStart(4, "0")}`;
-      const normalizedAddress = getAddress(account.address);
-      if (accounts.has(walletId) || addresses.has(normalizedAddress)) {
-        throw new LocalCsvWalletStoreError("wallet_secret_duplicate");
-      }
-      accounts.set(walletId, account);
-      addresses.add(normalizedAddress);
-    }
-    if (accounts.size === 0) {
-      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+    for (const record of records) {
+      accounts.set(record.walletId, privateKeyToAccount(record.privateKey));
     }
     return new LocalCsvWalletSecretStore(accounts);
   }
@@ -125,6 +68,96 @@ export class LocalCsvWalletSecretStore implements WalletSecretStore {
     });
     return { from: account.address as Address, signature };
   }
+}
+
+export interface WalletCsvRecord {
+  walletId: string;
+  accountAddress: Address;
+  privateKey: `0x${string}`;
+}
+
+export async function loadWalletCsvRecords(
+  path: string,
+): Promise<WalletCsvRecord[]> {
+  if (!isAbsolute(path)) {
+    throw new LocalCsvWalletStoreError(
+      "wallet_secret_path_must_be_absolute",
+    );
+  }
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let content: string;
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) {
+      throw new LocalCsvWalletStoreError("wallet_secret_file_not_regular");
+    }
+    if ((metadata.mode & 0o077) !== 0) {
+      throw new LocalCsvWalletStoreError("wallet_secret_file_permissions");
+    }
+    content = await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+  const rows = parseCsv(content);
+  const header = rows.shift();
+  if (!header) {
+    throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+  }
+  const indexColumn = header.indexOf("index");
+  const addressColumn = header.indexOf("ethereum_address");
+  const keyColumn = header.indexOf("private_key");
+  if (Math.min(indexColumn, addressColumn, keyColumn) < 0) {
+    throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+  }
+  const records: WalletCsvRecord[] = [];
+  const walletIds = new Set<string>();
+  const addresses = new Set<string>();
+  for (const row of rows) {
+    if (row.length !== header.length) {
+      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+    }
+    const rawIndex = row[indexColumn]?.trim();
+    const rawAddress = row[addressColumn]?.trim();
+    const rawKey = row[keyColumn]?.trim();
+    if (
+      !rawIndex ||
+      !/^[0-9]+$/.test(rawIndex) ||
+      !rawAddress ||
+      !rawKey ||
+      !/^0x[0-9a-fA-F]{64}$/.test(rawKey)
+    ) {
+      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+    }
+    let account: PrivateKeyAccount;
+    try {
+      account = privateKeyToAccount(rawKey as `0x${string}`);
+      if (getAddress(account.address) !== getAddress(rawAddress)) {
+        throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+      }
+    } catch (error) {
+      if (error instanceof LocalCsvWalletStoreError) throw error;
+      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+    }
+    const walletId = `agent-wallet-${rawIndex.padStart(4, "0")}`;
+    if (walletId.length > 128) {
+      throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+    }
+    const normalizedAddress = getAddress(account.address);
+    if (walletIds.has(walletId) || addresses.has(normalizedAddress)) {
+      throw new LocalCsvWalletStoreError("wallet_secret_duplicate");
+    }
+    records.push({
+      walletId,
+      accountAddress: normalizedAddress,
+      privateKey: rawKey as `0x${string}`,
+    });
+    walletIds.add(walletId);
+    addresses.add(normalizedAddress);
+  }
+  if (records.length === 0) {
+    throw new LocalCsvWalletStoreError("wallet_secret_csv_invalid");
+  }
+  return records;
 }
 
 function parseCsv(content: string): string[][] {

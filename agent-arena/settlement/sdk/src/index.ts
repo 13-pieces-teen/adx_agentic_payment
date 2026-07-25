@@ -34,11 +34,18 @@ export type {
 } from "./wallet-secret-store.ts";
 export {
   LocalCsvWalletSecretStore,
+  loadWalletCsvRecords,
   LocalCsvWalletStoreError,
 } from "./local-csv-wallet-secret-store.ts";
-export type {
-  LocalCsvWalletStoreErrorCode,
-} from "./local-csv-wallet-secret-store.ts";
+export {
+  decryptWalletPrivateKey,
+  encryptWalletPrivateKey,
+  loadWalletMasterKey,
+  PostgresEncryptedWalletSecretStore,
+  rewrapEncryptedDataKey,
+  rewrapWalletDataKey,
+} from "./postgres-encrypted-wallet-secret-store.ts";
+export type { LocalCsvWalletStoreErrorCode } from "./local-csv-wallet-secret-store.ts";
 export {
   createX402PaymentPayload,
   decodeX402Header,
