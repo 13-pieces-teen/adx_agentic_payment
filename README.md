@@ -299,3 +299,7 @@ python scripts/sync_skills.py --check
 - [x402](https://github.com/x402-foundation/x402)
 - [Injective](https://injective.com)
 - [Arena 402 frontend](https://github.com/sunruize93-cmyk/arena402)
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
