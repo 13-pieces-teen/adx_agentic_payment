@@ -31,7 +31,7 @@ CURRENT_GAME_JOIN_SQL_PATH = (
     ROOT
     / "db"
     / "migrations"
-    / "027_current_game_join_readiness.sql"
+    / "027_arena_current_game_join_readiness.sql"
 )
 UNBOUNDED_GAME_CAPACITY_SQL_PATH = (
     ROOT
@@ -353,6 +353,9 @@ def test_local_connector_migration_is_selected_by_arena_scope(
     )
 
     assert LOCAL_CONNECTOR_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
+    assert CURRENT_GAME_JOIN_SQL_PATH in migrate_module.migration_files(
         "arena"
     )
 
