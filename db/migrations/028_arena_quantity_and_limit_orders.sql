@@ -34,6 +34,4 @@ ALTER TABLE arena402.settlement_intents
     ADD CONSTRAINT settlement_intents_quantity_check
     CHECK (quantity > 0);
 
-RESET ROLE;
-
 COMMIT;

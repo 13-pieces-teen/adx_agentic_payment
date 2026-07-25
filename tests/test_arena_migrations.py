@@ -145,12 +145,14 @@ def test_migration_scope_rejects_unknown_or_empty_selection(
         migrate_module.migration_files("arena")
 
 
-def test_quantity_and_limit_orders_restores_runner_role() -> None:
+def test_quantity_and_limit_orders_keeps_applied_bytes_immutable() -> None:
     sql = QUANTITY_AND_LIMIT_ORDERS_SQL_PATH.read_text(encoding="utf-8")
 
     assert "SET LOCAL ROLE adx_arena_migration;" in sql
-    assert "RESET ROLE;" in sql
-    assert sql.index("RESET ROLE;") < sql.rindex("COMMIT;")
+    assert "RESET ROLE;" not in sql
+    assert sql.index("SET LOCAL ROLE adx_arena_migration;") < sql.rindex(
+        "COMMIT;"
+    )
 
 
 def test_cli_defaults_to_connector_and_accepts_explicit_or_env_scope(
