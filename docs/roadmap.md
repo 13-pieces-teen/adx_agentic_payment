@@ -207,7 +207,14 @@ create game
 ## 当前缺口
 
 - [x] 后端已完成 N 回合自动推进、事件揭晓、Round close、冻结终场价格和排名。
-- [ ] 生产仍缺经过认证的 Game Operator API。
+- [x] 生产已提供 Session + CSRF 保护的 Game Operator API：
+      `GET/POST /api/v1/pawnhouse/games` 与
+      `POST /api/v1/pawnhouse/games/{game_id}/start`；只有创建者可启动 Game。
+- [x] Connector Binding 创建时自动注册 owner-scoped `arena_agents` 与
+      `arena_runtime_bindings`，迁移会回填既有 Binding；缺少 Arena 专用 capability
+      时 route 保持 `provisioning`。
+- [x] 通用 Join API 在同一事务内写入 Runtime/config 冻结记录与
+      `arena402.game_participants`、20 gold 初始组合和公开 joined event。
 - [ ] 生产 Tencent CAM/SSM 三身份、真实 Provider Key 与服务器离线连续性尚未实机验收。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
@@ -224,6 +231,10 @@ create game
       commitment、结束后 seed 揭晓与冻结终场价格已实现。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令
       运行双 Hosted Agent 至冻结结算意图，并输出安全公开证据。
+
+2026-07-25 真实本地 PostgreSQL/HTTP 验证：两个独立 Session 创建 Hosted Agent，
+通过生产 Operator API create/list、通用 Join、创建者 start，Arena/Hosted Worker
+自动完成 1 回合；终态为 `completed`，2 名参与者、2 条排名。
 
 ## 实施顺序
 

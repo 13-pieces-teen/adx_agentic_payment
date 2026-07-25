@@ -1,5 +1,10 @@
 """Arena-owned task orchestration and result application primitives."""
 
+from .connector_registration import (
+    ConnectorAgentRegistration,
+    ConnectorRegistrationError,
+    PostgresConnectorArenaRegistrar,
+)
 from .finalizer import ArenaDeadlineFinalizer
 from .ingress_security import (
     ArenaIngressSecurityError,
@@ -32,6 +37,8 @@ from .participation import (
 
 __all__ = [
     "ArenaCoreRepository",
+    "ConnectorAgentRegistration",
+    "ConnectorRegistrationError",
     "ArenaDeadlineFinalizer",
     "ArenaIdempotencyConflictError",
     "ArenaIngressSecurityError",
@@ -46,6 +53,7 @@ __all__ = [
     "GameParticipation",
     "PostgresArenaParticipationRepository",
     "PostgresArenaCoreRepository",
+    "PostgresConnectorArenaRegistrar",
     "PUBLIC_OUTPUT_POLICY_VERSION",
     "PublicOutputDecision",
     "PublicOutputPolicy",

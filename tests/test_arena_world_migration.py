@@ -23,6 +23,18 @@ SETTLEMENT_APPROVAL_SQL_PATH = (
 SCALABLE_GAME_SQL_PATH = (
     ROOT / "db" / "migrations" / "012_arena_scalable_games.sql"
 )
+OPERATOR_BRIDGE_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "015_arena_game_operator_and_connector_agent_bridge.sql"
+)
+PARTICIPATION_PROJECTION_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "016_arena_participation_game_core_projection.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -149,3 +161,26 @@ def test_scalable_game_migration_enforces_the_frozen_participant_limit() -> None
     assert "participant limit reached" in sql
     assert "DROP TRIGGER IF EXISTS game_participants_limit_guard" in sql
     assert "BEFORE INSERT ON arena402.game_participants" in sql
+
+
+def test_operator_and_connector_bridge_migration_backfills_identity_routes() -> None:
+    sql = OPERATOR_BRIDGE_SQL_PATH.read_text(encoding="utf-8")
+    assert "ADD COLUMN operator_user_id TEXT" in sql
+    assert "INSERT INTO public.arena_agents" in sql
+    assert "INSERT INTO public.arena_runtime_bindings" in sql
+    assert "'rbind:connector:' || cb.binding_id" in sql
+    assert "(cr.record -> 'capabilities') ? 'arena.decide'" in sql
+    assert "(cr.record -> 'capabilities') ? 'arena.negotiate'" in sql
+    assert "ELSE 'provisioning'" in sql
+
+
+def test_participation_projection_grants_only_required_game_core_mutations() -> None:
+    sql = PARTICIPATION_PROJECTION_SQL_PATH.read_text(encoding="utf-8")
+    assert "GRANT INSERT ON" in sql
+    assert "arena402.game_participants" in sql
+    assert "arena402.balances" in sql
+    assert "arena402.holdings" in sql
+    assert "arena402.game_events" in sql
+    assert "GRANT UPDATE (phase)" in sql
+    assert "GRANT UPDATE ON ALL TABLES" not in sql
+    assert "GRANT DELETE" not in sql

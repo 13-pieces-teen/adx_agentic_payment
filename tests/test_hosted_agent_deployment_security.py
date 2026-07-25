@@ -78,9 +78,10 @@ def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> N
     ):
         assert f"printf '{name}=%s" in generator
     assert "ADX_HOSTED_AGENTS_ENABLED=false" in generator
+    assert "ADX_ARENA_CORE_ENABLED=true" in generator
     assert "ADX_ENABLE_HOSTED_RUNTIME=false" in generator
     assert "ADX_TENCENT_SSM_IAM_VERIFIED=false" in generator
-    assert "ADX_ENABLE_ARENA_WORKER=false" in generator
+    assert "ADX_ENABLE_ARENA_WORKER=true" in generator
 
 
 def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
@@ -94,6 +95,7 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
         "credential-controller"
     ) in deploy
     assert "compose --profile arena up -d arena-worker" in deploy
+    assert "Arena Worker requires ADX_ARENA_CORE_ENABLED=true." in deploy
     assert "verified writer/reader/controller SSM IAM" in deploy
 
 

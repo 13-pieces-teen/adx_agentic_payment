@@ -23,6 +23,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from arena_core import (
     PostgresArenaCoreRepository,
     PostgresArenaParticipationRepository,
+    PostgresConnectorArenaRegistrar,
 )
 from arena_game import (
     EvmJsonRpcConfirmationReader,
@@ -45,6 +46,7 @@ from hosted_agent_control_plane import (
 )
 from hosted_agent_runtime import CapabilityRegistry
 from web.arena_participation_api import create_arena_participation_router
+from web.game_operator_api import create_game_operator_router
 from web.hosted_agent_api import create_hosted_agent_router
 from web.pawnhouse_api import (
     create_pawnhouse_read_router,
@@ -201,10 +203,23 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         )
 
     connector_bundle: ProductionConnectorBundle | None = None
+    connector_arena_registrar: PostgresConnectorArenaRegistrar | None = None
     if production_connector:
+        if _arena_participation_requested():
+            registrar_dsn = (
+                os.getenv("ADX_ARENA_API_DATABASE_URL")
+                or os.getenv("ADX_HOSTED_CONTROL_DATABASE_URL")
+                or os.getenv("ADX_CONNECTOR_DATABASE_URL")
+                or ""
+            ).strip()
+            connector_arena_registrar = PostgresConnectorArenaRegistrar(
+                registrar_dsn
+            )
         # Validate every security-sensitive production setting before the
         # process starts accepting traffic.
-        connector_bundle = build_production_connector()
+        connector_bundle = build_production_connector(
+            arena_registrar=connector_arena_registrar
+        )
 
     hosted_bundle: (
         ProductionHostedControlBundle | LocalHostedControlBundle | None
@@ -302,6 +317,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if connector_bundle is not None:
             await connector_bundle.initialize()
+        if connector_arena_registrar is not None:
+            await connector_arena_registrar.initialize()
         if hosted_bundle is not None:
             await hosted_bundle.initialize()
         if arena_participation is not None:
@@ -343,6 +360,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 await hosted_bundle.close()
             if connector_bundle is not None:
                 await connector_bundle.close()
+            if connector_arena_registrar is not None:
+                await connector_arena_registrar.close()
 
     app = FastAPI(
         title="Arena 402",
@@ -412,6 +431,13 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     app.state.pawnhouse_mode = "off"
     if pawnhouse_repository is not None:
         app.state.pawnhouse_repository = pawnhouse_repository
+        if connector_bundle is not None:
+            app.include_router(
+                create_game_operator_router(
+                    auth=connector_bundle.auth,
+                    repository=pawnhouse_repository,
+                )
+            )
         if pawnhouse_dev_enabled:
             app.state.pawnhouse_mode = "development"
             app.include_router(
@@ -423,7 +449,9 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 )
             )
         else:
-            app.state.pawnhouse_mode = "read_only"
+            app.state.pawnhouse_mode = (
+                "operator" if connector_bundle is not None else "read_only"
+            )
             app.include_router(
                 create_pawnhouse_read_router(repository=pawnhouse_repository)
             )

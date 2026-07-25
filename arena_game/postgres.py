@@ -109,6 +109,7 @@ class PostgresPawnhouseRepository:
         max_negotiation_turns: int = 3,
         max_participants: int = 16,
         settlement_config: SettlementConfig | None = None,
+        operator_user_id: str | None = None,
     ) -> dict[str, object]:
         if not game_id:
             raise PawnhouseRepositoryError("game_id_required")
@@ -125,6 +126,13 @@ class PostgresPawnhouseRepository:
             "eventDeckVersion": 1,
             "eventMode": event_mode,
             "initialNetWorthAtomic": "20000000",
+            "initial_cash_atomic": 20_000_000,
+            "initial_inventory": {
+                "grain": 0,
+                "iron": 0,
+                "warhorse": 0,
+                "gems": 0,
+            },
             "fixedTradeQuantity": 1,
             "goldScale": 1_000_000,
             "settlement": resolved_settlement.to_snapshot(),
@@ -138,9 +146,12 @@ class PostgresPawnhouseRepository:
                     INSERT INTO arena402.games (
                         game_id, round_count, action_timeout_ms,
                         max_negotiation_turns, max_participants,
-                        config_snapshot, event_seed, event_schedule_commitment
+                        config_snapshot, event_seed, event_schedule_commitment,
+                        operator_user_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9
+                    )
                     ON CONFLICT (game_id) DO NOTHING
                     RETURNING game_id
                     """,
@@ -152,6 +163,7 @@ class PostgresPawnhouseRepository:
                     _json(config),
                     event_seed,
                     commitment,
+                    operator_user_id,
                 )
                 if inserted is None:
                     raise PawnhouseRepositoryError("game_already_exists")
@@ -214,6 +226,47 @@ class PostgresPawnhouseRepository:
             "phase": "registration",
             "eventScheduleCommitment": commitment,
         }
+
+    async def list_games(self, *, limit: int = 50) -> list[dict[str, object]]:
+        if limit < 1 or limit > 100:
+            raise ValueError("game list limit must be between 1 and 100")
+        rows = await self._require_pool().fetch(
+            """
+            SELECT
+                g.game_id,
+                g.phase,
+                g.round_count,
+                g.current_round,
+                g.max_participants,
+                g.created_at,
+                count(p.game_participant_id) AS participant_count
+            FROM arena402.games AS g
+            LEFT JOIN arena402.game_participants AS p
+              ON p.game_id = g.game_id
+            GROUP BY
+                g.game_id,
+                g.phase,
+                g.round_count,
+                g.current_round,
+                g.max_participants,
+                g.created_at
+            ORDER BY g.created_at DESC, g.game_id DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [
+            {
+                "gameId": str(row["game_id"]),
+                "phase": str(row["phase"]),
+                "roundCount": int(row["round_count"]),
+                "currentRound": int(row["current_round"]),
+                "participantCount": int(row["participant_count"]),
+                "maxParticipants": int(row["max_participants"]),
+                "createdAt": row["created_at"],
+            }
+            for row in rows
+        ]
 
     async def add_rule_participant(
         self,
@@ -542,13 +595,18 @@ class PostgresPawnhouseRepository:
         self,
         *,
         game_id: str,
+        operator_user_id: str | None = None,
     ) -> dict[str, object]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
                 game = await connection.fetchrow(
                     """
-                    SELECT phase, min_participants, round_count
+                    SELECT
+                        phase,
+                        min_participants,
+                        round_count,
+                        operator_user_id
                     FROM arena402.games
                     WHERE game_id = $1
                     FOR UPDATE
@@ -557,6 +615,13 @@ class PostgresPawnhouseRepository:
                 )
                 if game is None:
                     raise PawnhouseRepositoryError("game_not_found")
+                if (
+                    operator_user_id is not None
+                    and game["operator_user_id"] != operator_user_id
+                ):
+                    raise PawnhouseRepositoryError(
+                        "game_operator_forbidden"
+                    )
                 if game["phase"] != "portfolio_setup":
                     raise PawnhouseRepositoryError("game_not_ready")
                 count = await connection.fetchval(

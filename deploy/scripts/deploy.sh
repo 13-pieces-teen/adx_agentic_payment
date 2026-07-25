@@ -32,6 +32,13 @@ case "${enable_arena_worker}" in
     ;;
 esac
 
+if [ "${enable_arena_worker}" = "true" ]; then
+  if [ "$(env_value ADX_ARENA_CORE_ENABLED)" != "true" ]; then
+    echo "Arena Worker requires ADX_ARENA_CORE_ENABLED=true." >&2
+    exit 1
+  fi
+fi
+
 if [ "${enable_hosted_runtime}" = "true" ]; then
   if [ "$(env_value ADX_HOSTED_AGENTS_ENABLED)" != "true" ]; then
     echo "Hosted runtime requires ADX_HOSTED_AGENTS_ENABLED=true." >&2

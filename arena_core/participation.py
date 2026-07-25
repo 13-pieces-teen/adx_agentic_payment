@@ -123,15 +123,26 @@ class PostgresArenaParticipationRepository:
 
                 game = await connection.fetchrow(
                     """
-                    SELECT game_id, status, config_snapshot
-                    FROM games
-                    WHERE game_id = $1
+                    SELECT
+                        g.game_id,
+                        g.status,
+                        g.config_snapshot,
+                        pawnhouse.phase AS pawnhouse_phase
+                    FROM games AS g
+                    JOIN arena402.games AS pawnhouse
+                      ON pawnhouse.game_id = g.game_id
+                    WHERE g.game_id = $1
                     """,
                     game_id,
                 )
                 if game is None:
                     raise ArenaParticipationError("game_not_found")
                 if game["status"] != "open":
+                    raise ArenaParticipationError("game_not_open")
+                if game["pawnhouse_phase"] not in {
+                    "registration",
+                    "portfolio_setup",
+                }:
                     raise ArenaParticipationError("game_not_open")
 
                 # reserve_arena_api_idempotency holds an owner-scoped
@@ -178,6 +189,8 @@ class PostgresArenaParticipationRepository:
                         b.runtime_binding_id,
                         b.runtime_kind,
                         b.route_status,
+                        b.connector_binding_id,
+                        b.connector_binding_epoch,
                         hc.credential_id,
                         hc.provider,
                         hc.model,
@@ -234,6 +247,14 @@ class PostgresArenaParticipationRepository:
                     or isinstance(initial_cash, bool)
                     or initial_cash < 0
                     or not isinstance(initial_inventory, Mapping)
+                    or set(initial_inventory)
+                    != {"grain", "iron", "warhorse", "gems"}
+                    or any(
+                        not isinstance(quantity, int)
+                        or isinstance(quantity, bool)
+                        or quantity < 0
+                        for quantity in initial_inventory.values()
+                    )
                 ):
                     raise ArenaParticipationError("invalid_game_config")
 
@@ -258,6 +279,92 @@ class PostgresArenaParticipationRepository:
                     config_hash,
                     initial_cash,
                     dict(initial_inventory),
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.game_participants (
+                        game_participant_id,
+                        game_id,
+                        user_id,
+                        agent_id,
+                        runtime_binding_id,
+                        runtime_kind,
+                        portfolio_locked_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, clock_timestamp()
+                    )
+                    """,
+                    game_agent_id,
+                    game_id,
+                    owner_user_id,
+                    agent_id,
+                    runtime["runtime_binding_id"],
+                    runtime["runtime_kind"],
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.balances (
+                        game_participant_id,
+                        cash_atomic,
+                        initial_cash_atomic
+                    )
+                    VALUES ($1, $2, $2)
+                    """,
+                    game_agent_id,
+                    initial_cash,
+                )
+                for good_id in ("grain", "iron", "warhorse", "gems"):
+                    quantity = int(initial_inventory[good_id])
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.holdings (
+                            game_participant_id,
+                            game_id,
+                            good_id,
+                            quantity,
+                            initial_quantity
+                        )
+                        VALUES ($1, $2, $3, $4, $4)
+                        """,
+                        game_agent_id,
+                        game_id,
+                        good_id,
+                        quantity,
+                    )
+                await connection.execute(
+                    """
+                    UPDATE arena402.games
+                    SET phase = 'portfolio_setup'
+                    WHERE game_id = $1 AND phase = 'registration'
+                    """,
+                    game_id,
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.game_events (
+                        game_id,
+                        event_type,
+                        public_payload,
+                        source_idempotency_key
+                    )
+                    VALUES (
+                        $1,
+                        'participant.joined',
+                        jsonb_build_object(
+                            'participantId', $2::TEXT,
+                            'agentId', $3::TEXT,
+                            'runtimeKind', $4::TEXT
+                        ),
+                        $1 || ':' || $2 || ':joined'
+                    )
+                    ON CONFLICT (game_id, source_idempotency_key)
+                    DO NOTHING
+                    """,
+                    game_id,
+                    game_agent_id,
+                    agent_id,
+                    runtime["runtime_kind"],
                 )
                 await self._complete_idempotency(
                     connection,
@@ -324,6 +431,10 @@ class PostgresArenaParticipationRepository:
         return {
             "runtime_kind": runtime_kind,
             "credential_id": None,
+            "connector_binding_id": row["connector_binding_id"],
+            "connector_binding_epoch": row["connector_binding_epoch"],
+            "task_schema_version": "arena.agent-task.v1",
+            "action_schema_version": "arena.action.v1",
         }
 
     async def _get(

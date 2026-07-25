@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Protocol
 from urllib.parse import urlencode
 
 from fastapi import (
@@ -35,10 +35,20 @@ from .rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
 from .service import ConnectorError, ConnectorGateway
 
 
+class ArenaConnectorRegistrar(Protocol):
+    async def register_connector_binding(
+        self,
+        *,
+        owner_user_id: str,
+        connector_binding_id: str,
+    ) -> dict[str, str]: ...
+
+
 def create_connector_router(
     service: ConnectorGateway,
     auth: ConnectorAuth | None = None,
     pairing_limiter: SlidingWindowRateLimiter | None = None,
+    arena_registrar: ArenaConnectorRegistrar | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
@@ -98,6 +108,7 @@ def create_connector_router(
     async def create_binding(
         device_id: str, req: CreateBindingRequest, request: Request
     ):
+        principal = None
         if auth is not None:
             principal = await _require_principal(auth, request, csrf=True)
             await _require_owned_device(service, principal, device_id)
@@ -106,7 +117,7 @@ def create_connector_router(
                     status_code=422,
                     detail="agent_id is assigned by the Arena",
                 )
-        return await _call(
+        binding = await _call(
             service.create_binding(
                 device_id,
                 req.runtime_id,
@@ -114,6 +125,28 @@ def create_connector_router(
                 req.display_name,
             )
         )
+        if arena_registrar is not None and principal is not None:
+            try:
+                registration = (
+                    await arena_registrar.register_connector_binding(
+                        owner_user_id=principal.user_id,
+                        connector_binding_id=str(binding["binding_id"]),
+                    )
+                )
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if isinstance(code, str):
+                    raise HTTPException(
+                        status_code=(
+                            404
+                            if code == "connector_binding_not_found"
+                            else 409
+                        ),
+                        detail={"code": code},
+                    ) from None
+                raise
+            return {**binding, "arenaRegistration": registration}
+        return binding
 
     @router.get("/bindings")
     async def list_bindings(request: Request, device_id: Optional[str] = None):
@@ -347,6 +380,7 @@ def create_connector_router(
 def create_production_connector_router(
     service: ConnectorGateway,
     auth: ConnectorAuth,
+    arena_registrar: ArenaConnectorRegistrar | None = None,
 ) -> APIRouter:
     """Create the remotely reachable, session-authenticated Connector API."""
 
@@ -496,6 +530,7 @@ def create_production_connector_router(
             service,
             auth=auth,
             pairing_limiter=pairing_limiter,
+            arena_registrar=arena_registrar,
         )
     )
     return router

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter
 
-from .api import create_production_connector_router
+from .api import ArenaConnectorRegistrar, create_production_connector_router
 from .auth import ConnectorAuth
 from .config import ConnectorGatewayConfig
 from .github_oauth import GithubOAuthClient, HttpxGithubOAuthClient
@@ -36,6 +36,7 @@ def build_production_connector(
     config: ConnectorGatewayConfig | None = None,
     repository: ConnectorRepository | None = None,
     github_oauth_client: GithubOAuthClient | None = None,
+    arena_registrar: ArenaConnectorRegistrar | None = None,
 ) -> ProductionConnectorBundle:
     """Build a fail-closed production bundle without performing network I/O."""
 
@@ -68,5 +69,9 @@ def build_production_connector(
         repository=resolved_repository,
         service=service,
         auth=auth,
-        router=create_production_connector_router(service, auth),
+        router=create_production_connector_router(
+            service,
+            auth,
+            arena_registrar=arena_registrar,
+        ),
     )

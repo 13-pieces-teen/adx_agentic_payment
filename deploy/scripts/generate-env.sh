@@ -178,6 +178,7 @@ umask 077
   printf 'ADX_API_MAX_CONCURRENCY=256\n'
   printf '\n'
   printf 'ADX_HOSTED_AGENTS_ENABLED=false\n'
+  printf 'ADX_ARENA_CORE_ENABLED=true\n'
   printf 'ADX_ENABLE_HOSTED_RUNTIME=false\n'
   printf 'ADX_HOSTED_FINGERPRINT_PEPPER_B64=%s\n' "${hosted_fingerprint_pepper_b64}"
   printf 'ADX_HOSTED_FINGERPRINT_PEPPER_VERSION=1\n'
@@ -196,7 +197,7 @@ umask 077
   printf 'ADX_OPENAI_COMPATIBLE_ENDPOINT=\n'
   printf 'ADX_OPENAI_COMPATIBLE_MODELS=\n'
   printf '\n'
-  printf 'ADX_ENABLE_ARENA_WORKER=false\n'
+  printf 'ADX_ENABLE_ARENA_WORKER=true\n'
   printf 'ADX_ARENA_SETTLEMENT_RPC_URL=https://k8s.testnet.json-rpc.injective.network/\n'
   printf 'ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL=https://testnet.blockscout.injective.network/api/v2\n'
   printf 'ADX_ARENA_WORKER_LEASE_SECONDS=600\n'

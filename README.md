@@ -116,9 +116,9 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | 模块 | 当前状态 |
 |------|----------|
 | 王城典当行 Game Core | 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
-| Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；尚未接入 `arena.decide` / `arena.negotiate` |
+| Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；创建 Connector Binding 时会自动注册 `arena_agents` 与 `arena_runtime_bindings`，但尚未接入 `arena.decide` / `arena.negotiate`，因此 route 保持 `provisioning` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
-| 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；Local Connector 游戏适配仍待实现 |
+| 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；通用 Join API 已同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件；Local Connector 游戏适配仍待实现 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
@@ -142,7 +142,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 | `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、同 Provider Runtime PATCH、PostgreSQL repository、Tencent SSM 生产组合与显式 local-development 组合 |
 | `docs/hosted-arena-agent-*.md` | Hosted/Local 统一 Runtime 的已批准规格、实施计划与当前阶段状态 |
 | `frontend/` | 仅用于本地开发和显式 `legacy-web` profile 的过渡壳；生产默认不再构建或启动它 |
-| `deploy/`, `docker-compose.production.yml` | 面向 `api.arena402.com` 的后端单机部署，以及可选 Hosted Worker、Credential Controller、Arena Worker；非 API 请求回到 Vercel 前端 |
+| `deploy/`, `docker-compose.production.yml` | 面向 `api.arena402.com` 的后端单机部署；Arena Worker 默认启用，Hosted Worker/Credential Controller 在 SSM IAM 验收后显式启用；非 API 请求回到 Vercel 前端 |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 结算原型 |
 | `agent-arena/specs/` | 已完成且冻结的 settlement 开发记录 |
 | `docs/game-design.md` | 当前权威游戏机制与跨模块 I/O |
