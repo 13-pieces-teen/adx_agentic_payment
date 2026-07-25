@@ -58,6 +58,7 @@ def build_production_connector(
         resolved_github_oauth_client = HttpxGithubOAuthClient(
             resolved_config.github_oauth_client_id,
             resolved_config.github_oauth_client_secret,
+            relay_url=resolved_config.github_oauth_relay_url,
         )
     auth = ConnectorAuth(
         resolved_repository,

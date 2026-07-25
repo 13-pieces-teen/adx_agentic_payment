@@ -83,6 +83,7 @@ def test_production_configuration_fails_closed(monkeypatch):
         "ADX_BOOTSTRAP_INVITE_HASH",
         "ADX_GITHUB_OAUTH_CLIENT_ID",
         "ADX_GITHUB_OAUTH_CLIENT_SECRET",
+        "ADX_GITHUB_OAUTH_RELAY_URL",
     ):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ConnectorConfigurationError, match="DATABASE_URL"):
@@ -106,6 +107,21 @@ def test_production_configuration_fails_closed(monkeypatch):
     monkeypatch.setenv("ADX_GITHUB_OAUTH_CLIENT_SECRET", "github-client-secret")
     config = ConnectorGatewayConfig.from_env()
     assert config.github_oauth_client_id == "github-client-id"
+
+    monkeypatch.setenv(
+        "ADX_GITHUB_OAUTH_RELAY_URL",
+        "http://www.arena402.com/api/internal/github/oauth",
+    )
+    with pytest.raises(ConnectorConfigurationError, match="must use HTTPS"):
+        ConnectorGatewayConfig.from_env()
+    monkeypatch.setenv(
+        "ADX_GITHUB_OAUTH_RELAY_URL",
+        "https://www.arena402.com/api/internal/github/oauth",
+    )
+    config = ConnectorGatewayConfig.from_env()
+    assert config.github_oauth_relay_url == (
+        "https://www.arena402.com/api/internal/github/oauth"
+    )
 
 
 def test_github_sign_in_starts_same_origin_pkce_flow():

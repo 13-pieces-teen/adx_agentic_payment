@@ -32,6 +32,7 @@ class ConnectorGatewayConfig:
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None
     github_oauth_callback_base_url: str | None = None
+    github_oauth_relay_url: str | None = None
     session_cookie_name: str = "adx_session"
     csrf_cookie_name: str = "adx_csrf"
     github_oauth_state_cookie_name: str = "adx_github_oauth_state"
@@ -59,6 +60,9 @@ class ConnectorGatewayConfig:
             os.getenv("ADX_GITHUB_OAUTH_CALLBACK_BASE_URL", "").strip().rstrip("/")
             or public_app_url
         )
+        github_oauth_relay_url = os.getenv(
+            "ADX_GITHUB_OAUTH_RELAY_URL", ""
+        ).strip()
         environment = os.getenv("ADX_ENV", "production").strip().lower()
         cookie_secure_raw = os.getenv("ADX_CONNECTOR_COOKIE_SECURE", "true")
         cookie_secure = cookie_secure_raw.strip().lower() in {"1", "true", "yes"}
@@ -103,6 +107,23 @@ class ConnectorGatewayConfig:
                 "ADX_GITHUB_OAUTH_CLIENT_ID and ADX_GITHUB_OAUTH_CLIENT_SECRET "
                 "must be configured together"
             )
+        if github_oauth_relay_url:
+            parsed_relay_url = urlparse(github_oauth_relay_url)
+            if (
+                not parsed_relay_url.scheme
+                or not parsed_relay_url.netloc
+                or parsed_relay_url.params
+                or parsed_relay_url.query
+                or parsed_relay_url.fragment
+            ):
+                raise ConnectorConfigurationError(
+                    "ADX_GITHUB_OAUTH_RELAY_URL must be an absolute URL "
+                    "without parameters, query, or fragment"
+                )
+            if environment == "production" and parsed_relay_url.scheme != "https":
+                raise ConnectorConfigurationError(
+                    "ADX_GITHUB_OAUTH_RELAY_URL must use HTTPS in production"
+                )
         if environment == "production" and not cookie_secure:
             raise ConnectorConfigurationError(
                 "Secure Connector cookies cannot be disabled in production"
@@ -132,6 +153,7 @@ class ConnectorGatewayConfig:
             github_oauth_client_id=github_oauth_client_id or None,
             github_oauth_client_secret=github_oauth_client_secret or None,
             github_oauth_callback_base_url=github_oauth_callback_base_url,
+            github_oauth_relay_url=github_oauth_relay_url or None,
             session_cookie_name=cookie_name,
             # The browser client reads this stable non-HttpOnly double-submit
             # cookie name. Keep it independent from a customized session name.

@@ -24,9 +24,16 @@ class GithubOAuthClient(Protocol):
 class HttpxGithubOAuthClient:
     """Exchange a short-lived code and return only durable public identity."""
 
-    def __init__(self, client_id: str, client_secret: str) -> None:
+    def __init__(
+        self,
+        client_id: str,
+        client_secret: str,
+        *,
+        relay_url: str | None = None,
+    ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
+        self._relay_url = relay_url
 
     async def authenticate(
         self,
@@ -37,20 +44,34 @@ class HttpxGithubOAuthClient:
     ) -> dict[str, str]:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                token_response = await client.post(
-                    "https://github.com/login/oauth/access_token",
-                    headers={
-                        "Accept": "application/json",
-                        "User-Agent": "Arena402/1.0",
-                    },
-                    data={
-                        "client_id": self._client_id,
-                        "client_secret": self._client_secret,
-                        "code": code,
-                        "redirect_uri": redirect_uri,
-                        "code_verifier": code_verifier,
-                    },
-                )
+                token_headers = {
+                    "Accept": "application/json",
+                    "User-Agent": "Arena402/1.0",
+                }
+                token_payload = {
+                    "client_id": self._client_id,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "code_verifier": code_verifier,
+                }
+                if self._relay_url:
+                    token_headers["Authorization"] = (
+                        f"Bearer {self._client_secret}"
+                    )
+                    token_response = await client.post(
+                        self._relay_url,
+                        headers=token_headers,
+                        json=token_payload,
+                    )
+                else:
+                    token_response = await client.post(
+                        "https://github.com/login/oauth/access_token",
+                        headers=token_headers,
+                        data={
+                            **token_payload,
+                            "client_secret": self._client_secret,
+                        },
+                    )
                 token_response.raise_for_status()
                 token_body = token_response.json()
                 if not isinstance(token_body, dict):

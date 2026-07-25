@@ -163,6 +163,7 @@ def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:
 
     assert "ADX_GITHUB_OAUTH_CLIENT_ID:" in compose
     assert "ADX_GITHUB_OAUTH_CLIENT_SECRET:" in compose
+    assert "ADX_GITHUB_OAUTH_RELAY_URL:" in compose
     assert "profiles:\n      - legacy-web" in compose
     assert "compose build --pull api migrate provision-db-roles" in deploy
     assert "compose up -d api caddy" in deploy
@@ -170,5 +171,6 @@ def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:
     assert "--app-url" in generator
     assert 'printf \'ADX_GITHUB_OAUTH_CLIENT_ID=\\n\'' in generator
     assert 'printf \'ADX_GITHUB_OAUTH_CLIENT_SECRET=\\n\'' in generator
+    assert 'printf \'ADX_GITHUB_OAUTH_RELAY_URL=\\n\'' in generator
     assert "redir {$ADX_PUBLIC_APP_URL}{uri} permanent" in caddy
     assert "reverse_proxy web:3000" not in caddy
