@@ -9,10 +9,12 @@ import signal
 from datetime import datetime, timezone
 
 from arena_core.postgres_repository import PostgresArenaCoreRepository
+from .current_game_lifecycle import CurrentGameLifecycleWorker
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseAgentRuntimeCoordinator
 from .orchestrator import PawnhouseGameOrchestrator
 from .postgres import PostgresPawnhouseRepository
+from .settlement import SettlementConfig
 from .settlement_worker import SettlementRecoveryWorker
 
 
@@ -38,7 +40,7 @@ def _https_url(name: str, *, required: bool) -> str | None:
 
 
 class ArenaProductionWorker:
-    """Run the four Arena-owned, non-signing durable loops."""
+    """Run the Arena-owned, non-signing durable loops."""
 
     def __init__(
         self,
@@ -47,26 +49,31 @@ class ArenaProductionWorker:
         coordinator: PawnhouseAgentRuntimeCoordinator,
         arena_core: PostgresArenaCoreRepository,
         settlement_recovery: SettlementRecoveryWorker,
+        current_game_lifecycle: CurrentGameLifecycleWorker,
         coordinator_poll_seconds: float = 0.25,
         finalizer_poll_seconds: float = 1.0,
         settlement_poll_seconds: float = 3.0,
         orchestration_poll_seconds: float = 0.25,
+        current_game_poll_seconds: float = 1.0,
     ) -> None:
         if min(
             orchestration_poll_seconds,
             coordinator_poll_seconds,
             finalizer_poll_seconds,
             settlement_poll_seconds,
+            current_game_poll_seconds,
         ) <= 0:
             raise ValueError("worker poll intervals must be positive")
         self._game_orchestrator = game_orchestrator
         self._coordinator = coordinator
         self._arena_core = arena_core
         self._settlement_recovery = settlement_recovery
+        self._current_game_lifecycle = current_game_lifecycle
         self._coordinator_poll_seconds = coordinator_poll_seconds
         self._finalizer_poll_seconds = finalizer_poll_seconds
         self._settlement_poll_seconds = settlement_poll_seconds
         self._orchestration_poll_seconds = orchestration_poll_seconds
+        self._current_game_poll_seconds = current_game_poll_seconds
         self._stopping = asyncio.Event()
 
     def stop(self) -> None:
@@ -96,6 +103,10 @@ class ArenaProductionWorker:
                 self._settlement_loop(),
                 name="arena-settlement-recovery",
             ),
+            asyncio.create_task(
+                self._current_game_loop(),
+                name="arena-current-game-lifecycle",
+            ),
         ]
         await self._stopping.wait()
         await asyncio.gather(*tasks)
@@ -122,6 +133,22 @@ class ArenaProductionWorker:
             except Exception:
                 _LOGGER.error("arena_settlement_recovery_cycle_failed")
             await self._wait(self._settlement_poll_seconds)
+
+    async def _current_game_loop(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                result = await self._current_game_lifecycle.run_once()
+                if result.get("created"):
+                    _LOGGER.info(
+                        "arena_current_game_created game_id=%s previous_game_id=%s",
+                        result.get("gameId"),
+                        result.get("previousGameId"),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("arena_current_game_lifecycle_cycle_failed")
+            await self._wait(self._current_game_poll_seconds)
 
     async def _wait(self, seconds: float) -> None:
         try:
@@ -158,11 +185,54 @@ async def main() -> None:
             blockscout_base_url=blockscout_url,
         ),
     )
+    current_game_lifecycle = CurrentGameLifecycleWorker(
+        repository=pawnhouse,
+        settlement_config=SettlementConfig(
+            authorization_mode="single_eip3009",
+            chain_id=int(os.getenv("ADX_CURRENT_GAME_CHAIN_ID", "1439")),
+            token_address=os.getenv(
+                "ADX_CURRENT_GAME_TOKEN_ADDRESS",
+                "0x06D223D12774386A96D33863D9106A800e52BDeD",
+            ),
+            token_symbol=os.getenv(
+                "ADX_CURRENT_GAME_TOKEN_SYMBOL",
+                "mUSDC",
+            ),
+            token_decimals=int(
+                os.getenv("ADX_CURRENT_GAME_TOKEN_DECIMALS", "6")
+            ),
+            token_eip712_name=os.getenv(
+                "ADX_CURRENT_GAME_TOKEN_EIP712_NAME",
+                "Mock USD Coin",
+            ),
+            token_eip712_version=os.getenv(
+                "ADX_CURRENT_GAME_TOKEN_EIP712_VERSION",
+                "1",
+            ),
+            required_confirmations=int(
+                os.getenv("ADX_CURRENT_GAME_REQUIRED_CONFIRMATIONS", "1")
+            ),
+        ),
+        round_count=int(os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "5")),
+        start_threshold=int(
+            os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "10")
+        ),
+        max_participants=int(
+            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "12")
+        ),
+        action_timeout_ms=int(
+            os.getenv("ADX_CURRENT_GAME_ACTION_TIMEOUT_MS", "90000")
+        ),
+        max_negotiation_turns=int(
+            os.getenv("ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS", "3")
+        ),
+    )
     worker = ArenaProductionWorker(
         game_orchestrator=game_orchestrator,
         coordinator=coordinator,
         arena_core=arena_core,
         settlement_recovery=settlement_recovery,
+        current_game_lifecycle=current_game_lifecycle,
         coordinator_poll_seconds=float(
             os.getenv("ADX_ARENA_WORKER_POLL_SECONDS", "0.25")
         ),
@@ -174,6 +244,9 @@ async def main() -> None:
         ),
         orchestration_poll_seconds=float(
             os.getenv("ADX_ARENA_ORCHESTRATION_POLL_SECONDS", "0.25")
+        ),
+        current_game_poll_seconds=float(
+            os.getenv("ADX_CURRENT_GAME_POLL_SECONDS", "1")
         ),
     )
     await pawnhouse.initialize()

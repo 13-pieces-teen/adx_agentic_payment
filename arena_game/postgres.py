@@ -107,20 +107,26 @@ class PostgresPawnhouseRepository:
         event_mode: str = "fixed_demo",
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
+        min_participants: int = 2,
         max_participants: int = 16,
         settlement_config: SettlementConfig | None = None,
         operator_user_id: str | None = None,
     ) -> dict[str, object]:
         if not game_id:
             raise PawnhouseRepositoryError("game_id_required")
+        if min_participants < 2 or min_participants > 64:
+            raise PawnhouseRepositoryError("invalid_min_participants")
         if max_participants < 2 or max_participants > 64:
             raise PawnhouseRepositoryError("invalid_max_participants")
+        if max_participants < min_participants:
+            raise PawnhouseRepositoryError("invalid_participant_range")
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
         config = {
             "world": "aurelia-402",
             "venue": "kings-pawnhouse",
             "roundCount": len(events),
+            "minParticipants": min_participants,
             "maxParticipants": max_participants,
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
@@ -141,112 +147,255 @@ class PostgresPawnhouseRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                inserted = await connection.fetchval(
-                    """
-                    INSERT INTO arena402.games (
-                        game_id, round_count, action_timeout_ms,
-                        max_negotiation_turns, max_participants,
-                        config_snapshot, event_seed, event_schedule_commitment,
-                        operator_user_id
-                    )
-                    VALUES (
-                        $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9
-                    )
-                    ON CONFLICT (game_id) DO NOTHING
-                    RETURNING game_id
-                    """,
-                    game_id,
-                    len(events),
-                    action_timeout_ms,
-                    max_negotiation_turns,
-                    max_participants,
-                    _json(config),
-                    event_seed,
-                    commitment,
-                    operator_user_id,
-                )
-                if inserted is None:
-                    raise PawnhouseRepositoryError("game_already_exists")
-                await connection.execute(
-                    """
-                    INSERT INTO public.games (
-                        game_id, status, action_timeout_ms, config_snapshot
-                    )
-                    VALUES ($1, 'open', $2, $3::jsonb)
-                    """,
-                    game_id,
-                    action_timeout_ms,
-                    _json(config),
-                )
-                await connection.execute(
-                    """
-                    INSERT INTO arena402.current_game (
-                        singleton,
-                        game_id,
-                        start_threshold,
-                        max_participants
-                    )
-                    SELECT
-                        TRUE,
-                        game_id,
-                        min_participants,
-                        max_participants
-                    FROM arena402.games
-                    WHERE game_id = $1
-                      AND min_participants BETWEEN 2 AND 12
-                      AND max_participants BETWEEN min_participants AND 12
-                    ON CONFLICT (singleton) DO NOTHING
-                    """,
-                    game_id,
-                )
-                for good in GOODS.values():
-                    await connection.execute(
-                        """
-                        INSERT INTO arena402.game_goods (
-                            game_id, good_id, display_name,
-                            initial_price_atomic
-                        )
-                        VALUES ($1, $2, $3, $4)
-                        """,
-                        game_id,
-                        good.good_id,
-                        good.display_name,
-                        good.initial_price_atomic,
-                    )
-                for event in events:
-                    await connection.execute(
-                        """
-                        INSERT INTO arena402.event_schedule (
-                            game_id, round_index, event_id, display_name,
-                            narrative, duration_rounds, effect_snapshot,
-                            schema_version
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
-                        """,
-                        game_id,
-                        event.reveal_round,
-                        event.event_id,
-                        event.display_name,
-                        event.narrative,
-                        event.duration_rounds,
-                        _json([effect.to_wire() for effect in event.effects]),
-                        event.schema_version,
-                    )
-                await self._event(
+                await self._insert_game(
                     connection,
                     game_id=game_id,
-                    event_type="game.created",
-                    source_key=f"{game_id}:created",
-                    public_payload={
-                        "roundCount": len(events),
-                        "eventScheduleCommitment": commitment,
-                    },
+                    events=events,
+                    event_seed=event_seed,
+                    commitment=commitment,
+                    action_timeout_ms=action_timeout_ms,
+                    max_negotiation_turns=max_negotiation_turns,
+                    min_participants=min_participants,
+                    max_participants=max_participants,
+                    config=config,
+                    operator_user_id=operator_user_id,
+                    claim_current=True,
                 )
         return {
             "gameId": game_id,
             "phase": "registration",
             "eventScheduleCommitment": commitment,
         }
+
+    async def ensure_current_game(
+        self,
+        *,
+        game_id: str,
+        events: tuple[WorldEvent, ...],
+        event_seed: str,
+        event_deck_id: str = "pawnhouse-standard-v1",
+        event_mode: str = "seeded_shuffle",
+        action_timeout_ms: int = 90_000,
+        max_negotiation_turns: int = 3,
+        start_threshold: int = 10,
+        max_participants: int = 12,
+        settlement_config: SettlementConfig | None = None,
+    ) -> dict[str, object]:
+        """Atomically keep one joinable/running product Game authoritative."""
+
+        if not game_id:
+            raise PawnhouseRepositoryError("game_id_required")
+        if not 2 <= start_threshold <= 12:
+            raise PawnhouseRepositoryError("invalid_start_threshold")
+        if not start_threshold <= max_participants <= 12:
+            raise PawnhouseRepositoryError("invalid_max_participants")
+
+        commitment = schedule_commitment(events, seed=event_seed)
+        resolved_settlement = settlement_config or SettlementConfig()
+        config = {
+            "world": "aurelia-402",
+            "venue": "kings-pawnhouse",
+            "roundCount": len(events),
+            "minParticipants": start_threshold,
+            "maxParticipants": max_participants,
+            "eventDeckId": event_deck_id,
+            "eventDeckVersion": 1,
+            "eventMode": event_mode,
+            "initialNetWorthAtomic": "20000000",
+            "initial_cash_atomic": 20_000_000,
+            "initial_inventory": {
+                "grain": 0,
+                "iron": 0,
+                "warhorse": 0,
+                "gems": 0,
+            },
+            "fixedTradeQuantity": 1,
+            "goldScale": 1_000_000,
+            "settlement": resolved_settlement.to_snapshot(),
+            "currentGameManaged": True,
+            "schemaVersion": "arena.pawnhouse-game.v1",
+        }
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.fetchval(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtext('arena402.current-game-lifecycle')
+                    )
+                    """
+                )
+                current = await connection.fetchrow(
+                    """
+                    SELECT pointer.game_id, game.phase
+                    FROM arena402.current_game AS pointer
+                    JOIN arena402.games AS game
+                      ON game.game_id = pointer.game_id
+                    WHERE pointer.singleton = TRUE
+                    FOR UPDATE OF pointer, game
+                    """
+                )
+                if current is not None and current["phase"] not in {
+                    "completed",
+                    "cancelled",
+                }:
+                    return {
+                        "gameId": str(current["game_id"]),
+                        "created": False,
+                    }
+
+                previous_game_id = (
+                    None if current is None else str(current["game_id"])
+                )
+                await self._insert_game(
+                    connection,
+                    game_id=game_id,
+                    events=events,
+                    event_seed=event_seed,
+                    commitment=commitment,
+                    action_timeout_ms=action_timeout_ms,
+                    max_negotiation_turns=max_negotiation_turns,
+                    min_participants=start_threshold,
+                    max_participants=max_participants,
+                    config=config,
+                    operator_user_id=None,
+                    claim_current=False,
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.current_game (
+                        singleton, game_id, start_threshold, max_participants
+                    )
+                    VALUES (TRUE, $1, $2, $3)
+                    ON CONFLICT (singleton) DO UPDATE
+                    SET game_id = EXCLUDED.game_id,
+                        start_threshold = EXCLUDED.start_threshold,
+                        max_participants = EXCLUDED.max_participants,
+                        updated_at = clock_timestamp()
+                    """,
+                    game_id,
+                    start_threshold,
+                    max_participants,
+                )
+                return {
+                    "gameId": game_id,
+                    "created": True,
+                    "previousGameId": previous_game_id,
+                    "eventScheduleCommitment": commitment,
+                }
+
+    async def _insert_game(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        events: tuple[WorldEvent, ...],
+        event_seed: str,
+        commitment: str,
+        action_timeout_ms: int,
+        max_negotiation_turns: int,
+        min_participants: int,
+        max_participants: int,
+        config: Mapping[str, object],
+        operator_user_id: str | None,
+        claim_current: bool,
+    ) -> None:
+        inserted = await connection.fetchval(
+            """
+            INSERT INTO arena402.games (
+                game_id, round_count, action_timeout_ms,
+                max_negotiation_turns, min_participants, max_participants,
+                config_snapshot, event_seed, event_schedule_commitment,
+                operator_user_id
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10
+            )
+            ON CONFLICT (game_id) DO NOTHING
+            RETURNING game_id
+            """,
+            game_id,
+            len(events),
+            action_timeout_ms,
+            max_negotiation_turns,
+            min_participants,
+            max_participants,
+            _json(config),
+            event_seed,
+            commitment,
+            operator_user_id,
+        )
+        if inserted is None:
+            raise PawnhouseRepositoryError("game_already_exists")
+        await connection.execute(
+            """
+            INSERT INTO public.games (
+                game_id, status, action_timeout_ms, config_snapshot
+            )
+            VALUES ($1, 'open', $2, $3::jsonb)
+            """,
+            game_id,
+            action_timeout_ms,
+            _json(config),
+        )
+        if claim_current:
+            await connection.execute(
+                """
+                INSERT INTO arena402.current_game (
+                    singleton, game_id, start_threshold, max_participants
+                )
+                SELECT TRUE, game_id, min_participants, max_participants
+                FROM arena402.games
+                WHERE game_id = $1
+                  AND min_participants BETWEEN 2 AND 12
+                  AND max_participants BETWEEN min_participants AND 12
+                ON CONFLICT (singleton) DO NOTHING
+                """,
+                game_id,
+            )
+        for good in GOODS.values():
+            await connection.execute(
+                """
+                INSERT INTO arena402.game_goods (
+                    game_id, good_id, display_name, initial_price_atomic
+                )
+                VALUES ($1, $2, $3, $4)
+                """,
+                game_id,
+                good.good_id,
+                good.display_name,
+                good.initial_price_atomic,
+            )
+        for event in events:
+            await connection.execute(
+                """
+                INSERT INTO arena402.event_schedule (
+                    game_id, round_index, event_id, display_name,
+                    narrative, duration_rounds, effect_snapshot,
+                    schema_version
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                """,
+                game_id,
+                event.reveal_round,
+                event.event_id,
+                event.display_name,
+                event.narrative,
+                event.duration_rounds,
+                _json([effect.to_wire() for effect in event.effects]),
+                event.schema_version,
+            )
+        await self._event(
+            connection,
+            game_id=game_id,
+            event_type="game.created",
+            source_key=f"{game_id}:created",
+            public_payload={
+                "roundCount": len(events),
+                "eventScheduleCommitment": commitment,
+            },
+        )
 
     async def list_games(self, *, limit: int = 50) -> list[dict[str, object]]:
         if limit < 1 or limit > 100:

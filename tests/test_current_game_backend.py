@@ -71,13 +71,30 @@ class _CreateConnection:
     def transaction(self):
         return _Transaction()
 
-    async def fetchval(self, query: str, game_id: str, *_: object):
+    async def fetchval(
+        self,
+        query: str,
+        game_id: str | None = None,
+        *_: object,
+    ):
         self.queries.append(query)
         return game_id
 
     async def execute(self, query: str, *_: object):
         self.queries.append(query)
         return "OK"
+
+
+class _ExistingCurrentConnection(_CreateConnection):
+    async def fetchrow(self, query: str, *_: object):
+        self.queries.append(query)
+        return {"game_id": "game-current", "phase": "running"}
+
+
+class _CompletedCurrentConnection(_CreateConnection):
+    async def fetchrow(self, query: str, *_: object):
+        self.queries.append(query)
+        return {"game_id": "game-completed", "phase": "completed"}
 
 
 class _CreatePool:
@@ -153,5 +170,64 @@ def test_first_product_sized_game_claims_empty_current_pointer() -> None:
 
     assert any(
         "INSERT INTO arena402.current_game" in query
+        for query in connection.queries
+    )
+
+
+def test_ensure_current_game_keeps_existing_nonterminal_pointer() -> None:
+    connection = _ExistingCurrentConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    result = asyncio.run(
+        repository.ensure_current_game(
+            game_id="game-unused",
+            events=build_event_schedule(
+                round_count=5,
+                seed="current-game-seed",
+                mode="seeded_shuffle",
+            ),
+            event_seed="current-game-seed",
+        )
+    )
+
+    assert result == {"gameId": "game-current", "created": False}
+    assert any("pg_advisory_xact_lock" in query for query in connection.queries)
+    assert not any(
+        "INSERT INTO arena402.games" in query
+        for query in connection.queries
+    )
+
+
+def test_ensure_current_game_creates_and_atomically_rotates_terminal_pointer() -> None:
+    connection = _CompletedCurrentConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    result = asyncio.run(
+        repository.ensure_current_game(
+            game_id="game-next",
+            events=build_event_schedule(
+                round_count=5,
+                seed="next-current-game-seed",
+                mode="seeded_shuffle",
+            ),
+            event_seed="next-current-game-seed",
+        )
+    )
+
+    assert result["gameId"] == "game-next"
+    assert result["created"] is True
+    assert result["previousGameId"] == "game-completed"
+    assert any(
+        "INSERT INTO arena402.games" in query
+        for query in connection.queries
+    )
+    assert any(
+        "ON CONFLICT (singleton) DO UPDATE" in query
         for query in connection.queries
     )

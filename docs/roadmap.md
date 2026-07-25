@@ -218,8 +218,12 @@ create game
       `GET /api/v1/games/current` 安全投影；接口将内部阶段映射为
       `WAITING / RUNNING / COMPLETED`，支持匿名缓存和登录态 `joinedByMe`，
       不返回 User、Runtime 配置或结算账户。
+- [x] Arena Worker 已增加幂等 Current Game 生命周期循环：首次启动和上一局终态后，
+      在事务级 advisory lock 内创建产品规格的新 Game 并原子切换单例指针；外部前端
+      本地代码已接入 Current Game 三态、3 秒轮询、404 准备态和 RUNNING 自动观战，
+      但尚未部署到 Vercel 或完成公网 E2E。
 - [ ] 单一当前游戏的 Join v2 preflight、动态同局 Mandate payee、显式 Ready
-      投影、Withdraw、阈值原子自动启动、完成后下一局创建、交易列表和结果接口
+      投影、Withdraw、阈值原子自动启动、交易列表和结果接口
       仍按 `prd-current-game-backend.md` 顺序实施。旧 Participant 在这些校验落库前
       只显示为 `PENDING`，不计入 `readyCount`。
 - [x] Connector Binding 创建时自动注册 owner-scoped `arena_agents` 与
