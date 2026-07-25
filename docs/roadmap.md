@@ -214,6 +214,14 @@ create game
 - [x] 生产已提供 Session + CSRF 保护的 Game Operator API：
       `GET/POST /api/v1/pawnhouse/games` 与
       `POST /api/v1/pawnhouse/games/{game_id}/start`；只有创建者可启动 Game。
+- [x] 单一当前游戏后端 Phase 1 已增加 `024` 数据库单例权威指针和公开
+      `GET /api/v1/games/current` 安全投影；接口将内部阶段映射为
+      `WAITING / RUNNING / COMPLETED`，支持匿名缓存和登录态 `joinedByMe`，
+      不返回 User、Runtime 配置或结算账户。
+- [ ] 单一当前游戏的 Join v2 preflight、动态同局 Mandate payee、显式 Ready
+      投影、Withdraw、阈值原子自动启动、完成后下一局创建、交易列表和结果接口
+      仍按 `prd-current-game-backend.md` 顺序实施。旧 Participant 在这些校验落库前
+      只显示为 `PENDING`，不计入 `readyCount`。
 - [x] Connector Binding 创建时自动注册 owner-scoped `arena_agents` 与
       `arena_runtime_bindings`，迁移会回填既有 Binding；缺少 Arena 专用 capability
       时 route 保持 `provisioning`。

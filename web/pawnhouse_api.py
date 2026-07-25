@@ -207,7 +207,12 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
     code = str(exc)
     status = (
         404
-        if code in {"game_not_found", "inventory_commit_not_found"}
+        if code
+        in {
+            "game_not_found",
+            "current_game_not_found",
+            "inventory_commit_not_found",
+        }
         else 409
     )
     return HTTPException(status_code=status, detail={"code": code})
@@ -216,10 +221,39 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
 def create_pawnhouse_read_router(
     *,
     repository: PostgresPawnhouseRepository,
+    auth: ConnectorAuth | None = None,
 ) -> APIRouter:
     """Expose public, read-only game state without mounting dev mutations."""
 
     router = APIRouter(tags=["pawnhouse"])
+
+    @router.get("/api/v1/games/current")
+    async def current_game(
+        request: Request,
+        response: Response,
+    ) -> dict[str, object]:
+        owner_user_id = None
+        if auth is not None and request.cookies:
+            try:
+                principal = await auth.authenticate(request)
+                owner_user_id = principal.user_id
+            except AuthError:
+                # This is a public resource. A missing, invalid, or expired
+                # optional session is treated as an anonymous request.
+                owner_user_id = None
+        try:
+            value = await repository.current_game(
+                owner_user_id=owner_user_id
+            )
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        response.headers["Vary"] = "Cookie"
+        response.headers["Cache-Control"] = (
+            "public, max-age=5"
+            if owner_user_id is None
+            else "private, no-cache"
+        )
+        return value
 
     @router.get("/api/v1/pawnhouse/games/{game_id}")
     async def game_state(game_id: _Id) -> dict[str, object]:
@@ -442,7 +476,10 @@ def create_pawnhouse_router(
 
     router = APIRouter(tags=["pawnhouse-dev"])
     router.include_router(
-        create_pawnhouse_read_router(repository=repository)
+        create_pawnhouse_read_router(
+            repository=repository,
+            auth=auth,
+        )
     )
     if auth is not None:
         router.include_router(

@@ -629,7 +629,14 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 "operator" if connector_bundle is not None else "read_only"
             )
             app.include_router(
-                create_pawnhouse_read_router(repository=pawnhouse_repository)
+                create_pawnhouse_read_router(
+                    repository=pawnhouse_repository,
+                    auth=(
+                        connector_bundle.auth
+                        if connector_bundle is not None
+                        else None
+                    ),
+                )
             )
             if connector_bundle is not None:
                 app.include_router(

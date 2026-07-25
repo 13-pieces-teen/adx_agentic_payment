@@ -178,6 +178,27 @@ class PostgresPawnhouseRepository:
                     action_timeout_ms,
                     _json(config),
                 )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.current_game (
+                        singleton,
+                        game_id,
+                        start_threshold,
+                        max_participants
+                    )
+                    SELECT
+                        TRUE,
+                        game_id,
+                        min_participants,
+                        max_participants
+                    FROM arena402.games
+                    WHERE game_id = $1
+                      AND min_participants BETWEEN 2 AND 12
+                      AND max_participants BETWEEN min_participants AND 12
+                    ON CONFLICT (singleton) DO NOTHING
+                    """,
+                    game_id,
+                )
                 for good in GOODS.values():
                     await connection.execute(
                         """
@@ -3408,6 +3429,135 @@ class PostgresPawnhouseRepository:
             intent=row,
             commit=row,
         )
+
+    async def current_game(
+        self,
+        *,
+        owner_user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Return the public product projection for the explicit Current Game."""
+
+        pool = self._require_pool()
+        game = await pool.fetchrow(
+            """
+            SELECT
+                g.game_id,
+                g.phase,
+                pointer.start_threshold,
+                pointer.max_participants,
+                g.round_count,
+                g.current_round,
+                active_round.phase AS round_phase,
+                g.created_at,
+                g.started_at,
+                g.completed_at
+            FROM arena402.current_game AS pointer
+            JOIN arena402.games AS g
+              ON g.game_id = pointer.game_id
+            LEFT JOIN LATERAL (
+                SELECT round_row.phase
+                FROM arena402.rounds AS round_row
+                WHERE round_row.game_id = g.game_id
+                ORDER BY round_row.round_index DESC
+                LIMIT 1
+            ) AS active_round ON TRUE
+            WHERE pointer.singleton
+              AND g.phase <> 'cancelled'
+            """
+        )
+        if game is None:
+            raise PawnhouseRepositoryError("current_game_not_found")
+
+        participants = await pool.fetch(
+            """
+            SELECT
+                participant.game_participant_id,
+                participant.agent_id,
+                coalesce(agent.name, participant.agent_id) AS display_name,
+                participant.runtime_kind,
+                participant.joined_at
+            FROM arena402.game_participants AS participant
+            LEFT JOIN public.arena_agents AS agent
+              ON agent.agent_id = participant.agent_id
+            WHERE participant.game_id = $1
+              AND participant.status <> 'cancelled'
+            ORDER BY participant.joined_at, participant.game_participant_id
+            """,
+            game["game_id"],
+        )
+        joined_by_me = False
+        if owner_user_id is not None:
+            joined_by_me = bool(
+                await pool.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM arena402.game_participants
+                        WHERE game_id = $1
+                          AND user_id = $2
+                          AND status <> 'cancelled'
+                    )
+                    """,
+                    game["game_id"],
+                    owner_user_id,
+                )
+            )
+
+        phase = str(game["phase"])
+        if phase in {"registration", "portfolio_setup", "portfolio_locked"}:
+            status = "WAITING"
+        elif phase in {"running", "final_valuation"}:
+            status = "RUNNING"
+        elif phase == "completed":
+            status = "COMPLETED"
+        else:
+            raise PawnhouseRepositoryError("current_game_not_found")
+
+        # Existing participation rows predate the v2 Join authorization and
+        # mandate checks. Keep them visible but fail closed until that workflow
+        # records an explicit Ready projection.
+        public_participants = [
+            {
+                "participantId": str(row["game_participant_id"]),
+                "agentId": str(row["agent_id"]),
+                "displayName": str(row["display_name"]),
+                "runtimeKind": str(row["runtime_kind"]),
+                "readiness": "PENDING",
+                "joinedAt": row["joined_at"].isoformat(),
+            }
+            for row in participants
+        ]
+        return {
+            "game": {
+                "gameId": str(game["game_id"]),
+                "status": status,
+                "readyCount": 0,
+                "startThreshold": int(game["start_threshold"]),
+                "maxParticipants": int(game["max_participants"]),
+                "roundCount": int(game["round_count"]),
+                "currentRound": int(game["current_round"]),
+                "roundPhase": (
+                    str(game["round_phase"])
+                    if game["round_phase"] is not None
+                    else None
+                ),
+                "joinedByMe": joined_by_me,
+                "participants": public_participants,
+                "createdAt": game["created_at"].isoformat(),
+                "startedAt": (
+                    game["started_at"].isoformat()
+                    if game["started_at"] is not None
+                    else None
+                ),
+                "completedAt": (
+                    game["completed_at"].isoformat()
+                    if game["completed_at"] is not None
+                    else None
+                ),
+            },
+            "nextGamePending": status == "COMPLETED",
+            "schemaVersion": "arena.current-game.v1",
+        }
 
     async def game_state(self, game_id: str) -> dict[str, object]:
         pool = self._require_pool()

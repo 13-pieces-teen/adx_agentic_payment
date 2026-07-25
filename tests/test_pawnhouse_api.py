@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from arena_game import PawnhouseRepositoryError
 from connector_gateway.auth import AuthPrincipal
 from web.api import create_app
 from web.pawnhouse_api import (
@@ -63,6 +64,36 @@ class _Repository:
             "gameId": game_id,
             "phase": "running",
             "schemaVersion": "arena.pawnhouse-game-state.v1",
+        }
+
+    async def current_game(self, *, owner_user_id=None):
+        return {
+            "game": {
+                "gameId": "game_current",
+                "status": "WAITING",
+                "readyCount": 1,
+                "startThreshold": 2,
+                "maxParticipants": 12,
+                "roundCount": 5,
+                "currentRound": 0,
+                "roundPhase": None,
+                "joinedByMe": owner_user_id == "user-local",
+                "participants": [
+                    {
+                        "participantId": "gp:game_current:agent-1",
+                        "agentId": "agent-1",
+                        "displayName": "Merchant Fox",
+                        "runtimeKind": "hosted",
+                        "readiness": "READY",
+                        "joinedAt": "2026-07-25T10:00:00+00:00",
+                    }
+                ],
+                "createdAt": "2026-07-25T09:00:00+00:00",
+                "startedAt": None,
+                "completedAt": None,
+            },
+            "nextGamePending": False,
+            "schemaVersion": "arena.current-game.v1",
         }
 
     async def automation_state(self, *, game_id):
@@ -197,6 +228,92 @@ def test_read_router_exposes_game_state_without_dev_mutations() -> None:
     assert mutation.status_code == 404
 
 
+def test_read_router_exposes_anonymous_current_game_projection() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_read_router(
+            repository=repository,  # type: ignore[arg-type]
+        )
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/v1/games/current")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "game": {
+            "gameId": "game_current",
+            "status": "WAITING",
+            "readyCount": 1,
+            "startThreshold": 2,
+            "maxParticipants": 12,
+            "roundCount": 5,
+            "currentRound": 0,
+            "roundPhase": None,
+            "joinedByMe": False,
+            "participants": [
+                {
+                    "participantId": "gp:game_current:agent-1",
+                    "agentId": "agent-1",
+                    "displayName": "Merchant Fox",
+                    "runtimeKind": "hosted",
+                    "readiness": "READY",
+                    "joinedAt": "2026-07-25T10:00:00+00:00",
+                }
+            ],
+            "createdAt": "2026-07-25T09:00:00+00:00",
+            "startedAt": None,
+            "completedAt": None,
+        },
+        "nextGamePending": False,
+        "schemaVersion": "arena.current-game.v1",
+    }
+    assert "userId" not in response.text
+    assert "runtimeBindingId" not in response.text
+    assert "settlementAccount" not in response.text
+    assert response.headers["cache-control"] == "public, max-age=5"
+    assert response.headers["vary"] == "Cookie"
+
+
+def test_current_game_projection_marks_authenticated_owner_joined() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_read_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+    client = TestClient(app)
+    client.cookies.set("adx_session", "signed-session")
+
+    response = client.get("/api/v1/games/current")
+
+    assert response.status_code == 200
+    assert response.json()["game"]["joinedByMe"] is True
+
+
+def test_current_game_returns_explicit_not_found_when_pointer_is_empty() -> None:
+    class _EmptyRepository(_Repository):
+        async def current_game(self, *, owner_user_id=None):
+            raise PawnhouseRepositoryError("current_game_not_found")
+
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_read_router(
+            repository=_EmptyRepository(),  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).get("/api/v1/games/current")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {"code": "current_game_not_found"}
+    }
+
+
 def test_app_mounts_read_only_game_api_without_dev_control(
     monkeypatch,
 ) -> None:
@@ -213,6 +330,7 @@ def test_app_mounts_read_only_game_api_without_dev_control(
     app = create_app(connector_demo_enabled=False)
     paths = set(app.openapi()["paths"])
 
+    assert "/api/v1/games/current" in paths
     assert "/api/v1/pawnhouse/games/{game_id}" in paths
     assert "/api/dev/pawnhouse/games" not in paths
     assert app.state.pawnhouse_mode == "read_only"

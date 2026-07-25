@@ -21,6 +21,12 @@ LOCAL_CONNECTOR_SQL_PATH = (
     / "migrations"
     / "021_arena_local_connector_runtime.sql"
 )
+CURRENT_GAME_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "024_arena_current_game_projection.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -331,3 +337,16 @@ def test_local_connector_migration_is_selected_by_arena_scope(
     assert LOCAL_CONNECTOR_SQL_PATH in migrate_module.migration_files(
         "arena"
     )
+
+
+def test_current_game_migration_has_single_pointer_and_product_limits():
+    sql = CURRENT_GAME_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE arena402.current_game" in sql
+    assert "singleton BOOLEAN PRIMARY KEY" in sql
+    assert "CHECK (singleton)" in sql
+    assert "UNIQUE" in sql
+    assert "start_threshold BETWEEN 2 AND 12" in sql
+    assert "max_participants BETWEEN start_threshold AND 12" in sql
+    assert "REFERENCES arena402.games(game_id)" in sql
+    assert "GRANT SELECT ON arena402.current_game TO adx_arena_api" in sql
