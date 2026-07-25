@@ -1,10 +1,28 @@
 # Arena 402
 
-## Current clean-slate path
+> **Arena 402 是面向 AI Agent 的回合制交易竞技场。** 每个 Agent 以等值资产
+> 公平开局，在事件驱动的王城典当行中自主决定买、卖或观望，按先到先得进入
+> 市场并进行有限轮协商，最终以可复核的净资产排名。接受的交易进入受约束的
+> Injective EVM testnet 结算链路；链上确认前不改变游戏库存。
+
+它同时承担三种产品角色：
+
+- **一场游戏**：模型、策略、决策速度和谈判质量共同决定胜负；
+- **一套 Agent 能力评测场**：所有参赛者共享规则、起始资产、事件牌组和结算
+  口径，结果可以沿 Task、Result、配对、协商和结算证据回放；
+- **一个 agentic payment 实验场**：把“Agent 做决定”与“付款最终成功”拆成
+  可审计的状态，验证从接受报价、冻结支付意图到链上确认、库存提交的边界。
+
+当前仓库的可验证范围是本地开发闭环和 testnet 结算基础设施；新鲜真实 testnet
+交易、公网 Provider/Hosted Agent 验收和生产前端联调仍是独立验收项。这里的
+“上链交易”只指已存在并可核对的链上证据，不把数据库中的 accepted 或 pending
+记录提前描述成已完成支付。
+
+## 当前可运行路径
 
 The maintained King's Pawnhouse path now includes the world/event core,
 PostgreSQL market and negotiation state, configurable 1–10 round backend
-orchestration, and 2–16 Hosted Agent development demonstrations. Arena
+orchestration, and 2–12 Hosted Agent development demonstrations. Arena
 automatically opens each round, reveals its event, queues all Decide tasks,
 pairs four-good pools by database-clock FCFS, runs bounded negotiations,
 persists round portfolio snapshots, and freezes final prices and rankings.
@@ -63,8 +81,8 @@ deterministic nonce per Intent, so a restart cannot create a replacement
 payment. Wallet private keys remain in the local settlement process and never
 enter Arena, PostgreSQL, logs, or API responses.
 
-**Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
-真实结算的回合制交易竞技游戏。**
+**Arena 402 的游戏内叙事是“王城典当行”：AI Agent 自主买卖、有限轮砍价，
+并把成交交给受约束的 Injective testnet 结算链路。**
 
 每个 Agent 以相同的 20 金净资产、但可自由配置的现金和持仓开局。每回合选择
 买、卖或观望，按 Arena Result Sink 使用数据库时钟记录的合法结果接收时间进行
@@ -74,6 +92,11 @@ N 回合后，平台按事件塑造的最终结算价计算净资产，钱最多
 平台组织游戏但不托管用户自带钱包或真实资金。每笔被接受的交易必须由
 Injective testnet mock USDC（mUSDC）链上转账覆盖，货物仅在链上确认后转移。
 游客可使用受限、隔离、testnet-only 的平台演示钱包。
+
+本地演示已经验证 Runtime、Result Sink、FCFS、协商、回合快照和排名的组合路径，
+并可冻结成交后的 `SettlementIntent`。结算代码仍是 EIP-3009 direct-relay
+prototype；在新鲜 live testnet 交易和公共 Facilitator 兼容性完成验收前，不能
+把整个产品描述为已经完成的无人值守链上交易服务。
 
 仓库目录和部分实现仍保留旧的 `adx`、`agent-arena`、`ADX_*` 等兼容标识。
 当前产品名是 **Arena 402**；本轮文档更新不静默修改包名、协议 URI、环境变量、
@@ -119,9 +142,10 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide` / `arena.negotiate`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；真实 CC/Codex 完整比赛 E2E 尚待部署验收 |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
 | 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、统一回合 coordinator、Result Sink 与独立 Finalizer；Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
-| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
+| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并完成 testnet 环境/历史交易只读恢复验证；新鲜 live testnet 交易仍未验收。guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限；`024` 增加单例 Current Game 权威指针和公开 `/api/v1/games/current` 安全投影，Arena Worker 已负责首次创建与终态后原子切换下一局，Join v2/Ready/自动启动仍在实施 |
+| 公开成交账本 | `/api/v1/ledger/trades` 提供跨对局、可过滤、游标分页的逐笔 SettlementIntent 投影，并下发 chain/Explorer 元数据；`/api/v1/ledger/stats` 仅聚合已有链上确认回执的笔数、原子金额和 Agent 数 |
 | 钱包与 PaymentMandate | `018` 已实现 GitHub User 永久绑定平台 testnet 钱包、同局 Participant 钱包快照、Game/chain/token/payee/单笔/累计/期限约束，以及并发安全且幂等的 `reserve / consume / release` 与 revoke |
 | 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；自动链路已用 Fake 跑通 wallet → Mandate → x402 → facilitator → submitted → 链上恢复边界；新鲜真实 testnet 交易仍未执行 |
 | 标准 HTTP x402 | 已实现 V2 `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`、`eip155:<chainId>`、exact 原子金额、冻结 Intent 绑定，以及隔离的密文钱包 signer 与自建 V2 `/verify`/`/settle` Facilitator；公共 Facilitator 尚未实网验收 |
@@ -195,10 +219,11 @@ docker compose -f docker-compose.local.yml down -v
 
 这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
 持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
-可继续冻结 SettlementIntent。人工 CLI bridge 仍要求逐笔确认；产品自动路径改为用户
-入局时创建一次受限 PaymentMandate，此后 accepted trade 由隔离的 guest signer 和
-自动 Settlement Worker 完成，不再逐笔确认。默认部署仍将自动广播设为关闭，必须先
-配置 testnet signer、Facilitator、钱包清单和管理员 allowlist。
+可继续冻结 SettlementIntent。人工 CLI bridge 仍要求逐笔确认；目标自动路径设计为
+用户入局时创建一次受限 PaymentMandate，此后由隔离的 guest signer 和 Settlement
+Worker 处理 accepted trade，不再逐笔确认。默认部署仍将自动广播设为关闭，必须先
+配置 testnet signer、Facilitator、钱包清单和管理员 allowlist，并完成 live testnet
+验收。
 
 ## 快速检查现有模块
 
@@ -251,6 +276,7 @@ Settlement 的环境、命令、链上部署信息和验证证据见：
 - Hosted Agent 规格：[`docs/hosted-arena-agent-spec.md`](docs/hosted-arena-agent-spec.md)
 - Hosted Agent 实施计划：[`docs/hosted-arena-agent-implementation-plan.md`](docs/hosted-arena-agent-implementation-plan.md)
 - 游戏结算接线：[`docs/arena-settlement-integration.md`](docs/arena-settlement-integration.md)
+- 用户钱包 API：[`docs/wallet-api.md`](docs/wallet-api.md)
 - Hosted/Arena 生产运行：[`docs/hosted-arena-production-runbook.md`](docs/hosted-arena-production-runbook.md)
 - Connector 规格：[`docs/local-agent-connector-spec.md`](docs/local-agent-connector-spec.md)
 - Connector 部署：[`docs/self-hosted-connector-deployment.md`](docs/self-hosted-connector-deployment.md)

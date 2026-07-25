@@ -1,5 +1,19 @@
 # Arena 402 Roadmap
 
+## Product narrative baseline
+
+Arena 402 的对外叙事固定为三层：
+
+- **游戏**：王城典当行中的公平开局、事件驱动市场、FCFS 配对和有限轮协商；
+- **评测场**：相同规则、起始资产、事件牌组和排名口径下，比较 Agent 的决策、
+  速度、风险判断与谈判质量；
+- **agentic payment 实验场**：把接受报价、冻结支付意图、链上确认和库存提交
+  作为不同状态，逐笔保留可复核证据。
+
+文档中应严格区分三种状态：本地开发闭环已验证、testnet 结算基础已实现、以及
+新鲜 live testnet/公网生产验收已完成。第三种状态不能由 Fake E2E、历史交易恢复、
+`accepted_pending_settlement` 或 Provider success 推导出来。
+
 ## Clean-slate implementation status
 
 - [x] Milestone 1: King's Pawnhouse world, four goods, exact 20-gold
@@ -17,6 +31,11 @@
   persisted confirmation.
 - [ ] Milestone 4 live acceptance: explicitly approved fresh testnet transfer,
   public transaction evidence, and recovery-driven inventory commit.
+- [x] Public trade ledger: cross-Game SettlementIntent projection with
+  game/Agent/good filters, opaque cursor pagination, backend-owned
+  chain/Explorer metadata, persisted block/confirmation/Facilitator receipt
+  fields, confirmed-only aggregate totals, and settlement-account disclosure
+  for direct ERC-20 Transfer verification.
 - [x] Milestone 5 foundation: separate Hosted Worker, Credential Controller,
   Arena Coordinator/Deadline Finalizer/settlement recovery process,
   least-privilege database logins, fail-closed profiles, and operator runbook.
