@@ -22,8 +22,9 @@ class CurrentGameLifecycleWorker:
         repository: PostgresPawnhouseRepository,
         settlement_config: SettlementConfig,
         round_count: int = 5,
-        start_threshold: int = 10,
+        start_threshold: int = CURRENT_GAME_MAX_PARTICIPANTS,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
+        official_fill_after_seconds: int = 300,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
     ) -> None:
@@ -45,6 +46,8 @@ class CurrentGameLifecycleWorker:
             )
         if action_timeout_ms <= 0:
             raise ValueError("action_timeout_ms must be positive")
+        if official_fill_after_seconds <= 0:
+            raise ValueError("official_fill_after_seconds must be positive")
         if max_negotiation_turns not in {2, 3}:
             raise ValueError("max_negotiation_turns must be 2 or 3")
 
@@ -53,6 +56,7 @@ class CurrentGameLifecycleWorker:
         self._round_count = round_count
         self._start_threshold = start_threshold
         self._max_participants = max_participants
+        self._official_fill_after_seconds = official_fill_after_seconds
         self._action_timeout_ms = action_timeout_ms
         self._max_negotiation_turns = max_negotiation_turns
 
@@ -77,6 +81,7 @@ class CurrentGameLifecycleWorker:
             max_negotiation_turns=self._max_negotiation_turns,
             start_threshold=self._start_threshold,
             max_participants=self._max_participants,
+            official_fill_after_seconds=self._official_fill_after_seconds,
             settlement_config=self._settlement_config,
         )
 

@@ -12,6 +12,7 @@ from arena_core.postgres_repository import PostgresArenaCoreRepository
 from .current_game_lifecycle import CurrentGameLifecycleWorker
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseAgentRuntimeCoordinator
+from .official_filler import OfficialAgentFiller
 from .orchestrator import PawnhouseGameOrchestrator
 from .postgres import PostgresPawnhouseRepository
 from .settlement import SettlementConfig
@@ -50,11 +51,13 @@ class ArenaProductionWorker:
         arena_core: PostgresArenaCoreRepository,
         settlement_recovery: SettlementRecoveryWorker,
         current_game_lifecycle: CurrentGameLifecycleWorker,
+        official_agent_filler: OfficialAgentFiller,
         coordinator_poll_seconds: float = 0.25,
         finalizer_poll_seconds: float = 1.0,
         settlement_poll_seconds: float = 3.0,
         orchestration_poll_seconds: float = 0.25,
         current_game_poll_seconds: float = 1.0,
+        official_fill_poll_seconds: float = 1.0,
     ) -> None:
         if min(
             orchestration_poll_seconds,
@@ -62,6 +65,7 @@ class ArenaProductionWorker:
             finalizer_poll_seconds,
             settlement_poll_seconds,
             current_game_poll_seconds,
+            official_fill_poll_seconds,
         ) <= 0:
             raise ValueError("worker poll intervals must be positive")
         self._game_orchestrator = game_orchestrator
@@ -69,11 +73,13 @@ class ArenaProductionWorker:
         self._arena_core = arena_core
         self._settlement_recovery = settlement_recovery
         self._current_game_lifecycle = current_game_lifecycle
+        self._official_agent_filler = official_agent_filler
         self._coordinator_poll_seconds = coordinator_poll_seconds
         self._finalizer_poll_seconds = finalizer_poll_seconds
         self._settlement_poll_seconds = settlement_poll_seconds
         self._orchestration_poll_seconds = orchestration_poll_seconds
         self._current_game_poll_seconds = current_game_poll_seconds
+        self._official_fill_poll_seconds = official_fill_poll_seconds
         self._stopping = asyncio.Event()
 
     def stop(self) -> None:
@@ -106,6 +112,10 @@ class ArenaProductionWorker:
             asyncio.create_task(
                 self._current_game_loop(),
                 name="arena-current-game-lifecycle",
+            ),
+            asyncio.create_task(
+                self._official_fill_loop(),
+                name="arena-official-agent-filler",
             ),
         ]
         await self._stopping.wait()
@@ -149,6 +159,29 @@ class ArenaProductionWorker:
             except Exception:
                 _LOGGER.exception("arena_current_game_lifecycle_cycle_failed")
             await self._wait(self._current_game_poll_seconds)
+
+    async def _official_fill_loop(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                result = await self._official_agent_filler.run_once()
+                if int(result.get("filledCount", 0)) > 0:
+                    _LOGGER.info(
+                        "arena_official_agents_filled game_id=%s count=%s",
+                        result.get("gameId"),
+                        result.get("filledCount"),
+                    )
+                elif result.get("status") == "BLOCKED":
+                    _LOGGER.error(
+                        "arena_official_agent_pool_exhausted game_id=%s "
+                        "missing_seats=%s",
+                        result.get("gameId"),
+                        result.get("missingSeats"),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("arena_official_agent_fill_cycle_failed")
+            await self._wait(self._official_fill_poll_seconds)
 
     async def _wait(self, seconds: float) -> None:
         try:
@@ -215,10 +248,13 @@ async def main() -> None:
         ),
         round_count=int(os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "5")),
         start_threshold=int(
-            os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "10")
+            os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "20")
         ),
         max_participants=int(
-            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "100")
+            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "20")
+        ),
+        official_fill_after_seconds=int(
+            os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "300")
         ),
         action_timeout_ms=int(
             os.getenv("ADX_CURRENT_GAME_ACTION_TIMEOUT_MS", "90000")
@@ -227,12 +263,14 @@ async def main() -> None:
             os.getenv("ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS", "3")
         ),
     )
+    official_agent_filler = OfficialAgentFiller(repository=pawnhouse)
     worker = ArenaProductionWorker(
         game_orchestrator=game_orchestrator,
         coordinator=coordinator,
         arena_core=arena_core,
         settlement_recovery=settlement_recovery,
         current_game_lifecycle=current_game_lifecycle,
+        official_agent_filler=official_agent_filler,
         coordinator_poll_seconds=float(
             os.getenv("ADX_ARENA_WORKER_POLL_SECONDS", "0.25")
         ),
@@ -247,6 +285,9 @@ async def main() -> None:
         ),
         current_game_poll_seconds=float(
             os.getenv("ADX_CURRENT_GAME_POLL_SECONDS", "1")
+        ),
+        official_fill_poll_seconds=float(
+            os.getenv("ADX_OFFICIAL_FILL_POLL_SECONDS", "1")
         ),
     )
     await pawnhouse.initialize()

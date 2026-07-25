@@ -41,8 +41,9 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     assert str(result["gameId"]).startswith("game-")
     assert len(repository.calls) == 1
     call = repository.calls[0]
-    assert call["start_threshold"] == 10
-    assert call["max_participants"] == 100
+    assert call["start_threshold"] == 20
+    assert call["max_participants"] == 20
+    assert call["official_fill_after_seconds"] == 300
     assert call["event_mode"] == "seeded_shuffle"
     assert call["settlement_config"] is settlement
     assert len(call["events"]) == 5  # type: ignore[arg-type]
@@ -55,8 +56,8 @@ def test_lifecycle_rejects_capacity_below_start_threshold() -> None:
         CurrentGameLifecycleWorker(
             repository=repository,  # type: ignore[arg-type]
             settlement_config=SettlementConfig(),
-            start_threshold=10,
-            max_participants=9,
+            start_threshold=20,
+            max_participants=19,
         )
     except ValueError as exc:
         assert "max_participants" in str(exc)
@@ -71,9 +72,24 @@ def test_lifecycle_rejects_capacity_above_production_limit() -> None:
         CurrentGameLifecycleWorker(
             repository=repository,  # type: ignore[arg-type]
             settlement_config=SettlementConfig(),
-            max_participants=101,
+            max_participants=21,
         )
     except ValueError as exc:
         assert "max_participants" in str(exc)
     else:
-        raise AssertionError("capacity above 100 must be rejected")
+        raise AssertionError("capacity above 20 must be rejected")
+
+
+def test_lifecycle_rejects_non_positive_official_fill_delay() -> None:
+    repository = _Repository()
+
+    try:
+        CurrentGameLifecycleWorker(
+            repository=repository,  # type: ignore[arg-type]
+            settlement_config=SettlementConfig(),
+            official_fill_after_seconds=0,
+        )
+    except ValueError as exc:
+        assert "official_fill_after_seconds" in str(exc)
+    else:
+        raise AssertionError("fill delay must be positive")

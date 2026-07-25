@@ -48,7 +48,7 @@ class PawnhouseRepositoryError(RuntimeError):
 
 
 _INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
-CURRENT_GAME_MAX_PARTICIPANTS = 100
+CURRENT_GAME_MAX_PARTICIPANTS = 20
 
 
 def _json(value: object) -> str:
@@ -204,8 +204,9 @@ class PostgresPawnhouseRepository:
         event_mode: str = "seeded_shuffle",
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
-        start_threshold: int = 10,
+        start_threshold: int = CURRENT_GAME_MAX_PARTICIPANTS,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
+        official_fill_after_seconds: int = 300,
         settlement_config: SettlementConfig | None = None,
     ) -> dict[str, object]:
         """Atomically keep one joinable/running product Game authoritative."""
@@ -220,6 +221,10 @@ class PostgresPawnhouseRepository:
             <= CURRENT_GAME_MAX_PARTICIPANTS
         ):
             raise PawnhouseRepositoryError("invalid_max_participants")
+        if official_fill_after_seconds <= 0:
+            raise PawnhouseRepositoryError(
+                "invalid_official_fill_after_seconds"
+            )
 
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
@@ -229,6 +234,7 @@ class PostgresPawnhouseRepository:
             "roundCount": len(events),
             "minParticipants": start_threshold,
             "maxParticipants": max_participants,
+            "officialFillAfterSeconds": official_fill_after_seconds,
             "portfolioMode": "manual",
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
@@ -604,6 +610,7 @@ class PostgresPawnhouseRepository:
         payment_mandate_id: str | None = None,
         join_authorization_id: str | None = None,
         require_current_game: bool = False,
+        official_pool_join: bool = False,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
         portfolio = portfolio or Portfolio.initial(
@@ -627,6 +634,51 @@ class PostgresPawnhouseRepository:
                     raise PawnhouseRepositoryError("game_not_found")
                 if phase["phase"] not in ("registration", "portfolio_setup"):
                     raise PawnhouseRepositoryError("game_not_joinable")
+                if official_pool_join:
+                    official = await connection.fetchrow(
+                        """
+                        SELECT inventory.chain_id, inventory.account_address
+                        FROM arena402.official_agent_pool AS pool_entry
+                        JOIN public.arena_agents AS agent
+                          ON agent.agent_id = pool_entry.agent_id
+                        JOIN arena402.wallet_inventory AS inventory
+                          ON inventory.wallet_id = pool_entry.wallet_id
+                        WHERE pool_entry.agent_id = $1
+                          AND agent.owner_user_id = $2
+                          AND pool_entry.enabled
+                          AND inventory.status <> 'disabled'
+                        FOR SHARE OF pool_entry, inventory
+                        """,
+                        agent_id,
+                        user_id,
+                    )
+                    if official is None:
+                        raise PawnhouseRepositoryError(
+                            "official_agent_not_ready"
+                        )
+                    if payment_mandate_id is not None:
+                        raise PawnhouseRepositoryError(
+                            "official_mandate_not_allowed"
+                        )
+                    settlement_account = SettlementAccount(
+                        chain_id=int(official["chain_id"]),
+                        address=str(official["account_address"]),
+                        custody_mode="sandbox_guest",
+                    )
+                    already_joined = await connection.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM arena402.game_participants
+                            WHERE game_id = $1 AND agent_id = $2
+                              AND readiness <> 'withdrawn'
+                        )
+                        """,
+                        game_id,
+                        agent_id,
+                    )
+                    if already_joined:
+                        return participant_id
                 participant_count = int(
                     await connection.fetchval(
                         """
@@ -719,7 +771,7 @@ class PostgresPawnhouseRepository:
                     )
                     if mandate is None:
                         raise PawnhouseRepositoryError("mandate_not_ready")
-                elif require_current_game:
+                elif require_current_game and not official_pool_join:
                     raise PawnhouseRepositoryError("mandate_not_ready")
                 hosted = await connection.fetchrow(
                     """
@@ -783,9 +835,9 @@ class PostgresPawnhouseRepository:
                     VALUES (
                         $1, $2, $3, $4, $5, 'hosted', clock_timestamp(),
                         $6::text,
-                        CASE WHEN $6::text IS NULL
+                        CASE WHEN $6::text IS NULL AND NOT $7::boolean
                             THEN 'pending' ELSE 'ready' END,
-                        CASE WHEN $6::text IS NULL
+                        CASE WHEN $6::text IS NULL AND NOT $7::boolean
                             THEN NULL ELSE clock_timestamp() END
                     )
                     """,
@@ -795,6 +847,7 @@ class PostgresPawnhouseRepository:
                     agent_id,
                     hosted["runtime_binding_id"],
                     payment_mandate_id,
+                    official_pool_join,
                 )
                 await connection.execute(
                     """
@@ -888,6 +941,7 @@ class PostgresPawnhouseRepository:
                     )
                     if consumed != "UPDATE 1":
                         raise PawnhouseRepositoryError("mandate_not_ready")
+                if payment_mandate_id is not None or official_pool_join:
                     ready_count = int(
                         await connection.fetchval(
                             """
@@ -903,6 +957,36 @@ class PostgresPawnhouseRepository:
                             game_id=game_id,
                         )
         return participant_id
+
+    async def add_official_hosted_participant(
+        self,
+        *,
+        game_id: str,
+        agent_id: str,
+    ) -> str:
+        """Join an explicitly allow-listed platform Agent, idempotently."""
+
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT agent.owner_user_id
+            FROM arena402.official_agent_pool AS pool_entry
+            JOIN public.arena_agents AS agent
+              ON agent.agent_id = pool_entry.agent_id
+            WHERE pool_entry.agent_id = $1
+              AND pool_entry.enabled
+            """,
+            agent_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError("official_agent_not_ready")
+        return await self.add_hosted_participant(
+            game_id=game_id,
+            user_id=str(row["owner_user_id"]),
+            agent_id=agent_id,
+            portfolio=None,
+            require_current_game=True,
+            official_pool_join=True,
+        )
 
     async def add_connector_participant(
         self,
@@ -4162,6 +4246,7 @@ class PostgresPawnhouseRepository:
                 pointer.max_participants,
                 g.round_count,
                 g.current_round,
+                g.config_snapshot,
                 active_round.phase AS round_phase,
                 g.created_at,
                 g.started_at,
@@ -4191,10 +4276,14 @@ class PostgresPawnhouseRepository:
                 coalesce(agent.name, participant.agent_id) AS display_name,
                 participant.runtime_kind,
                 participant.readiness,
-                participant.joined_at
+                participant.joined_at,
+                participant.ready_at,
+                (official.agent_id IS NOT NULL) AS is_official
             FROM arena402.game_participants AS participant
             LEFT JOIN public.arena_agents AS agent
               ON agent.agent_id = participant.agent_id
+            LEFT JOIN arena402.official_agent_pool AS official
+              ON official.agent_id = participant.agent_id
             WHERE participant.game_id = $1
               AND participant.status <> 'cancelled'
               AND participant.readiness <> 'withdrawn'
@@ -4239,18 +4328,60 @@ class PostgresPawnhouseRepository:
                 "runtimeKind": str(row["runtime_kind"]),
                 "readiness": str(row["readiness"]).upper(),
                 "joinedAt": row["joined_at"].isoformat(),
+                "isOfficial": bool(row["is_official"]),
             }
             for row in participants
         ]
+        config = (
+            json.loads(game["config_snapshot"])
+            if isinstance(game["config_snapshot"], str)
+            else dict(game["config_snapshot"])
+        )
+        official_fill_after_seconds = int(
+            config.get("officialFillAfterSeconds", 300)
+        )
+        first_human_ready_at = min(
+            (
+                row["ready_at"]
+                for row in participants
+                if not bool(row["is_official"])
+                and str(row["readiness"]) == "ready"
+                and row["ready_at"] is not None
+            ),
+            default=None,
+        )
+        fill_at = (
+            first_human_ready_at
+            + timedelta(seconds=official_fill_after_seconds)
+            if first_human_ready_at is not None
+            else None
+        )
+        server_time = datetime.now(timezone.utc)
+        ready_count = sum(
+            1
+            for participant in public_participants
+            if participant["readiness"] == "READY"
+        )
+        human_ready_count = sum(
+            1
+            for participant in public_participants
+            if participant["readiness"] == "READY"
+            and not participant["isOfficial"]
+        )
+        official_ready_count = ready_count - human_ready_count
+        if status != "WAITING" or ready_count >= int(game["start_threshold"]):
+            fill_status = "READY"
+        elif first_human_ready_at is None:
+            fill_status = "IDLE"
+        elif fill_at is not None and server_time < fill_at:
+            fill_status = "COLLECTING"
+        else:
+            fill_status = "FILLING"
         return {
             "game": {
                 "gameId": str(game["game_id"]),
                 "status": status,
-                "readyCount": sum(
-                    1
-                    for participant in public_participants
-                    if participant["readiness"] == "READY"
-                ),
+                "readyCount": ready_count,
                 "startThreshold": int(game["start_threshold"]),
                 "maxParticipants": int(game["max_participants"]),
                 "roundCount": int(game["round_count"]),
@@ -4262,6 +4393,21 @@ class PostgresPawnhouseRepository:
                 ),
                 "joinedByMe": joined_by_me,
                 "participants": public_participants,
+                "matchmaking": {
+                    "targetSeats": int(game["start_threshold"]),
+                    "humanReadyCount": human_ready_count,
+                    "officialReadyCount": official_ready_count,
+                    "firstHumanReadyAt": (
+                        first_human_ready_at.isoformat()
+                        if first_human_ready_at is not None
+                        else None
+                    ),
+                    "fillAt": (
+                        fill_at.isoformat() if fill_at is not None else None
+                    ),
+                    "fillStatus": fill_status,
+                    "serverTime": server_time.isoformat(),
+                },
                 "createdAt": game["created_at"].isoformat(),
                 "startedAt": (
                     game["started_at"].isoformat()
@@ -4276,6 +4422,131 @@ class PostgresPawnhouseRepository:
             },
             "nextGamePending": status == "COMPLETED",
             "schemaVersion": "arena.current-game.v1",
+        }
+
+    async def official_fill_plan(
+        self,
+        *,
+        now: datetime,
+    ) -> dict[str, object]:
+        """Select allow-listed fillers after the first human's wait expires."""
+
+        pool = self._require_pool()
+        game = await pool.fetchrow(
+            """
+            SELECT g.game_id, g.phase, g.config_snapshot,
+                   pointer.start_threshold
+            FROM arena402.current_game AS pointer
+            JOIN arena402.games AS g ON g.game_id = pointer.game_id
+            WHERE pointer.singleton
+            """
+        )
+        if game is None or str(game["phase"]) not in {
+            "registration",
+            "portfolio_setup",
+            "portfolio_locked",
+        }:
+            return {
+                "gameId": None if game is None else str(game["game_id"]),
+                "status": "IDLE",
+                "candidateAgentIds": [],
+            }
+
+        counts = await pool.fetchrow(
+            """
+            SELECT
+                count(*) FILTER (
+                    WHERE participant.readiness = 'ready'
+                ) AS ready_count,
+                min(participant.ready_at) FILTER (
+                    WHERE participant.readiness = 'ready'
+                      AND official.agent_id IS NULL
+                ) AS first_human_ready_at
+            FROM arena402.game_participants AS participant
+            LEFT JOIN arena402.official_agent_pool AS official
+              ON official.agent_id = participant.agent_id
+            WHERE participant.game_id = $1
+              AND participant.status <> 'cancelled'
+              AND participant.readiness <> 'withdrawn'
+            """,
+            game["game_id"],
+        )
+        ready_count = int(counts["ready_count"])
+        target_seats = int(game["start_threshold"])
+        first_human_ready_at = counts["first_human_ready_at"]
+        if ready_count >= target_seats:
+            return {
+                "gameId": str(game["game_id"]),
+                "status": "READY",
+                "candidateAgentIds": [],
+            }
+        if first_human_ready_at is None:
+            return {
+                "gameId": str(game["game_id"]),
+                "status": "IDLE",
+                "candidateAgentIds": [],
+            }
+
+        config = (
+            json.loads(game["config_snapshot"])
+            if isinstance(game["config_snapshot"], str)
+            else dict(game["config_snapshot"])
+        )
+        fill_at = first_human_ready_at + timedelta(
+            seconds=int(config.get("officialFillAfterSeconds", 300))
+        )
+        if now < fill_at:
+            return {
+                "gameId": str(game["game_id"]),
+                "status": "COLLECTING",
+                "fillAt": fill_at.isoformat(),
+                "candidateAgentIds": [],
+            }
+
+        deficit = target_seats - ready_count
+        candidates = await pool.fetch(
+            """
+            SELECT official.agent_id
+            FROM arena402.official_agent_pool AS official
+            JOIN public.arena_agents AS agent
+              ON agent.agent_id = official.agent_id
+             AND agent.status = 'active'
+            JOIN public.arena_runtime_bindings AS binding
+              ON binding.agent_id = official.agent_id
+             AND binding.runtime_kind = 'hosted'
+             AND binding.route_status = 'ready'
+             AND binding.disabled_at IS NULL
+            JOIN public.arena_hosted_configs AS hosted
+              ON hosted.hosted_config_id = binding.hosted_config_id
+             AND hosted.agent_id = official.agent_id
+             AND hosted.status = 'ready'
+            JOIN public.arena_model_credentials AS credential
+              ON credential.credential_id = hosted.credential_id
+             AND credential.status = 'valid'
+            JOIN arena402.wallet_inventory AS wallet
+              ON wallet.wallet_id = official.wallet_id
+             AND wallet.status <> 'disabled'
+            WHERE official.enabled
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM arena402.game_participants AS participant
+                  WHERE participant.game_id = $1
+                    AND participant.agent_id = official.agent_id
+                    AND participant.readiness <> 'withdrawn'
+              )
+            ORDER BY official.priority, official.agent_id
+            LIMIT $2
+            """,
+            game["game_id"],
+            deficit,
+        )
+        candidate_agent_ids = [str(row["agent_id"]) for row in candidates]
+        return {
+            "gameId": str(game["game_id"]),
+            "status": "FILLING" if candidate_agent_ids else "BLOCKED",
+            "fillAt": fill_at.isoformat(),
+            "candidateAgentIds": candidate_agent_ids,
+            "missingSeats": deficit,
         }
 
     async def current_game_join_preflight(
