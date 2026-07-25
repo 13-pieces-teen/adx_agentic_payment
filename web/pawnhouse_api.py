@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
-from typing import Annotated, Literal
+from collections.abc import AsyncIterator
+from typing import Annotated, Awaitable, Callable, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from starlette.responses import StreamingResponse
 
 from connector_gateway.auth import AuthError, ConnectorAuth
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
@@ -253,6 +258,8 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
 
 
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$")
+_SSE_POLL_SECONDS = 0.75
+_SSE_HEARTBEAT_SECONDS = 15.0
 
 
 def _idempotency_digest(request: Request) -> str:
@@ -263,6 +270,56 @@ def _idempotency_digest(request: Request) -> str:
             detail={"code": "invalid_idempotency_key"},
         )
     return sha256_text_identifier(key)
+
+
+def _sse_cursor(after: int, last_event_id: str | None) -> int:
+    if not last_event_id:
+        return after
+    try:
+        parsed = int(last_event_id)
+    except ValueError:
+        return after
+    return max(after, parsed) if parsed >= 0 else after
+
+
+def _encode_sse_event(event: dict[str, object]) -> str:
+    sequence = int(event["sequence"])
+    payload = json.dumps(
+        jsonable_encoder(event),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"id: {sequence}\nevent: arena\ndata: {payload}\n\n"
+
+
+async def _public_game_event_stream(
+    *,
+    repository: PostgresPawnhouseRepository,
+    game_id: str,
+    after_sequence: int,
+    is_disconnected: Callable[[], Awaitable[bool]],
+    poll_seconds: float = _SSE_POLL_SECONDS,
+    heartbeat_seconds: float = _SSE_HEARTBEAT_SECONDS,
+) -> AsyncIterator[str]:
+    cursor = after_sequence
+    idle_seconds = 0.0
+    while not await is_disconnected():
+        events = await repository.timeline(
+            game_id,
+            after_sequence=cursor,
+        )
+        if events:
+            idle_seconds = 0.0
+            for event in events:
+                cursor = max(cursor, int(event["sequence"]))
+                yield _encode_sse_event(event)
+            continue
+
+        await asyncio.sleep(poll_seconds)
+        idle_seconds += poll_seconds
+        if idle_seconds >= heartbeat_seconds:
+            idle_seconds = 0.0
+            yield ": keep-alive\n\n"
 
 
 def create_pawnhouse_read_router(
@@ -332,6 +389,31 @@ def create_pawnhouse_read_router(
             "nextAfter": events[-1]["sequence"] if events else after,
             "schemaVersion": "arena.pawnhouse-timeline.v1",
         }
+
+    @router.get("/api/v1/pawnhouse/games/{game_id}/events")
+    async def game_events(
+        game_id: _Id,
+        request: Request,
+        after: Annotated[int, Query(ge=0)] = 0,
+        last_event_id: Annotated[
+            str | None,
+            Header(alias="Last-Event-ID"),
+        ] = None,
+    ) -> StreamingResponse:
+        cursor = _sse_cursor(after, last_event_id)
+        return StreamingResponse(
+            _public_game_event_stream(
+                repository=repository,
+                game_id=game_id,
+                after_sequence=cursor,
+                is_disconnected=request.is_disconnected,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @router.get("/api/v1/pawnhouse/games/{game_id}/runtime-run")
     async def hosted_runtime_run(game_id: _Id) -> dict[str, object]:

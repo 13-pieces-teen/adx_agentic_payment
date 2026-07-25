@@ -160,8 +160,10 @@ PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
 产品前端已迁移到
 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
 Vercel 部署到 `www.arena402.com`。后端 GitHub OAuth + PKCE、Session/CSRF Cookie
-和安全回跳契约已实现；legacy Agent/listing/ELO client 到当前 API 的迁移、
-真实 OAuth App、Vercel→腾讯云 Cookie/CORS 联调和部署验收尚未完成。本仓库
+和安全回跳契约已实现。2026-07-26 已在公网验证真实 OAuth App 跳转、OAuth state
+Cookie、前端直连 API、精确 Origin CORS 和带凭证预检；外部前端也已迁移到当前
+Arena API。公开 Game Event SSE 与前端断线轮询降级已经实现，但腾讯云部署、
+登录后创建 Agent/Join 的人工浏览器验收及新鲜 testnet 自动结算仍未完成。本仓库
 `frontend/` 仅保留为本地开发与显式 `legacy-web` profile。
 
 王城典当行 clean-slate 后端闭环已经形成。`arena_game/`、`arena_core/` 与
@@ -275,9 +277,11 @@ create game
       通过显式配置和真实 testnet 验收闸门。
 - [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
       不可变 GitHub subject 身份、现有 Session/CSRF Cookie 和安全回跳。
-- [ ] 外部前端已完成 Next.js 仓库升级，但尚需移除 legacy Agent/listing/ELO
-      API client，完成 Vercel→腾讯云 OAuth/Cookie/CORS 公网联调、Realtime 推送、
-      完整 Game Operator UI 与生产级错误恢复；本仓库过渡壳已退出默认生产 profile。
+- [x] 外部前端已完成 Next.js 仓库升级和当前 Arena API 迁移；Vercel→腾讯云
+      OAuth 跳转、Cookie/CORS 公网基础联调已通过。
+- [ ] 公开 Game Event SSE 与前端轮询降级代码已完成本地回归，尚待腾讯云和
+      Vercel 部署后完成实时投影、登录创建 Agent、Join/开局和 testnet 自动支付
+      的生产验收；本仓库过渡壳已退出默认生产 profile。
 - [x] 固定五回合事件表、版本化十张牌组、确定性 seed 洗牌、schedule
       commitment、结束后 seed 揭晓与冻结终场价格已实现。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令

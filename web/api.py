@@ -534,6 +534,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "Authorization",
             "Content-Type",
             "Idempotency-Key",
+            "Last-Event-ID",
             "X-CSRF-Token",
             "X-Arena-Dev-Token",
             "PAYMENT-SIGNATURE",

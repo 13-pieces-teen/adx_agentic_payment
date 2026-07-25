@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -7,6 +10,9 @@ from arena_game import PawnhouseRepositoryError
 from connector_gateway.auth import AuthPrincipal
 from web.api import create_app
 from web.pawnhouse_api import (
+    _encode_sse_event,
+    _public_game_event_stream,
+    _sse_cursor,
     create_pawnhouse_participation_router,
     create_pawnhouse_read_router,
     create_pawnhouse_router,
@@ -809,6 +815,44 @@ def test_read_interfaces_do_not_require_the_development_token() -> None:
     automation = client.get("/api/v1/pawnhouse/games/game_1/automation")
     assert automation.status_code == 200
     assert automation.json()["action"] == "wait_settlement"
+
+
+def test_public_game_event_stream_resumes_and_emits_sanitized_json() -> None:
+    repository = _Repository()
+    disconnect_checks = 0
+
+    async def disconnected() -> bool:
+        nonlocal disconnect_checks
+        disconnect_checks += 1
+        return disconnect_checks > 1
+
+    async def exercise() -> tuple[str, bool]:
+        stream = _public_game_event_stream(
+            repository=repository,
+            game_id="game_1",
+            after_sequence=_sse_cursor(2, "4"),
+            is_disconnected=disconnected,
+            poll_seconds=0.001,
+            heartbeat_seconds=1,
+        )
+        first = await anext(stream)
+        try:
+            await anext(stream)
+        except StopAsyncIteration:
+            return first, True
+        return first, False
+
+    encoded, stopped = asyncio.run(exercise())
+    assert stopped is True
+    assert encoded.startswith("id: 5\nevent: arena\ndata: ")
+    payload = json.loads(encoded.split("data: ", 1)[1])
+    assert payload == {
+        "sequence": 5,
+        "type": "game.created",
+        "data": {},
+    }
+    assert _sse_cursor(3, "invalid") == 3
+    assert _encode_sse_event(payload) == encoded
 
 
 def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:

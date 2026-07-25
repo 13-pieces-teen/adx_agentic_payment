@@ -518,7 +518,7 @@ def test_main_app_exposes_disabled_readiness_and_flag_fails_closed(
             "Origin": "http://localhost:3000",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": (
-                "content-type,idempotency-key,x-csrf-token"
+                "content-type,idempotency-key,last-event-id,x-csrf-token"
             ),
         },
     )
@@ -527,6 +527,7 @@ def test_main_app_exposes_disabled_readiness_and_flag_fails_closed(
         "access-control-allow-headers"
     ].casefold()
     assert "idempotency-key" in allowed_headers
+    assert "last-event-id" in allowed_headers
     assert "x-csrf-token" in allowed_headers
 
     monkeypatch.setenv("ADX_HOSTED_AGENTS_ENABLED", "true")
