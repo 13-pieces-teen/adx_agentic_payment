@@ -63,6 +63,31 @@ class EvmJsonRpcConfirmationReader:
             return self._read_sync(intent, tx_hash)
         return await asyncio.to_thread(self._read_sync, intent, tx_hash)
 
+    async def find_transaction_for_authorization(
+        self,
+        intent: SettlementIntent,
+        *,
+        lookback_blocks: int = 4_096,
+    ) -> str | None:
+        """Read-only recovery of a relay result by its frozen authorization nonce.
+
+        EIP-3009 binds the nonce to the Arena intent hash.  When a relay times
+        out after broadcasting, scan only matching token Transfers and inspect
+        their calldata for that nonce; never sign or re-submit a payment.
+        """
+
+        if not 1 <= lookback_blocks <= 20_000:
+            raise ValueError("invalid_authorization_recovery_lookback")
+        if self._rpc_call_override is not None:
+            return self._find_transaction_for_authorization_sync(
+                intent, lookback_blocks
+            )
+        return await asyncio.to_thread(
+            self._find_transaction_for_authorization_sync,
+            intent,
+            lookback_blocks,
+        )
+
     def _read_sync(
         self,
         intent: SettlementIntent,
@@ -143,6 +168,50 @@ class EvmJsonRpcConfirmationReader:
             confirmation_count=confirmation_count,
             success=True,
         )
+
+    def _find_transaction_for_authorization_sync(
+        self,
+        intent: SettlementIntent,
+        lookback_blocks: int,
+    ) -> str | None:
+        chain_id = _hex_int(self._rpc("eth_chainId", []))
+        if chain_id != intent.chain_id:
+            raise ChainReadError("settlement_rpc_chain_mismatch")
+        latest = _hex_int(self._rpc("eth_blockNumber", []))
+        logs = self._rpc(
+            "eth_getLogs",
+            [
+                {
+                    "fromBlock": hex(max(0, latest - lookback_blocks + 1)),
+                    "toBlock": hex(latest),
+                    "address": intent.token_address,
+                    "topics": [
+                        _TRANSFER_TOPIC,
+                        _address_topic(intent.buyer_account),
+                        _address_topic(intent.seller_account),
+                    ],
+                }
+            ],
+        )
+        if not isinstance(logs, list):
+            raise ChainReadError("invalid_authorization_recovery_logs")
+        expected_nonce = intent.intent_hash.removeprefix("sha256:")
+        matches: set[str] = set()
+        for log in logs:
+            if not isinstance(log, dict) or _hex_int(log.get("data")) != intent.amount_atomic:
+                continue
+            tx_hash = log.get("transactionHash")
+            if not isinstance(tx_hash, str) or len(tx_hash) != 66:
+                raise ChainReadError("invalid_authorization_recovery_transaction")
+            transaction = self._rpc("eth_getTransactionByHash", [tx_hash])
+            if not isinstance(transaction, dict):
+                continue
+            input_data = transaction.get("input")
+            if _authorization_nonce_from_calldata(input_data) == expected_nonce:
+                matches.add(tx_hash.lower())
+        if len(matches) > 1:
+            raise ChainReadError("authorization_recovery_ambiguous")
+        return next(iter(matches), None)
 
     def _read_blockscout(
         self,
@@ -316,6 +385,31 @@ def _topic_address(value: object) -> str:
     if len(hex_value) != 64:
         raise ChainReadError("invalid_transfer_topic")
     return normalize_evm_address("0x" + hex_value[-40:])
+
+
+def _address_topic(address: str) -> str:
+    return "0x" + "0" * 24 + normalize_evm_address(address)[2:]
+
+
+def _authorization_nonce_from_calldata(value: object) -> str | None:
+    """Extract the sixth ABI word used by transferWithAuthorization.
+
+    The exact token Transfer log and frozen amount/account tuple are checked
+    before this parser is used.  This keeps the lookup bounded to evidence for
+    the same EIP-3009 authorization without retaining its signature.
+    """
+
+    if not isinstance(value, str) or not value.startswith("0x"):
+        return None
+    raw = value[2:]
+    nonce_start = 8 + 5 * 64
+    nonce_end = nonce_start + 64
+    if len(raw) < nonce_end:
+        return None
+    nonce = raw[nonce_start:nonce_end]
+    if not all(char in "0123456789abcdefABCDEF" for char in nonce):
+        return None
+    return nonce.lower()
 
 
 __all__ = [

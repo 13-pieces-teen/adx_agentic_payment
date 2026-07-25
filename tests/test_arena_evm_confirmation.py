@@ -124,6 +124,59 @@ def test_reader_returns_none_while_receipt_is_unknown() -> None:
     assert asyncio.run(reader.read(_intent(), TX_HASH)) is None
 
 
+def test_reader_recovers_broadcast_transaction_by_frozen_authorization_nonce() -> None:
+    intent = _intent()
+    nonce = intent.intent_hash.removeprefix("sha256:")
+    calldata = "0xdeadbeef" + "00" * (5 * 32) + nonce
+
+    def call(method: str, _: list[object]) -> object:
+        if method == "eth_chainId":
+            return hex(1439)
+        if method == "eth_blockNumber":
+            return "0x100"
+        if method == "eth_getLogs":
+            return [
+                {
+                    "transactionHash": TX_HASH,
+                    "data": hex(intent.amount_atomic),
+                }
+            ]
+        if method == "eth_getTransactionByHash":
+            return {"input": calldata}
+        raise AssertionError(method)
+
+    reader = EvmJsonRpcConfirmationReader("test://rpc", rpc_call=call)
+    assert (
+        asyncio.run(reader.find_transaction_for_authorization(intent))
+        == TX_HASH
+    )
+
+
+def test_reader_rejects_multiple_nonce_matched_recovery_candidates() -> None:
+    intent = _intent()
+    nonce = intent.intent_hash.removeprefix("sha256:")
+    calldata = "0xdeadbeef" + "00" * (5 * 32) + nonce
+    other_tx = "0x" + "66" * 32
+
+    def call(method: str, _: list[object]) -> object:
+        if method == "eth_chainId":
+            return hex(1439)
+        if method == "eth_blockNumber":
+            return "0x100"
+        if method == "eth_getLogs":
+            return [
+                {"transactionHash": TX_HASH, "data": hex(intent.amount_atomic)},
+                {"transactionHash": other_tx, "data": hex(intent.amount_atomic)},
+            ]
+        if method == "eth_getTransactionByHash":
+            return {"input": calldata}
+        raise AssertionError(method)
+
+    reader = EvmJsonRpcConfirmationReader("test://rpc", rpc_call=call)
+    with pytest.raises(ChainReadError, match="authorization_recovery_ambiguous"):
+        asyncio.run(reader.find_transaction_for_authorization(intent))
+
+
 def test_reader_uses_blockscout_fallback_for_pruned_rpc_receipt() -> None:
     def rpc(method: str, _: list[object]) -> object:
         if method == "eth_chainId":
