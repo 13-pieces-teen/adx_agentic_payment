@@ -127,7 +127,11 @@ Required observations:
 
 Do not run the state-changing settlement bridge as part of infrastructure
 verification. A fresh testnet transfer requires a separate human review of the
-frozen `SettlementIntent` and explicit confirmation.
+frozen `SettlementIntent`, approval bound to its exact `intentHash`, and
+explicit confirmation. The bridge persists that approval before broadcast and
+uses a deterministic per-Intent nonce. If submission recording is interrupted,
+resume only with the already public transaction hash; never replace it with a
+new authorization.
 
 ## 6. Rollback
 

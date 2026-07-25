@@ -18,5 +18,30 @@
     "seller": "0x93Dafa6bFa2428CA033e8d6Fe9C94e40d1AC8754",
     "facilitator": "0x7fB8d49698E40656F727511Da6251D3e6dfFaD50"
   },
-  "note": "eip712Version 若来自默认值需人工核对；supportsEip3009=false 时切 Permit2"
+  "note": "eip712Version 若来自默认值需人工核对；supportsEip3009=false 时切 Permit2",
+  "memorial": {
+    "address": "0xE6b9865a5fbbb45bF58b8235D02Ec40d97D58E8d",
+    "symbol": "arena402-m",
+    "decimals": 0,
+    "eip712Name": "Arena 402 Memorial",
+    "eip712Version": "1",
+    "soulbound": true,
+    "whitelistGated": false,
+    "supportsEip3009": false,
+    "image": "TODO_UPLOAD_ICON_URL(assets/token-icons/arena402-m.png)",
+    "deployTx": "0xf9e8271d50c252844df2206dee2070dbc98c439b401af7b8292170967ea30ddc"
+  },
+  "gameCoin": {
+    "address": "0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884",
+    "symbol": "arena402-g",
+    "decimals": 6,
+    "eip712Name": "Arena 402 Gold",
+    "eip712Version": "1",
+    "soulbound": false,
+    "whitelistGated": true,
+    "supportsEip3009": true,
+    "domainSeparator": "0xb4818e40a5a587f8c3d13f02ffc41f719f4a27ec243731e7e6ec0b56ea28ddd8",
+    "image": "TODO_UPLOAD_ICON_URL(assets/token-icons/arena402-g.png)",
+    "deployTx": "0x831923363c14d18e89d2b485ba54a6322ad16489fecb57929cc5b0f70ddb29e9"
+  }
 }

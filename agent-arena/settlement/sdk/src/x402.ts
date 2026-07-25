@@ -55,6 +55,7 @@ export interface SignParams {
   to: string; // 卖方地址
   value: bigint; // atomic units
   dep: Deployments;
+  nonce?: Hex; // Arena bridge supplies the deterministic frozen-intent nonce
   validForSeconds?: number; // 默认 600s
   nowSeconds: number; // 显式传入当前时间（避免脚本环境时钟问题；调用方用 Date.now()）
 }
@@ -66,7 +67,10 @@ export async function signTransferAuthorization(p: SignParams): Promise<PaymentA
   const domain = eip712Domain(p.dep);
   const validAfter = 0n;
   const validBefore = BigInt(p.nowSeconds + (p.validForSeconds ?? 600));
-  const nonce = randomNonce();
+  const nonce = p.nonce ?? randomNonce();
+  if (!/^0x[0-9a-fA-F]{64}$/.test(nonce)) {
+    throw new Error("EIP-3009 nonce must be exactly 32 bytes");
+  }
 
   const message = {
     from: getAddress(p.account.address),

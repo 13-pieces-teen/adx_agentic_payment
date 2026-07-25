@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,9 @@ from .settlement import (
 
 class PawnhouseRepositoryError(RuntimeError):
     pass
+
+
+_INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _json(value: object) -> str:
@@ -1662,12 +1666,15 @@ class PostgresPawnhouseRepository:
                 i.*,
                 s.tx_hash,
                 s.submission_source,
+                a.approval_source,
                 c.block_number,
                 c.block_hash,
                 c.confirmation_count
             FROM arena402.settlement_intents AS i
             LEFT JOIN arena402.settlement_submissions AS s
               ON s.settlement_intent_id = i.settlement_intent_id
+            LEFT JOIN arena402.settlement_approvals AS a
+              ON a.settlement_intent_id = i.settlement_intent_id
             LEFT JOIN arena402.settlement_confirmations AS c
               ON c.settlement_intent_id = i.settlement_intent_id
             WHERE i.game_id = $1
@@ -1708,18 +1715,132 @@ class PostgresPawnhouseRepository:
             for row in rows
         ]
 
+    async def record_settlement_approval(
+        self,
+        *,
+        settlement_intent_id: str,
+        approved_intent_hash: str,
+        authorization_nonce: str,
+        approval_source: str,
+    ) -> dict[str, object]:
+        if not _INTENT_HASH.fullmatch(approved_intent_hash):
+            raise PawnhouseRepositoryError("invalid_approved_intent_hash")
+        if approval_source != "operator_cli":
+            raise PawnhouseRepositoryError("invalid_approval_source")
+        normalized_nonce = normalize_authorization_nonce(
+            authorization_nonce
+        )
+        nonce_digest = sha256_text_identifier(normalized_nonce)
+        expected_nonce = (
+            "0x" + approved_intent_hash.removeprefix("sha256:")
+        )
+        if normalized_nonce != expected_nonce:
+            raise PawnhouseRepositoryError(
+                "authorization_nonce_not_bound_to_intent"
+            )
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                intent = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.settlement_intents
+                    WHERE settlement_intent_id = $1
+                    FOR UPDATE
+                    """,
+                    settlement_intent_id,
+                )
+                if intent is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_intent_not_found"
+                    )
+                if intent["intent_hash"] != approved_intent_hash:
+                    raise PawnhouseRepositoryError(
+                        "approved_intent_hash_mismatch"
+                    )
+                existing = await connection.fetchrow(
+                    """
+                    SELECT
+                        approved_intent_hash,
+                        authorization_nonce_digest,
+                        approval_source
+                    FROM arena402.settlement_approvals
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
+                if existing is not None:
+                    if (
+                        existing["approved_intent_hash"]
+                        != approved_intent_hash
+                        or existing["authorization_nonce_digest"]
+                        != nonce_digest
+                        or existing["approval_source"] != approval_source
+                    ):
+                        raise PawnhouseRepositoryError(
+                            "settlement_approval_conflict"
+                        )
+                else:
+                    if intent["status"] != "authorization_requested":
+                        raise PawnhouseRepositoryError(
+                            "settlement_not_awaiting_approval"
+                        )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.settlement_approvals (
+                            settlement_intent_id,
+                            approved_intent_hash,
+                            authorization_nonce_digest,
+                            approval_source
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        """,
+                        settlement_intent_id,
+                        approved_intent_hash,
+                        nonce_digest,
+                        approval_source,
+                    )
+                    await self._event(
+                        connection,
+                        game_id=intent["game_id"],
+                        round_id=intent["round_id"],
+                        event_type="settlement.approved",
+                        source_key=f"{settlement_intent_id}:approved",
+                        public_payload={
+                            "settlementIntentId": settlement_intent_id,
+                            "intentHash": approved_intent_hash,
+                            "approvalSource": approval_source,
+                            "status": "authorization_requested",
+                        },
+                    )
+                value = dict(intent)
+                value.update(
+                    {
+                        "approval_source": approval_source,
+                        "tx_hash": None,
+                        "submission_source": None,
+                        "block_number": None,
+                        "block_hash": None,
+                        "confirmation_count": None,
+                    }
+                )
+                return self._settlement_public(value)
+
     async def record_settlement_submission(
         self,
         *,
         settlement_intent_id: str,
         tx_hash: str,
         authorization_nonce: str,
+        approved_intent_hash: str,
         submission_source: str,
     ) -> dict[str, object]:
         normalized_tx = normalize_tx_hash(tx_hash)
         normalized_nonce = normalize_authorization_nonce(
             authorization_nonce
         )
+        if not _INTENT_HASH.fullmatch(approved_intent_hash):
+            raise PawnhouseRepositoryError("invalid_approved_intent_hash")
         if submission_source not in {"wallet", "sandbox_guest"}:
             raise PawnhouseRepositoryError("invalid_submission_source")
         nonce_digest = sha256_text_identifier(normalized_nonce)
@@ -1739,6 +1860,17 @@ class PostgresPawnhouseRepository:
                     raise PawnhouseRepositoryError(
                         "settlement_intent_not_found"
                     )
+                approval = await connection.fetchrow(
+                    """
+                    SELECT
+                        approved_intent_hash,
+                        authorization_nonce_digest,
+                        approval_source
+                    FROM arena402.settlement_approvals
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                )
                 existing = await connection.fetchrow(
                     """
                     SELECT
@@ -1766,10 +1898,31 @@ class PostgresPawnhouseRepository:
                             "submission_source": existing[
                                 "submission_source"
                             ],
+                            "approval_source": (
+                                approval["approval_source"]
+                                if approval is not None
+                                else None
+                            ),
                             "block_number": None,
                             "block_hash": None,
                             "confirmation_count": None,
                         }
+                    )
+                if approval is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_approval_required"
+                    )
+                if (
+                    approval["approved_intent_hash"]
+                    != approved_intent_hash
+                    or approval["approved_intent_hash"]
+                    != intent["intent_hash"]
+                    or approval["authorization_nonce_digest"]
+                    != nonce_digest
+                    or approval["approval_source"] != "operator_cli"
+                ):
+                    raise PawnhouseRepositoryError(
+                        "settlement_approval_mismatch"
                     )
                 if intent["status"] not in (
                     "authorization_requested",
@@ -1819,6 +1972,7 @@ class PostgresPawnhouseRepository:
                         "status": "submitted",
                         "tx_hash": normalized_tx,
                         "submission_source": submission_source,
+                        "approval_source": approval["approval_source"],
                         "block_number": None,
                         "block_hash": None,
                         "confirmation_count": None,
@@ -2764,6 +2918,30 @@ class PostgresPawnhouseRepository:
                     "rankings": rankings,
                 }
 
+    async def inventory_commit_for_intent(
+        self,
+        *,
+        settlement_intent_id: str,
+    ) -> dict[str, object]:
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT
+                i.status,
+                c.*
+            FROM arena402.settlement_intents AS i
+            JOIN arena402.inventory_commits AS c
+              ON c.settlement_intent_id = i.settlement_intent_id
+            WHERE i.settlement_intent_id = $1
+            """,
+            settlement_intent_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError("inventory_commit_not_found")
+        return self._inventory_commit_public(
+            intent=row,
+            commit=row,
+        )
+
     async def game_state(self, game_id: str) -> dict[str, object]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -3504,8 +3682,16 @@ class PostgresPawnhouseRepository:
             if isinstance(raw_snapshot, str)
             else dict(raw_snapshot)
         )
+        intent = PostgresPawnhouseRepository._intent_from_row(row)
+        if snapshot != intent.to_snapshot():
+            raise PawnhouseRepositoryError(
+                "settlement_intent_snapshot_integrity_failure"
+            )
         snapshot.update(
             {
+                "intentHash": intent.intent_hash,
+                "approvalRecorded": row.get("approval_source") is not None,
+                "approvalSource": row.get("approval_source"),
                 "status": row["status"],
                 "safeErrorCode": row.get("safe_error_code"),
                 "txHash": row.get("tx_hash"),

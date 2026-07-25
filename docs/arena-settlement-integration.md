@@ -11,13 +11,24 @@ The following single-payment foundation is now implemented:
   pairing, round, and negotiation are frozen and hash-bound;
 - the local TypeScript bridge checks the frozen intent, signs locally, calls
   the project Facilitator, and refuses to broadcast without the operator's
-  explicit `--confirm-testnet-transfer` flag;
+  explicit `--confirm-testnet-transfer` flag and matching
+  `--approved-intent-hash`;
+- Arena records that hash-bound approval before broadcast, and the bridge
+  derives one deterministic EIP-3009 nonce from the immutable Intent hash;
 - Arena persists only the transaction hash and a nonce digest, never a wallet
   private key, raw signature, or raw nonce;
 - read-only recovery verifies chain ID, successful receipt, confirmation depth,
   and the exact ERC-20 `Transfer` before recording a confirmation;
 - cash and holdings move in one idempotent PostgreSQL transaction only after
   that persisted confirmation.
+
+The deterministic nonce closes the duplicate-payment retry hazard: a bridge
+restart cannot generate a second authorization for the same Intent. If the
+bridge loses the Facilitator response before recording the transaction hash,
+the operator must reconcile the public hash and resume with
+`--record-existing-tx-hash`; it must never authorize a replacement payment.
+`arena:submit-only` plus `arena:verify-restart` provides the explicit
+submitted-state/Worker-restart/inventory-replay acceptance drill.
 
 The no-broadcast dual Hosted Agent demonstration reaches
 `authorization_requested`. A rollback-only integration verifier has exercised
