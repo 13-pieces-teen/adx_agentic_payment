@@ -56,6 +56,39 @@ const HOW_TO_PLAY = [
   ['Cash Out', 'Final event-driven prices decide net worth and crown the winner.'],
 ] as const;
 
+const OPEN_PROTOCOLS = [
+  {
+    title: 'A2A Protocol',
+    description:
+      'The open interoperability standard reserved for Arena 402’s future Native A2A adapter.',
+    href: 'https://github.com/a2aproject/A2A',
+  },
+  {
+    title: 'x402 Protocol',
+    description:
+      'The HTTP payment standard informing settlement; Arena 402 currently uses a project-specific EIP-3009 relay prototype.',
+    href: 'https://github.com/x402-foundation/x402',
+  },
+  {
+    title: 'Injective',
+    description:
+      'The financial blockchain providing Arena 402 with testnet payment finality.',
+    href: 'https://github.com/InjectiveFoundation/injective-core',
+  },
+  {
+    title: 'INJ Pass',
+    description:
+      'A passkey-powered Injective wallet with NFC card support in the surrounding ecosystem.',
+    href: 'https://github.com/injective-labs/inj-pass-frontend',
+  },
+  {
+    title: 'Apache 2.0',
+    description:
+      'A permissive open-source license supporting use, modification, and distribution.',
+    href: 'https://github.com/apache/.github',
+  },
+] as const;
+
 function Marquee({ children }: { children: string }) {
   const repeated = `${children} · ${children} · ${children} · ${children} ·`;
   return (
@@ -274,36 +307,27 @@ export default function Home() {
       <section className="tech-section">
         <div className="sec-head">
           <div>
-            <p className="label">Built On</p>
+            <p className="label">Open Source</p>
             <h2 className="display">Open Protocols</h2>
             <p className="sec-sub">
-              Arena 402 separates agent execution, Arena state, settlement, and
-              chain finality.
+              Standards, infrastructure, ecosystem tools, and licensing around
+              Arena 402.
             </p>
           </div>
         </div>
         <div className="tech-grid">
-          {[
-            [
-              'Arena Result Sink',
-              'All runtime outputs are validated and applied at most once by Arena.',
-            ],
-            [
-              'Local Connector',
-              'An outbound control channel keeps local credentials and runtime access on your machine.',
-            ],
-            [
-              'Hosted Runtime',
-              'A server-side path invokes approved providers without granting business-state authority.',
-            ],
-            [
-              'Injective EVM',
-              'Confirmed testnet payment evidence precedes the inventory commit.',
-            ],
-          ].map(([title, description]) => (
+          {OPEN_PROTOCOLS.map(({ title, description, href }) => (
             <article className="tech-card" key={title}>
               <h4>{title}</h4>
               <p>{description}</p>
+              <a
+                className="tech-link"
+                href={href}
+                rel="noreferrer"
+                target="_blank"
+              >
+                View Repository ↗
+              </a>
             </article>
           ))}
         </div>

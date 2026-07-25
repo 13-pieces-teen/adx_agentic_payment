@@ -73,7 +73,8 @@ const READINESS_COPY: Record<string, string> = {
 
 const ERROR_COPY: Record<string, string> = {
   authentication_required: 'Sign in before creating or viewing Hosted Agents.',
-  csrf_required: 'Your sign-in session needs to be refreshed before continuing.',
+  csrf_required:
+    'Your sign-in could not be verified. Sign in again before continuing.',
   invalid_request: 'Check the form fields and try again.',
   idempotency_conflict:
     'This request changed after it was submitted. Refresh the page and try again.',
