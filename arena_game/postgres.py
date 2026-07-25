@@ -1068,6 +1068,84 @@ class PostgresPawnhouseRepository:
                 )
         return participant_id
 
+    async def withdraw_current_game_participant(
+        self,
+        *,
+        game_id: str,
+        participant_id: str,
+        user_id: str,
+    ) -> dict[str, object]:
+        """Withdraw a waiting participant and revoke its unused mandate."""
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                game = await connection.fetchrow(
+                    """
+                    SELECT game.phase
+                    FROM arena402.current_game AS pointer
+                    JOIN arena402.games AS game ON game.game_id = pointer.game_id
+                    WHERE pointer.singleton = TRUE AND game.game_id = $1
+                    FOR UPDATE OF pointer, game
+                    """,
+                    game_id,
+                )
+                if game is None:
+                    raise PawnhouseRepositoryError("game_not_current")
+                if game["phase"] not in {"registration", "portfolio_setup"}:
+                    raise PawnhouseRepositoryError("game_already_started")
+                participant = await connection.fetchrow(
+                    """
+                    SELECT game_participant_id, payment_mandate_id, readiness
+                    FROM arena402.game_participants
+                    WHERE game_participant_id = $1
+                      AND game_id = $2
+                      AND user_id = $3
+                    FOR UPDATE
+                    """,
+                    participant_id,
+                    game_id,
+                    user_id,
+                )
+                if participant is None:
+                    raise PawnhouseRepositoryError("participant_not_found")
+                if participant["readiness"] == "withdrawn":
+                    return {
+                        "gameId": game_id,
+                        "participantId": participant_id,
+                        "withdrawn": True,
+                    }
+                await connection.execute(
+                    """
+                    UPDATE arena402.game_participants
+                    SET readiness = 'withdrawn', status = 'cancelled',
+                        withdrawn_at = clock_timestamp()
+                    WHERE game_participant_id = $1
+                    """,
+                    participant_id,
+                )
+                if participant["payment_mandate_id"] is not None:
+                    await connection.execute(
+                        """
+                        UPDATE arena402.payment_mandates
+                        SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+                        WHERE mandate_id = $1
+                        """,
+                        participant["payment_mandate_id"],
+                    )
+                await self._event(
+                    connection,
+                    game_id=game_id,
+                    event_type="participant.withdrawn",
+                    source_key=f"{game_id}:{participant_id}:withdrawn",
+                    public_payload={"participantId": participant_id},
+                )
+        return {
+            "gameId": game_id,
+            "participantId": participant_id,
+            "withdrawn": True,
+        }
+
     async def start_game(
         self,
         *,

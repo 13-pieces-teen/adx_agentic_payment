@@ -41,6 +41,13 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
+    async def withdraw_current_game_participant(self, **values):
+        return {
+            "gameId": values["game_id"],
+            "participantId": values["participant_id"],
+            "withdrawn": True,
+        }
+
     async def start_game(self, *, game_id):
         return {
             "gameId": game_id,
@@ -488,6 +495,24 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
     assert joined["payment_mandate_id"] == "mandate-current"
     assert joined["join_authorization_id"] == "ja-current"
     assert joined["portfolio"].cash_atomic == 20_000_000
+
+
+def test_current_game_withdraw_is_authenticated_and_owner_scoped() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+    response = TestClient(app).delete(
+        "/api/v1/games/game_current/participants/gp:game_current:agent-current",
+        headers={"x-csrf-token": "csrf"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["withdrawn"] is True
 
 
 def test_development_mutations_require_the_explicit_token() -> None:

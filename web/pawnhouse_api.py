@@ -224,6 +224,7 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
             "game_not_found",
             "current_game_not_found",
             "inventory_commit_not_found",
+            "participant_not_found",
         }
         else 409
     )
@@ -446,6 +447,28 @@ def create_pawnhouse_participation_router(
             ),
             "schemaVersion": "arena.game-join.v2",
         }
+
+    @router.delete("/api/v1/games/{game_id}/participants/{participant_id}")
+    async def withdraw_current_game_participant(
+        game_id: _Id,
+        participant_id: _Id,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            principal = await auth.authenticate(request)
+            await auth.require_csrf(request, principal)
+            return await repository.withdraw_current_game_participant(
+                game_id=game_id,
+                participant_id=participant_id,
+                user_id=principal.user_id,
+            )
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from None
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
 
     @router.post(
         "/api/v1/pawnhouse/games/{game_id}/hosted-participants",
