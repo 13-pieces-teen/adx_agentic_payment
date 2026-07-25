@@ -91,6 +91,15 @@ Verified local PostgreSQL evidence on 2026-07-25:
   per participant, four frozen final prices, and eight terminal rankings;
 - two Hosted Agents completed five durable Runtime runs: 10 decisions, five
   pairings, 10 negotiation messages, five closed rounds, and two rankings;
+- a real DeepSeek V4 Flash Hosted Agent, updated through the same-provider
+  Runtime PATCH without resending its credential, completed five rounds
+  against a scripted counterparty: 10 decisions, five pairings, 10 public
+  negotiation messages, and 20 completed AgentTasks with no defaults;
+- the same real Hosted Agent completed an accepted one-round negotiation at
+  `7000000` atomic mUSDC and froze one Injective testnet SettlementIntent.
+  The intent remains at `authorization_requested`; no transaction is counted
+  as accepted evidence until explicit approval, broadcast, public
+  confirmation, and recovery-driven inventory commit all succeed;
 - an older accepted Hosted negotiation remained blocked in `settle` with one
   pending settlement. Automatic orchestration did not move inventory or skip
   the chain-confirmation gate.
@@ -124,8 +133,15 @@ Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游�
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
 
-王城典当行 clean-slate 实现已经开始。`arena_game/` 与 `006` 迁移是新的游戏业务
-内核权威；旧 `matching/` 不再作为目标实现。
+产品前端已迁移到
+[`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，计划由
+Vercel 部署。外部 `main` 已更新为 Next.js 15.5.21 并包含 Vercel 配置；legacy
+Agent/listing/ELO client 到 Pawnhouse/Hosted/Connector API 的迁移、Cookie/CORS
+联调和部署验收尚未完成。本仓库 `frontend/` 仅保留为 Compose 过渡壳。
+
+王城典当行 clean-slate 后端闭环已经形成。`arena_game/`、`arena_core/` 与
+PostgreSQL `arena402` schema 是游戏业务权威；旧 `matching/`、Supabase 业务
+适配、ELO API 和根静态前端已删除。
 
 ## 目标垂直切片
 
@@ -152,8 +168,8 @@ create game
       Balance、Holding、Event Schedule/Occurrence、Round、Price Snapshot、
       Game Event 与 Ranking 基础表。
 
-- [x] Python 内存版 Agent、listing/intent、matching、有限 negotiation、
-      Arena/ELO 和 FastAPI wrapper。
+- [x] FastAPI 组合根只挂载 Connector、Hosted Agent、Arena participation 与
+      Pawnhouse 表面；旧 Agent/listing/intent/negotiation/ELO 路由已移除。
 - [x] Python A2A/payment 边界类型、fixtures 和 mocks。
 - [x] self-hosted Local Agent Connector beta：出站配对/WSS、Runtime
       discovery、typed command、durable receipt/event、PostgreSQL 控制面、
@@ -163,7 +179,9 @@ create game
 - [x] SettlementSDK mock/real adapter。
 - [x] 买方授权、项目 Facilitator、nonce replay protection 和 direct mUSDC
       testnet transfer。
-- [x] CDN-only 静态 Arena 前端、Supabase Agent/Battle/Market/ELO 视图。
+- [x] 本仓库 Compose 过渡壳具备登录/配对、Hosted/Local Agent 管理、Game
+      Lobby、Game View、时间线和 Result 页面；旧市场/ELO URL 只保留到 `/game`
+      的兼容重定向。
 - [x] Hosted Agent Spec/Plan 已形成，并完成活动文档对统一 `action` schema、
       Secret Manager BYOK 例外、单局唯一、Deadline Finalizer 和 PaymentMandate
       边界的 Phase 0 同步。
@@ -196,7 +214,9 @@ create game
       `reserve / consume / release` 尚未实现。
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
-- [ ] 前端尚无 Game Lobby、Game View、Result 和对应 Realtime 数据流。
+- [ ] 外部前端已完成 Next.js 仓库升级，但尚需移除 legacy Agent/listing/ELO
+      API client，完成 Vercel 发布、Cookie/CORS 联调、Realtime 推送、完整 Game
+      Operator UI 与生产级错误恢复；完成后删除本仓库过渡壳。
 - [x] 固定五回合事件表、版本化十张牌组、确定性 seed 洗牌、schedule
       commitment、结束后 seed 揭晓与冻结终场价格已实现。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令
@@ -249,8 +269,9 @@ create game
 - [x] 实现确定性 PromptBuilder 和纯执行 DirectModelDriver；thinking 只按
       capability 开关并记录数值 usage，不保留 reasoning text。
 - [x] 每个 AgentTask 最多两个 Attempt，无 Provider/Model/Runtime fallback。
-- [ ] 接入至少一个真实、固定 HTTPS endpoint 的 Provider Adapter，并完成真实
-      安全出站和结构化调用验证。
+- [x] 已接入 DeepSeek/OpenAI-compatible 固定 HTTPS Provider Adapter，并完成
+      真实结构化调用、五回合执行与 accepted negotiation；生产服务器出站验收仍
+      属于 Phase 8。
 
 ### Phase 4：Hosted Agent API 与创建 UI
 
@@ -265,7 +286,10 @@ create game
       Connector code 直接登录。
 - [x] 实现生产 PostgreSQL control repository 与 Tencent SSM Secret Writer
       组合；真实 CAM/SSM 与刷新/重启验收仍待部署执行。
-- [ ] 实现 replace/revoke/revalidate/PATCH/disable/join 及其并发锁定规则。
+- [x] 实现 owner-scoped、同 Provider 的 Hosted Agent Runtime `PATCH`：
+      复用已验证 Credential，候选配置先经 durable validation，成功后原子切换，
+      失败时保留旧配置与可用 Credential；活动 Game 继续使用 join 时冻结的快照。
+- [ ] 实现 replace/revoke/revalidate/disable/join 的其余生命周期操作及并发锁定规则。
 - [x] Phase 5 Hosted Worker 可恢复地完成 `provisioning -> ready/degraded`。
 
 ### Phase 5：Durable Workers（M1）
@@ -308,7 +332,9 @@ create game
 
 ### Phase 8：前端、部署、E2E 与校准（M3）
 
-1. 增加 Game Lobby、Game View、Result 与公开/私有投影。
+- [x] Compose 过渡壳已有 Game Lobby、Game View、Result 与公开投影。
+- [ ] 外部前端完成对应页面、Vercel 部署及 API/CORS 端到端切换。
+- [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入三个无公网端口 Worker 与独立权限。
 3. 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
 4. 跑 2、4、8、16 Agent，记录 P50/P95/P99、queue age、timeout、retry、Token、

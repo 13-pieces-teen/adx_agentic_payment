@@ -46,7 +46,8 @@ The following remain outside the implemented foundation:
 - a newly approved live testnet transaction proving the complete path against
   the current deployed services.
 
-> 状态：目标集成契约；当前仓库尚未完成端到端接线。
+> 状态：单笔 EIP-3009 游戏接线已实现；PaymentMandate、无人值守 signer 与新鲜
+> live testnet 端到端验收尚未完成。
 >
 > 本文取代已归档的 RFQ/数字交付结算方案，只定义“协商被接受”到“链上确认后
 > 转移游戏货物”的边界。Settlement 模块当前能力和验证证据仍以
@@ -62,24 +63,26 @@ The following remain outside the implemented foundation:
 - 项目自建 Facilitator 的验证与提交；
 - Injective EVM testnet 上 mUSDC 的点对点转账；
 - nonce 重放保护；
-- mock/real SettlementSDK 适配器。
+- mock/real SettlementSDK 适配器；
+- accepted negotiation 到不可变 SettlementIntent 的持久化适配；
+- hash-bound 人工批准、提交记录、只读链上恢复和确认后幂等库存提交。
 
 当前验证限制：
 
 - Facilitator `/verify` 不恢复 EIP-712 签名；无效签名由 token contract 在
   `/settle` 时拒绝，仍可能消耗 relay gas；
-- `RealSettlement.lockFunds()` 只做本地 signer recovery，尚未把授权完整绑定
-  到 buyer、seller、amount、expiry、token、chain 和 `negotiationId`；
-- 游戏集成层必须在提交前补齐这些冻结参数校验。
+- `RealSettlement.lockFunds()` 单独使用时只做本地 signer recovery；Arena 的本地
+  bridge 必须继续在提交前校验完整冻结快照，不能绕过该集成层；
+- 当前证据包括 rollback-only 提交验证和历史交易只读恢复，不等于新鲜 live
+  交易已经验收。
 
 当前未实现：
 
-- Arena 游戏协商到 SettlementSDK 的持久化适配器；
 - 可覆盖一局多笔交易的 PaymentMandate，以及额度
   `reserve / consume / release`；
-- 游戏级幂等、崩溃恢复和数据库原子更新；
-- revoke 与 reserved/submitted 的竞态、chain unknown/reorg 恢复；
+- PaymentMandate revoke 与 reserved/submitted 的竞态及完整 reorg 策略；
 - 与 Hosted Worker 完全隔离的 guest signer service 权限接线；
+- 当前部署服务上的一笔新鲜、经批准 testnet 端到端交易；
 - 标准 HTTP `402 Payment Required` challenge/retry/header 流程；
 - 标准公共 x402 Facilitator 兼容；
 - 链上 escrow、退款、争议或生产手续费。

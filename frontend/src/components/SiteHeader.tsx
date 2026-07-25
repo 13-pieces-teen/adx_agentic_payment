@@ -10,9 +10,9 @@ import {
 } from '@/lib/connector-api';
 
 const PRIMARY_LINKS = [
-  { href: '/arena', label: 'Arena' },
-  { href: '/agents', label: 'Agents' },
   { href: '/game', label: 'Game' },
+  { href: '/agents', label: 'Agents' },
+  { href: '/connect', label: 'Connect' },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
@@ -81,12 +81,6 @@ export default function SiteHeader() {
       </Link>
 
       <div className="nav-links right">
-        <Link
-          href="/market"
-          className={`nav-link ${isActive(pathname, '/market') ? 'active' : ''}`}
-        >
-          Market
-        </Link>
         {loading ? (
           <span className="nav-session-loading" aria-label="Checking session" />
         ) : session ? (

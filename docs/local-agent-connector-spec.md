@@ -1,11 +1,14 @@
 # Arena 402 本地 Agent Connector 产品与技术规格
 
 > 文档状态：Self-hosted beta 规格，与当前仓库实现同步
-> 最后更新：2026-07-24
+> 最后更新：2026-07-25
 > 适用范围：用户本地 Agent Runtime 接入 Arena 402 的出站 Connector
 > 对应计划：[`local-agent-connector-implementation-plan.md`](./local-agent-connector-implementation-plan.md)
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
 > 统一 Runtime 目标：[`hosted-arena-agent-spec.md`](./hosted-arena-agent-spec.md)
+> 前端边界：产品 UI 已迁移到
+> [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)；
+> 本仓库 Next.js 仅为 Compose 过渡壳，外部 Vercel/API 切换尚未验收
 
 ## 1. 核心结论
 
@@ -34,8 +37,8 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 当前实现仍有五个明确边界：
 
 1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
-2. `matching/`、Arena 和 Negotiation 的业务状态仍是进程内状态，不能作为
-   Game/Round/Inventory 的可靠账本或结算权威来源。
+2. Arena 的 Game/Round/Pool/Negotiation/Inventory 已由 PostgreSQL 持久化；
+   Connector 仍未接入该业务链，也无权直接修改这些状态。
 3. Runtime task 默认 detection-only；fixed-argv Codex/Claude runner 不具备完整的平台审批闭环。
 4. 安装包目前有 HTTPS 传输与 SHA-256 校验，但签名发布、SBOM、独立信任根和安全自动更新仍是后续。
 5. Connector WSS 尚未实现版本化 `arena.agent-task.v1` /
@@ -183,7 +186,7 @@ Arena Agent 仍由 Arena identity store 拥有；Arena route 通过 Connector Bi
 
 - `create_app()` 在 `ADX_ENV=production` 或 `ADX_CONNECTOR_MODE=production` 时构建 production bundle，并挂载认证 Router；
 - 生产 bundle 使用 PostgreSQL repository、Auth、Persistent Gateway 和 production Router；
-- `create_app_with_db()` 是遗留开发工厂，在生产环境显式 fail-closed，不能绕过 production bundle；
+- 已删除遗留 Supabase 开发工厂；`create_app()` 是唯一 HTTP 组合根；
 - 未认证内存 demo 默认关闭，只能显式设置 `ADX_CONNECTOR_UNSAFE_DEMO=true`，并且按直连 peer 限制为 loopback；
 - unsafe demo 不得位于公网反向代理之后。
 
@@ -425,11 +428,12 @@ adapter 已完成。
 这些信号不是同一权威来源：
 
 - Connector Gateway 是设备与 Runtime 控制状态的权威来源；
-- `matching/` 与 Arena 是当前演示业务状态来源，但仍为进程内状态；
+- Arena Game Core 与 PostgreSQL `arena402` schema 是游戏业务权威；
 - 支付、托管与链上服务才可决定资金最终性；
 - Runtime 文本或工具事件只是可观察证据，不能证明支付或交付完成。
 
-Arena 接线后还要增加第四类、由 Arena 拥有的业务结果链：
+Hosted/rule Runtime 已使用以下由 Arena 拥有的业务结果链；Local Connector
+Adapter 仍需接入：
 
 ```text
 AgentTask created
@@ -466,20 +470,20 @@ private chain-of-thought。
 | 范围 | 主要路径 | 当前状态 |
 |---|---|---|
 | Self-hosted Auth | `connector_gateway/auth.py`、`repository.py`、`postgres_repository.py` | 已实现 invite/register/login/session/logout、Argon2id、签名 Session Cookie、CSRF、session revoke |
-| Production config | `connector_gateway/config.py`、`production.py`、`web/api.py` | 已实现 fail-closed；`create_app_with_db()` 在生产拒绝启动 |
+| Production config | `connector_gateway/config.py`、`production.py`、`web/api.py` | 已实现 fail-closed；遗留 Supabase 工厂已删除 |
 | Tenant-like object auth | `connector_gateway/api.py`、`web/api.py` | 已实现 user-owner scope 和跨用户对象隐藏；组织 tenant/RBAC 未实现 |
 | PostgreSQL persistence | `db/migrations/002_connector_gateway.sql`、`persistent_service.py` | 已实现 beta 持久化与重启恢复；Event/Audit 增量且有界，其余 mutable state snapshot/upsert、单 worker |
 | Command delivery | `connector_gateway/service.py`、`persistent_service.py` | 已实现 durable pre-delivery barrier、重排与幂等 |
 | Public ingress protection | `rate_limit.py`、`service.py` | 已实现 auth/Pairing 限流、key 上限、Pairing 过期清理与容量上限 |
 | Local Connector | `connector/` | 已实现 discovery、pair/connect/run、WSS、outbox/receipt、owned child；默认 detection-only |
 | Onboarding | `frontend/src/app/connect/page.tsx`、`deploy/install/` | 已实现浏览器授权、Windows Scheduled Task、Linux systemd user service |
-| Frontend | `frontend/` | 已移除 Supabase runtime dependency；Next.js 固定为 15.5.21 |
+| Frontend | 外部 `sunruize93-cmyk/arena402` + 本地 `frontend/` 过渡壳 | 产品 UI 已迁移但 Vercel/API 切换未验收；当前 Compose 仍使用固定 Next.js 15.5.21 壳 |
 | Self-hosted deployment | `docker-compose.production.yml`、`deploy/` | 已实现单机部署资产、域名/IP TLS 和安装包托管；真实服务器 E2E 待执行 |
-| Arena business durability | `matching/`、`web/api.py` | 未实现；业务 registry/orderbook/negotiation 仍为内存状态，不可用于金融生产 |
+| Arena business durability | `arena_game/`、`arena_core/`、`db/migrations/006_*`–`012_*` | Game/Round/Pool/Pairing/Negotiation/Inventory/Ranking 已持久化；Connector 仍不可直接写入 |
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |
 | Signed release / SBOM | `deploy/artifacts/` | 未实现；当前仅 HTTPS + SHA-256 |
 | Native A2A Endpoint | 未接入 | 第二方案，后续独立实现 |
-| Arena typed task/result | `task.dispatch` v1 尚无目标业务 variant | 未实现；缺少统一 `action` schema、terminal Result、Result Sink/Finalizer |
+| Arena typed task/result | `arena_agent_contracts/`、`arena_core/` | 统一 schema、Result Sink/Consumer/Finalizer 已实现；Connector WSS 映射仍未实现 |
 
 ## 13. 验收门槛
 

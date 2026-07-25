@@ -28,8 +28,8 @@ It does not own:
 - payment finality;
 - frontend presentation.
 
-The package is intentionally independent from the legacy in-memory `matching/`
-prototype. PostgreSQL persistence begins in
+This package is the sole maintained game-domain implementation; the former
+in-memory matching/ELO prototype has been removed. PostgreSQL persistence begins in
 `db/migrations/006_arena_world_game_core.sql` under the isolated `arena402`
 schema.
 

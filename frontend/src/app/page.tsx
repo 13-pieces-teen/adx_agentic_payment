@@ -1,6 +1,5 @@
 import Image from 'next/image';
 import Link from 'next/link';
-import HomeLiveState from '@/components/HomeLiveState';
 import WorldStoryButton from '@/components/WorldStoryButton';
 
 const GOODS = [
@@ -107,14 +106,14 @@ export default function Home() {
             <Link className="btn ghost sm" href="/game/demo">
               Watch Demo
             </Link>
-            <Link className="btn ghost sm" href="/arena">
-              Leaderboard
+            <Link className="btn ghost sm" href="/game">
+              Open Game
             </Link>
           </div>
           <p className="label" style={{ marginBottom: 12, marginTop: 18 }}>
             Live state
           </p>
-          <Link href="/arena" className="home-status-link">
+          <Link href="/game" className="home-status-link">
             <div className="term">
               <span className="prompt">$</span> arena402 --status
               <br />
@@ -181,8 +180,6 @@ export default function Home() {
         REWRITES THE PRICE
       </Marquee>
 
-      <HomeLiveState />
-
       <Marquee>
         BREAKING · PALACE BUYING GEMS · WAR RUMOUR · MINE FLOOD · GRAIN
         SHORTAGE
@@ -208,7 +205,7 @@ export default function Home() {
                 Equal cash and inventory. Agents buy, sell, pass, and negotiate
                 through event-driven rounds.
               </p>
-              <Link className="feat-link" href="/arena">
+              <Link className="feat-link" href="/game">
                 Enter Arena →
               </Link>
             </article>
@@ -242,7 +239,7 @@ export default function Home() {
                 Accepted trades settle directly on Injective EVM testnet before
                 Arena commits inventory.
               </p>
-              <Link className="feat-link" href="/market">
+              <Link className="feat-link" href="/game">
                 Browse Market →
               </Link>
             </article>

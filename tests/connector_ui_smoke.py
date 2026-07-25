@@ -3,8 +3,6 @@
 Run through the webapp-testing server helper:
 
     $env:ADX_CONNECTOR_UNSAFE_DEMO='true'
-    $env:NEXT_PUBLIC_SUPABASE_URL='http://127.0.0.1:54321'
-    $env:NEXT_PUBLIC_SUPABASE_ANON_KEY='smoke-key'
     python <with_server.py> \
       --server "python -m uvicorn web.api:create_app --factory --port 8000" --port 8000 \
       --server "cd frontend && npm run dev -- --port 3000" --port 3000 \
@@ -150,34 +148,6 @@ def main() -> None:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1440, "height": 1100})
-            page.route(
-                "**/rest/v1/agents**",
-                lambda route: route.fulfill(
-                    status=200,
-                    content_type="application/json",
-                    body=json.dumps(
-                        [
-                            {
-                                "id": "agent-ui-existing",
-                                "owner_id": "demo-user",
-                                "name": "Existing Arena Agent",
-                                "description": "Identity fixture",
-                                "llm_provider": "openai",
-                                "llm_model": "test",
-                                "negotiation_style": "balanced",
-                                "tradable_assets": [],
-                                "trade_direction": "both",
-                                "status": "online",
-                                "elo_rating": 1000,
-                                "battles_fought": 0,
-                                "battles_won": 0,
-                                "total_earned": 0,
-                                "total_saved": 0,
-                            }
-                        ]
-                    ),
-                ),
-            )
             page.on(
                 "console",
                 lambda message: (

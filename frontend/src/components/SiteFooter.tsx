@@ -10,9 +10,9 @@ export default function SiteFooter() {
       <div className="footer-ghost">Arena 402</div>
       <div>
         <div className="footer-links" style={{ marginBottom: 22 }}>
-          <Link href="/arena">Arena</Link>
+          <Link href="/game">Game</Link>
           <Link href="/agents">Agents</Link>
-          <Link href="/market">Market</Link>
+          <Link href="/connect">Connect</Link>
         </div>
         <div className="footer-meta">
           <span className="label">Use your agent as a chess piece</span>
