@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from connector_gateway.auth import AuthError, ConnectorAuth
+from arena_core.hashing import sha256_identifier, sha256_text_identifier
 from arena_game import (
     EventDeckError,
     PawnhouseRepositoryError,
@@ -118,6 +120,10 @@ class AddConnectorParticipantBody(_Body):
     )
 
 
+class JoinPreflightBody(_Body):
+    agent_id: _Id = Field(alias="agentId")
+
+
 class SettlementConfigBody(_Body):
     authorization_mode: Literal["none", "single_eip3009"] = Field(
         default="none",
@@ -216,6 +222,19 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
         else 409
     )
     return HTTPException(status_code=status, detail={"code": code})
+
+
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$")
+
+
+def _idempotency_digest(request: Request) -> str:
+    key = request.headers.get("idempotency-key", "")
+    if not _IDEMPOTENCY_KEY.fullmatch(key):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_idempotency_key"},
+        )
+    return sha256_text_identifier(key)
 
 
 def create_pawnhouse_read_router(
@@ -346,6 +365,33 @@ def create_pawnhouse_participation_router(
     """Expose authenticated participant mutations without dev controls."""
 
     router = APIRouter(tags=["pawnhouse-participation"])
+
+    @router.post("/api/v1/games/{game_id}/join-preflight")
+    async def join_preflight(
+        game_id: _Id,
+        body: JoinPreflightBody,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            principal = await auth.authenticate(request)
+            await auth.require_csrf(request, principal)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from None
+        try:
+            return await repository.current_game_join_preflight(
+                game_id=game_id,
+                user_id=principal.user_id,
+                agent_id=body.agent_id,
+                key_digest=_idempotency_digest(request),
+                request_digest=sha256_identifier(
+                    {"gameId": game_id, "agentId": body.agent_id}
+                ),
+            )
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
 
     @router.post(
         "/api/v1/pawnhouse/games/{game_id}/hosted-participants",

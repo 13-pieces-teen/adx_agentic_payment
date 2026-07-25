@@ -17,6 +17,7 @@ class _Repository:
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
         self.participants: list[dict[str, object]] = []
+        self.preflights: list[dict[str, object]] = []
         self.approvals: list[dict[str, object]] = []
         self.submissions: list[dict[str, object]] = []
 
@@ -94,6 +95,33 @@ class _Repository:
             },
             "nextGamePending": False,
             "schemaVersion": "arena.current-game.v1",
+        }
+
+    async def current_game_join_preflight(self, **values):
+        self.preflights.append(values)
+        return {
+            "gameId": values["game_id"],
+            "agentId": values["agent_id"],
+            "joinAuthorizationId": "ja:test",
+            "checks": {
+                "game": "READY",
+                "agent": "READY",
+                "runtime": "READY",
+                "wallet": "READY",
+                "paymentMandate": "ACTION_REQUIRED",
+            },
+            "mandateRequirements": {
+                "chainId": 1439,
+                "tokenAddress": "0x" + "11" * 20,
+                "tokenSymbol": "mUSDC",
+                "tokenDecimals": 6,
+                "maxPerPaymentAtomic": "10000000",
+                "maxCumulativeAtomic": "50000000",
+                "allowedPayeeRule": "SAME_GAME_SETTLEMENT_ACCOUNT",
+                "expiresAt": "2026-07-25T10:00:00+00:00",
+            },
+            "safeErrorCode": None,
+            "schemaVersion": "arena.game-join-preflight.v1",
         }
 
     async def automation_state(self, *, game_id):
@@ -396,6 +424,31 @@ def test_authenticated_participation_router_excludes_dev_controls() -> None:
     assert dev_mutation.status_code == 404
 
 
+def test_current_game_join_preflight_is_authenticated_and_idempotent() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/games/game_current/join-preflight",
+        headers={"Idempotency-Key": "preflight-key-0001"},
+        json={"agentId": "agent-hosted-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["joinAuthorizationId"] == "ja:test"
+    assert response.json()["mandateRequirements"]["allowedPayeeRule"] == (
+        "SAME_GAME_SETTLEMENT_ACCOUNT"
+    )
+    assert repository.preflights[-1]["user_id"] == "user-local"
+    assert repository.preflights[-1]["agent_id"] == "agent-hosted-1"
+
+
 def test_development_mutations_require_the_explicit_token() -> None:
     client, _ = _client()
     response = client.post(
@@ -508,8 +561,6 @@ def test_create_game_freezes_a_twelve_agent_participant_limit() -> None:
 
     assert created.status_code == 201
     assert repository.created[0]["max_participants"] == 12
-
-
 def test_start_game_uses_the_schedule_persisted_at_creation() -> None:
     client, _ = _client()
     started = client.post(

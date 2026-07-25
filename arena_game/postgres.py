@@ -7,7 +7,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
@@ -3710,6 +3710,168 @@ class PostgresPawnhouseRepository:
             },
             "nextGamePending": status == "COMPLETED",
             "schemaVersion": "arena.current-game.v1",
+        }
+
+    async def current_game_join_preflight(
+        self,
+        *,
+        game_id: str,
+        user_id: str,
+        agent_id: str,
+        key_digest: str,
+        request_digest: str,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        """Issue a short-lived, non-reserving authorization for product Join."""
+
+        issued_at = now or datetime.now(timezone.utc)
+        expires_at = issued_at + timedelta(minutes=10)
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                game = await connection.fetchrow(
+                    """
+                    SELECT g.game_id, g.phase, g.config_snapshot
+                    FROM arena402.current_game AS pointer
+                    JOIN arena402.games AS g ON g.game_id = pointer.game_id
+                    WHERE pointer.singleton = TRUE
+                      AND g.game_id = $1
+                    FOR SHARE OF pointer, g
+                    """,
+                    game_id,
+                )
+                if game is None:
+                    raise PawnhouseRepositoryError("game_not_current")
+                if game["phase"] not in {"registration", "portfolio_setup"}:
+                    raise PawnhouseRepositoryError("game_already_started")
+
+                runtime = await connection.fetchrow(
+                    """
+                    SELECT b.runtime_binding_id
+                    FROM public.arena_agents AS agent
+                    JOIN public.arena_runtime_bindings AS b
+                      ON b.agent_id = agent.agent_id
+                     AND b.runtime_kind = 'hosted'
+                     AND b.disabled_at IS NULL
+                     AND b.route_status = 'ready'
+                    JOIN public.arena_hosted_configs AS hosted
+                      ON hosted.hosted_config_id = b.hosted_config_id
+                     AND hosted.agent_id = agent.agent_id
+                     AND hosted.status = 'ready'
+                    JOIN public.arena_model_credentials AS credential
+                      ON credential.credential_id = hosted.credential_id
+                     AND credential.status = 'valid'
+                    WHERE agent.agent_id = $1
+                      AND agent.owner_user_id = $2
+                      AND agent.status = 'active'
+                    """,
+                    agent_id,
+                    user_id,
+                )
+                if runtime is None:
+                    raise PawnhouseRepositoryError("runtime_not_ready")
+
+                config = (
+                    json.loads(game["config_snapshot"])
+                    if isinstance(game["config_snapshot"], str)
+                    else dict(game["config_snapshot"])
+                )
+                settlement = self._settlement_config(config)
+                if settlement.authorization_mode != "single_eip3009":
+                    raise PawnhouseRepositoryError("settlement_not_available")
+                wallet = await connection.fetchrow(
+                    """
+                    SELECT wallet_id, chain_id
+                    FROM arena402.user_wallets
+                    WHERE user_id = $1
+                    FOR SHARE
+                    """,
+                    user_id,
+                )
+                if wallet is None or int(wallet["chain_id"]) != settlement.chain_id:
+                    raise PawnhouseRepositoryError("wallet_not_ready")
+
+                existing = await connection.fetchrow(
+                    """
+                    SELECT join_authorization_id, agent_id, request_digest,
+                           expires_at, status
+                    FROM arena402.join_authorizations
+                    WHERE user_id = $1 AND key_digest = $2
+                    FOR UPDATE
+                    """,
+                    user_id,
+                    key_digest,
+                )
+                if existing is not None:
+                    if (
+                        existing["request_digest"] != request_digest
+                        or existing["agent_id"] != agent_id
+                    ):
+                        raise PawnhouseRepositoryError("idempotency_conflict")
+                    if (
+                        existing["status"] == "pending"
+                        and existing["expires_at"] > issued_at
+                    ):
+                        authorization_id = str(existing["join_authorization_id"])
+                    else:
+                        raise PawnhouseRepositoryError("join_authorization_expired")
+                else:
+                    await connection.execute(
+                        """
+                        UPDATE arena402.join_authorizations
+                        SET status = 'expired'
+                        WHERE user_id = $1
+                          AND game_id = $2
+                          AND status = 'pending'
+                          AND expires_at <= $3
+                        """,
+                        user_id,
+                        game_id,
+                        issued_at,
+                    )
+                    authorization_id = f"ja:{uuid.uuid4().hex}"
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.join_authorizations (
+                            join_authorization_id, user_id, game_id, agent_id,
+                            key_digest, request_digest, expires_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        """,
+                        authorization_id,
+                        user_id,
+                        game_id,
+                        agent_id,
+                        key_digest,
+                        request_digest,
+                        expires_at,
+                    )
+
+        assert settlement.chain_id is not None
+        assert settlement.token_address is not None
+        return {
+            "gameId": game_id,
+            "agentId": agent_id,
+            "joinAuthorizationId": authorization_id,
+            "checks": {
+                "game": "READY",
+                "agent": "READY",
+                "runtime": "READY",
+                "wallet": "READY",
+                "paymentMandate": "ACTION_REQUIRED",
+            },
+            "mandateRequirements": {
+                "chainId": settlement.chain_id,
+                "tokenAddress": settlement.token_address,
+                "tokenSymbol": settlement.token_symbol,
+                "tokenDecimals": settlement.token_decimals,
+                "maxPerPaymentAtomic": "10000000",
+                "maxCumulativeAtomic": "50000000",
+                "allowedPayeeRule": "SAME_GAME_SETTLEMENT_ACCOUNT",
+                "expiresAt": expires_at.isoformat(),
+            },
+            "safeErrorCode": None,
+            "schemaVersion": "arena.game-join-preflight.v1",
         }
 
     async def game_state(self, game_id: str) -> dict[str, object]:
