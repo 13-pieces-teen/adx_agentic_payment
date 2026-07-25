@@ -132,6 +132,18 @@ class SettlementConfigBody(_Body):
         le=18,
         alias="tokenDecimals",
     )
+    token_eip712_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        alias="tokenEip712Name",
+    )
+    token_eip712_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        alias="tokenEip712Version",
+    )
     required_confirmations: int = Field(
         default=1,
         ge=1,
@@ -465,6 +477,10 @@ def create_pawnhouse_router(
                     token_address=body.settlement.token_address,
                     token_symbol=body.settlement.token_symbol,
                     token_decimals=body.settlement.token_decimals,
+                    token_eip712_name=body.settlement.token_eip712_name,
+                    token_eip712_version=(
+                        body.settlement.token_eip712_version
+                    ),
                     required_confirmations=(
                         body.settlement.required_confirmations
                     ),

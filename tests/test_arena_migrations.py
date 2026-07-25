@@ -19,7 +19,7 @@ LOCAL_CONNECTOR_SQL_PATH = (
     ROOT
     / "db"
     / "migrations"
-    / "015_arena_local_connector_runtime.sql"
+    / "021_arena_local_connector_runtime.sql"
 )
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)

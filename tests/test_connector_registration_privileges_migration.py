@@ -7,7 +7,7 @@ MIGRATION = (
     Path(__file__).resolve().parents[1]
     / "db"
     / "migrations"
-    / "019_arena_connector_registration_privileges.sql"
+    / "023_arena_connector_registration_privileges.sql"
 )
 
 

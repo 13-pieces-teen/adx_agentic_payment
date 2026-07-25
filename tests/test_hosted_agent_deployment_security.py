@@ -38,6 +38,7 @@ def test_production_workers_are_separate_non_public_services() -> None:
     assert "hosted-worker:" in compose
     assert "credential-controller:" in compose
     assert "arena-worker:" in compose
+    assert "settlement-worker:" in compose
     assert (
         'command: ["python", "-m", '
         '"hosted_agent_runtime.production_worker"]'
@@ -49,6 +50,7 @@ def test_production_workers_are_separate_non_public_services() -> None:
     assert (
         'command: ["python", "-m", "arena_game.production_worker"]'
     ) in compose
+    assert "arena_payments.production_service:create_app" in compose
     for service_block in (
         compose.split("  hosted-worker:", 1)[1].split(
             "\n  credential-controller:", 1
@@ -57,12 +59,31 @@ def test_production_workers_are_separate_non_public_services() -> None:
             "\n  arena-worker:", 1
         )[0],
         compose.split("  arena-worker:", 1)[1].split(
-            "\n  web:", 1
+            "\n  settlement-worker:", 1
+        )[0],
+        compose.split("  settlement-worker:", 1)[1].split(
+            "\n  wallet-signer:", 1
         )[0],
     ):
         assert "\n    ports:" not in service_block
         assert "read_only: true" in service_block
         assert "no-new-privileges:true" in service_block
+    arena_block = compose.split("  arena-worker:", 1)[1].split(
+        "\n  settlement-worker:", 1
+    )[0]
+    assert "ADX_WALLET_SIGNER_TOKEN" not in arena_block
+    assert "ADX_X402_FACILITATOR_AUTHORIZATION" not in arena_block
+    settlement_block = compose.split("  settlement-worker:", 1)[1].split(
+        "\n  wallet-signer:", 1
+    )[0]
+    assert "adx_settlement_login" in settlement_block
+    assert "ADX_WALLET_SIGNER_TOKEN" in settlement_block
+    api_environment = compose.split(
+        "x-api-environment: &api-environment", 1
+    )[1].split("\nservices:", 1)[0]
+    assert "ADX_WALLET_SIGNER_TOKEN" not in api_environment
+    assert "ADX_X402_FACILITATOR_AUTHORIZATION" not in api_environment
+    assert "ADX_SETTLEMENT_SERVICE_URL" in api_environment
 
 
 def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> None:
@@ -73,6 +94,7 @@ def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> N
         "ADX_API_DATABASE_PASSWORD",
         "ADX_HOSTED_WORKER_DATABASE_PASSWORD",
         "ADX_ARENA_CORE_DATABASE_PASSWORD",
+        "ADX_SETTLEMENT_DATABASE_PASSWORD",
         "ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD",
     ):
         assert f"printf '{name}=%s" in generator
@@ -83,6 +105,8 @@ def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> N
     assert "ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED=false" in generator
     assert "ADX_TENCENT_SSM_IAM_VERIFIED=false" in generator
     assert "ADX_ENABLE_ARENA_WORKER=true" in generator
+    assert "ADX_ENABLE_SETTLEMENT_WORKER=false" in generator
+    assert "ADX_SETTLEMENT_SERVICE_TOKEN=%s" in generator
 
 
 def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
@@ -92,10 +116,15 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
     assert 'enable_hosted_runtime="$(env_value ADX_ENABLE_HOSTED_RUNTIME)"' in deploy
     assert 'enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"' in deploy
     assert (
+        'enable_settlement_worker="$(env_value ADX_ENABLE_SETTLEMENT_WORKER)"'
+        in deploy
+    )
+    assert (
         'compose --profile hosted up -d hosted-worker '
         "credential-controller"
     ) in deploy
     assert "compose --profile arena up -d arena-worker" in deploy
+    assert "compose --profile settlement up -d settlement-worker" in deploy
     assert "Arena Worker requires ADX_ARENA_CORE_ENABLED=true." in deploy
     assert "PostgreSQL AES-GCM Hosted credentials" in deploy
     assert "Tencent SSM Hosted credentials" in deploy

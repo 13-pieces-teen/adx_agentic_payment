@@ -32,6 +32,12 @@ x-api-environment: &api-environment
   ADX_HOSTED_AGENTS_ENABLED: ${ADX_HOSTED_AGENTS_ENABLED:-false}
   ADX_ARENA_PARTICIPATION_ENABLED: ${ADX_ARENA_PARTICIPATION_ENABLED:-true}
   ADX_ARENA_CORE_ENABLED: ${ADX_ARENA_CORE_ENABLED:-true}
+  ADX_ARENA_PAYMENTS_ENABLED: ${ADX_ARENA_PAYMENTS_ENABLED:-true}
+  ADX_PUBLIC_API_URL: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
+  ADX_X402_FACILITATOR_ID: ${ADX_X402_FACILITATOR_ID:-}
+  ADX_SETTLEMENT_SERVICE_URL: ${ADX_SETTLEMENT_SERVICE_URL:-http://settlement-worker:8790}
+  ADX_SETTLEMENT_SERVICE_TOKEN: ${ADX_SETTLEMENT_SERVICE_TOKEN:?Set ADX_SETTLEMENT_SERVICE_TOKEN in deploy/.env}
+  ADX_ARENA_ADMIN_GITHUB_SUBJECTS: ${ADX_ARENA_ADMIN_GITHUB_SUBJECTS:-}
   ADX_ARENA_CORE_DATABASE_URL: postgresql://adx_arena_core_login:${ADX_ARENA_CORE_DATABASE_PASSWORD:?Set ADX_ARENA_CORE_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
   ADX_HOSTED_FINGERPRINT_PEPPER_B64: ${ADX_HOSTED_FINGERPRINT_PEPPER_B64:-}
   ADX_HOSTED_FINGERPRINT_PEPPER_VERSION: ${ADX_HOSTED_FINGERPRINT_PEPPER_VERSION:-1}
@@ -126,7 +132,10 @@ services:
       ADX_API_DATABASE_PASSWORD: ${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}
       ADX_HOSTED_WORKER_DATABASE_PASSWORD: ${ADX_HOSTED_WORKER_DATABASE_PASSWORD:?Set ADX_HOSTED_WORKER_DATABASE_PASSWORD in deploy/.env}
       ADX_ARENA_CORE_DATABASE_PASSWORD: ${ADX_ARENA_CORE_DATABASE_PASSWORD:?Set ADX_ARENA_CORE_DATABASE_PASSWORD in deploy/.env}
+      ADX_SETTLEMENT_DATABASE_PASSWORD: ${ADX_SETTLEMENT_DATABASE_PASSWORD:?Set ADX_SETTLEMENT_DATABASE_PASSWORD in deploy/.env}
       ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD: ${ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD:?Set ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD in deploy/.env}
+      ADX_WALLET_SIGNER_DATABASE_PASSWORD: ${ADX_WALLET_SIGNER_DATABASE_PASSWORD:?Set ADX_WALLET_SIGNER_DATABASE_PASSWORD in deploy/.env}
+      ADX_WALLET_IMPORTER_DATABASE_PASSWORD: ${ADX_WALLET_IMPORTER_DATABASE_PASSWORD:?Set ADX_WALLET_IMPORTER_DATABASE_PASSWORD in deploy/.env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -306,6 +315,242 @@ services:
     stop_grace_period: 30s
     cpus: 0.30
     mem_limit: 320m
+    logging: *default-logging
+
+  settlement-worker:
+    profiles:
+      - settlement
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "arena_payments.production_service:create_app",
+        "--factory",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8790",
+        "--no-access-log",
+      ]
+    environment:
+      ADX_SETTLEMENT_DATABASE_URL: postgresql://adx_settlement_login:${ADX_SETTLEMENT_DATABASE_PASSWORD:?Set ADX_SETTLEMENT_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED: ${ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED:-false}
+      ADX_PUBLIC_API_URL: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
+      ADX_X402_FACILITATOR_URL: ${ADX_X402_FACILITATOR_URL:?Set ADX_X402_FACILITATOR_URL in deploy/.env}
+      ADX_X402_FACILITATOR_ID: ${ADX_X402_FACILITATOR_ID:?Set ADX_X402_FACILITATOR_ID in deploy/.env}
+      ADX_X402_FACILITATOR_AUTHORIZATION: ${ADX_X402_FACILITATOR_AUTHORIZATION:-}
+      ADX_WALLET_SIGNER_URL: ${ADX_WALLET_SIGNER_URL:?Set ADX_WALLET_SIGNER_URL in deploy/.env}
+      ADX_WALLET_SIGNER_TOKEN: ${ADX_WALLET_SIGNER_TOKEN:?Set ADX_WALLET_SIGNER_TOKEN in deploy/.env}
+      ADX_SETTLEMENT_SERVICE_TOKEN: ${ADX_SETTLEMENT_SERVICE_TOKEN:?Set ADX_SETTLEMENT_SERVICE_TOKEN in deploy/.env}
+      ADX_SETTLEMENT_WORKER_POLL_SECONDS: ${ADX_SETTLEMENT_WORKER_POLL_SECONDS:-0.5}
+      ADX_SETTLEMENT_LEASE_SECONDS: ${ADX_SETTLEMENT_LEASE_SECONDS:-60}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    expose:
+      - "8790"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen("http://127.0.0.1:8790/health", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  wallet-signer:
+    profiles:
+      - testnet-signer
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.wallet-signer
+    restart: unless-stopped
+    init: true
+    environment:
+      ADX_WALLET_SIGNER_BACKEND: postgres_aesgcm
+      ADX_WALLET_SIGNER_DATABASE_URL: postgresql://adx_wallet_signer_login:${ADX_WALLET_SIGNER_DATABASE_PASSWORD:?Set ADX_WALLET_SIGNER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_WALLET_MASTER_KEY_FILE: /run/secrets/wallet-vault/wallet-master.key
+      ADX_WALLET_MASTER_KEY_VERSION: ${ADX_WALLET_MASTER_KEY_VERSION:-1}
+      ADX_WALLET_SIGNER_TOKEN: ${ADX_WALLET_SIGNER_TOKEN:-}
+      ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID: ${ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID:-1439}
+      ADX_WALLET_SIGNER_PORT: "8787"
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ${ADX_WALLET_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/wallet-vault
+        read_only: true
+    networks:
+      - data
+    expose:
+      - "8787"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch("http://127.0.0.1:8787/health").then(r => {
+            if (!r.ok) process.exit(1)
+          }).catch(() => process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 15s
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  wallet-vault-admin:
+    profiles:
+      - wallet-admin
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.wallet-signer
+    restart: "no"
+    command: ["npm", "run", "wallet:vault-import"]
+    environment:
+      ADX_WALLET_VAULT_DATABASE_URL: postgresql://adx_wallet_importer_login:${ADX_WALLET_IMPORTER_DATABASE_PASSWORD:?Set ADX_WALLET_IMPORTER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_WALLET_VAULT_IMPORT_CSV_PATH: /run/import/agent-wallets.csv
+      ADX_WALLET_MASTER_KEY_FILE: /run/secrets/wallet-vault/wallet-master.key
+      ADX_WALLET_MASTER_KEY_VERSION: ${ADX_WALLET_MASTER_KEY_VERSION:-1}
+      ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID: ${ADX_WALLET_SIGNER_ALLOWED_CHAIN_ID:-1439}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ${ADX_WALLET_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/wallet-vault
+        read_only: true
+      - type: bind
+        source: ${ADX_WALLET_IMPORT_CSV_HOST_PATH:-./deploy/secrets/agent-wallets.csv}
+        target: /run/import/agent-wallets.csv
+        read_only: true
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  wallet-vault-rotate:
+    profiles:
+      - wallet-admin
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.wallet-signer
+    restart: "no"
+    command: ["npm", "run", "wallet:vault-rotate"]
+    environment:
+      ADX_WALLET_VAULT_DATABASE_URL: postgresql://adx_wallet_importer_login:${ADX_WALLET_IMPORTER_DATABASE_PASSWORD:?Set ADX_WALLET_IMPORTER_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_WALLET_OLD_MASTER_KEY_FILE: /run/secrets/wallet-vault/${ADX_WALLET_OLD_MASTER_KEY_FILENAME:-wallet-master.key}
+      ADX_WALLET_NEW_MASTER_KEY_FILE: /run/secrets/wallet-vault/${ADX_WALLET_NEW_MASTER_KEY_FILENAME:-wallet-master-next.key}
+      ADX_WALLET_OLD_MASTER_KEY_VERSION: ${ADX_WALLET_OLD_MASTER_KEY_VERSION:-1}
+      ADX_WALLET_NEW_MASTER_KEY_VERSION: ${ADX_WALLET_NEW_MASTER_KEY_VERSION:-2}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: ${ADX_WALLET_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/wallet-vault
+        read_only: true
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
+  arena-facilitator:
+    profiles:
+      - testnet-facilitator
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.facilitator
+    restart: unless-stopped
+    init: true
+    environment:
+      ADX_ENV: production
+      ADX_SETTLEMENT_DEPLOYMENTS_PATH: /app/deployments.json
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
+      ADX_FACILITATOR_CSV_PATH: /run/arena402/facilitators.csv
+      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_WALLET_INDEX:-1}
+      ADX_X402_FACILITATOR_BEARER_TOKEN: ${ADX_X402_FACILITATOR_BEARER_TOKEN:-}
+      ADX_FACILITATOR_ALLOWED_RESOURCE_ORIGIN: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
+      FACILITATOR_PORT: "4021"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ${ADX_FACILITATOR_CSV_HOST_PATH:-./deploy/secrets/arena402-facilitators.csv}:/run/arena402/facilitators.csv:ro
+    networks:
+      - edge
+      - data
+    expose:
+      - "4021"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch("http://127.0.0.1:4021/health").then(r => {
+            if (!r.ok) process.exit(1)
+          }).catch(() => process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 30s
+    cpus: 0.20
+    mem_limit: 256m
     logging: *default-logging
 
   web:

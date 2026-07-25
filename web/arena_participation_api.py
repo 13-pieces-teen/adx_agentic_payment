@@ -16,6 +16,8 @@ from arena_core import (
 )
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
 from connector_gateway.auth import AuthError, ConnectorAuth
+from arena_payments.repository import PaymentRepository, WalletUnavailable
+from arena_payments.service import ArenaPaymentService
 
 
 _Identifier = Annotated[
@@ -96,6 +98,8 @@ def _error(exc: ArenaParticipationError) -> HTTPException:
         "idempotency_conflict",
         "invalid_game_config",
         "connector_binding_already_registered",
+        "wallet_not_bound",
+        "wallet_chain_mismatch",
     }:
         status_code = 409
     else:
@@ -138,8 +142,14 @@ def create_arena_participation_router(
     *,
     auth: ConnectorAuth,
     repository: PostgresArenaParticipationRepository,
+    payment_repository: PaymentRepository | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["arena-participation"])
+    payment_service = (
+        ArenaPaymentService(repository=payment_repository)
+        if payment_repository is not None
+        else None
+    )
 
     @router.post("/api/local-agents", status_code=201)
     async def register_local_agent(
@@ -190,6 +200,18 @@ def create_arena_participation_router(
         request: Request,
     ) -> dict[str, str]:
         principal = await _principal(auth, request, csrf=True)
+        if payment_service is not None:
+            try:
+                await payment_service.get_or_bind_github_wallet(
+                    user_id=principal.user_id,
+                    identity_provider=principal.identity_provider,
+                    provider_subject=principal.provider_subject,
+                )
+            except WalletUnavailable as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": str(exc)},
+                ) from None
         key_digest = _idempotency_digest(request)
         request_digest = sha256_identifier(
             {"agentId": body.agent_id, "gameId": game_id}

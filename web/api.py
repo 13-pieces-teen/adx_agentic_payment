@@ -32,6 +32,19 @@ from arena_game import (
     PawnhouseAgentRuntimeCoordinator,
     PostgresPawnhouseRepository,
 )
+from arena_payments.api import create_payment_account_router
+from arena_payments.admin_api import create_payment_admin_router
+from arena_payments.coordinator import X402SettlementCoordinator
+from arena_payments.executor import (
+    HttpX402SettlementExecutor,
+    X402SettlementExecutor,
+)
+from arena_payments.facilitator import (
+    DisabledFacilitatorClient,
+    HttpX402FacilitatorClient,
+)
+from arena_payments.postgres import PostgresPaymentRepository
+from arena_payments.x402_api import create_x402_settlement_router
 from connector_gateway import (
     ConnectorArenaTaskDispatcher,
     ConnectorGateway,
@@ -154,6 +167,13 @@ def _arena_participation_requested() -> bool:
     ).strip().lower() in {"1", "true", "yes"}
 
 
+def _arena_payments_requested() -> bool:
+    return os.getenv(
+        "ADX_ARENA_PAYMENTS_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _pawnhouse_dev_requested() -> bool:
     return os.getenv(
         "ADX_ARENA_DEV_CONTROL",
@@ -255,6 +275,24 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             arena_participation_dsn
         )
 
+    payment_repository: PostgresPaymentRepository | None = None
+    if _arena_payments_requested():
+        if connector_bundle is None:
+            raise RuntimeError(
+                "Arena payments require the authenticated production "
+                "control plane"
+            )
+        payment_dsn = (
+            os.getenv("ADX_ARENA_API_DATABASE_URL")
+            or os.getenv("ADX_CONNECTOR_DATABASE_URL")
+            or ""
+        ).strip()
+        if not payment_dsn:
+            raise RuntimeError(
+                "ADX_ARENA_API_DATABASE_URL is required when payments are enabled"
+            )
+        payment_repository = PostgresPaymentRepository(payment_dsn)
+
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
     connector_result_core: PostgresArenaCoreRepository | None = None
     connector_task_dispatcher: ConnectorArenaTaskDispatcher | None = None
@@ -285,6 +323,59 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             connector_task_dispatcher = ConnectorArenaTaskDispatcher(
                 repository=connector_result_core,
                 gateway=connector_bundle.service,
+            )
+
+    x402_coordinator: X402SettlementExecutor | None = None
+    x402_public_api_url = ""
+    if payment_repository is not None:
+        if pawnhouse_repository is None:
+            raise RuntimeError(
+                "Arena payments require ADX_ARENA_CORE_ENABLED=true"
+            )
+        x402_public_api_url = (
+            os.getenv("ADX_PUBLIC_API_URL")
+            or os.getenv("ADX_GITHUB_OAUTH_CALLBACK_BASE_URL")
+            or ""
+        ).strip().rstrip("/")
+        parsed_payment_url = urlsplit(x402_public_api_url)
+        if not parsed_payment_url.scheme or not parsed_payment_url.netloc:
+            raise RuntimeError(
+                "ADX_PUBLIC_API_URL is required when payments are enabled"
+            )
+        if environment == "production" and parsed_payment_url.scheme != "https":
+            raise RuntimeError(
+                "ADX_PUBLIC_API_URL must use HTTPS in production"
+            )
+        if environment == "production":
+            x402_coordinator = HttpX402SettlementExecutor(
+                os.getenv("ADX_SETTLEMENT_SERVICE_URL", "").strip(),
+                bearer_token=os.getenv(
+                    "ADX_SETTLEMENT_SERVICE_TOKEN", ""
+                ).strip(),
+            )
+        else:
+            facilitator_url = os.getenv(
+                "ADX_X402_FACILITATOR_URL", ""
+            ).strip()
+            if facilitator_url:
+                facilitator = HttpX402FacilitatorClient(
+                    facilitator_url,
+                    facilitator_id=os.getenv(
+                        "ADX_X402_FACILITATOR_ID", "configured"
+                    ).strip(),
+                    authorization=(
+                        os.getenv(
+                            "ADX_X402_FACILITATOR_AUTHORIZATION", ""
+                        ).strip()
+                        or None
+                    ),
+                )
+            else:
+                facilitator = DisabledFacilitatorClient()
+            x402_coordinator = X402SettlementCoordinator(
+                payments=payment_repository,
+                arena=pawnhouse_repository,
+                facilitator=facilitator,
             )
 
     if pawnhouse_dev_enabled:
@@ -338,6 +429,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await hosted_bundle.initialize()
         if arena_participation is not None:
             await arena_participation.initialize()
+        if payment_repository is not None:
+            await payment_repository.initialize()
         if pawnhouse_repository is not None:
             await pawnhouse_repository.initialize()
         if connector_result_core is not None:
@@ -387,6 +480,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 await pawnhouse_repository.close()
             if arena_participation is not None:
                 await arena_participation.close()
+            if payment_repository is not None:
+                await payment_repository.close()
             if hosted_bundle is not None:
                 await hosted_bundle.close()
             if connector_bundle is not None:
@@ -415,6 +510,11 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "Idempotency-Key",
             "X-CSRF-Token",
             "X-Arena-Dev-Token",
+            "PAYMENT-SIGNATURE",
+        ],
+        expose_headers=[
+            "PAYMENT-REQUIRED",
+            "PAYMENT-RESPONSE",
         ],
     )
 
@@ -450,7 +550,6 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 enable_mutations=True,
             )
         )
-
     if arena_participation is not None:
         assert connector_bundle is not None
         app.state.arena_participation = arena_participation
@@ -458,6 +557,50 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             create_arena_participation_router(
                 auth=connector_bundle.auth,
                 repository=arena_participation,
+                payment_repository=payment_repository,
+            )
+        )
+
+    if payment_repository is not None:
+        assert connector_bundle is not None
+        app.state.arena_payments = payment_repository
+        app.include_router(
+            create_payment_account_router(
+                auth=connector_bundle.auth,
+                repository=payment_repository,
+            )
+        )
+        admin_subjects = frozenset(
+            value.strip()
+            for value in os.getenv(
+                "ADX_ARENA_ADMIN_GITHUB_SUBJECTS", ""
+            ).split(",")
+            if value.strip().isdigit()
+        )
+        app.include_router(
+            create_payment_admin_router(
+                auth=connector_bundle.auth,
+                repository=payment_repository,
+                github_subjects=admin_subjects,
+                facilitator_id=(
+                    os.getenv("ADX_X402_FACILITATOR_ID", "").strip()
+                    or None
+                ),
+                signer_mode=(
+                    "isolated_settlement_service"
+                    if os.getenv("ADX_SETTLEMENT_SERVICE_URL", "").strip()
+                    else "disabled"
+                ),
+            )
+        )
+        assert pawnhouse_repository is not None
+        assert x402_coordinator is not None
+        app.include_router(
+            create_x402_settlement_router(
+                arena=pawnhouse_repository,
+                mandates=payment_repository,
+                coordinator=x402_coordinator,
+                public_api_url=x402_public_api_url,
             )
         )
 
@@ -504,6 +647,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "connector_gateway": app.state.connector_gateway_mode,
             "hosted_agent_creation": app.state.hosted_agents_creation_enabled,
             "arena_participation": arena_participation is not None,
+            "arena_payments": payment_repository is not None,
             "pawnhouse": app.state.pawnhouse_mode,
         }
 

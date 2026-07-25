@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timedelta, timezone
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from arena_payments.api import create_payment_account_router
+from arena_payments.models import WalletInventoryItem
+from arena_payments.repository import InMemoryPaymentRepository
+from connector_gateway.config import ConnectorGatewayConfig
+from connector_gateway.production import build_production_connector
+from connector_gateway.repository import MemoryConnectorRepository
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _app():
+    connector_repository = MemoryConnectorRepository()
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://arena.example.test",
+        bootstrap_invite_hash=_hash("invite-one-that-is-long-enough"),
+    )
+    connector = build_production_connector(config, connector_repository)
+    payment_repository = InMemoryPaymentRepository(
+        [
+            WalletInventoryItem(
+                wallet_id="wallet-1",
+                chain_id=1439,
+                address="0x" + "11" * 20,
+                secret_ref="agent-wallets.csv#1",
+            )
+        ]
+    )
+    app = FastAPI()
+    app.include_router(connector.router)
+    app.include_router(
+        create_payment_account_router(
+            auth=connector.auth,
+            repository=payment_repository,
+        )
+    )
+    return (
+        TestClient(app, base_url="https://arena.example.test"),
+        connector.auth,
+        connector_repository,
+        payment_repository,
+    )
+
+
+def test_wallet_endpoint_binds_once_and_never_returns_secret_reference() -> None:
+    client, _, _, _ = _app()
+    client.post(
+        "/api/auth/invite",
+        json={
+            "invite_code": "invite-one-that-is-long-enough",
+            "username": "password-user",
+            "password": "correct horse battery staple",
+        },
+    )
+    denied = client.get("/api/v1/me/wallet")
+    assert denied.status_code == 403
+
+
+def test_github_wallet_and_mandate_api() -> None:
+    client, connector_auth, users, payments = _app()
+
+    user = users.users.setdefault(
+        "user-github",
+        {
+            "user_id": "user-github",
+            "username": "octocat",
+            "password_hash": None,
+            "temporary": False,
+            "identity_provider": "github",
+            "provider_subject": "123456",
+            "created_at": datetime.now(timezone.utc),
+            "disabled_at": None,
+        },
+    )
+    users.users_by_name["octocat"] = "user-github"
+    users.oauth_users[("github", "123456")] = "user-github"
+    issued = __import__("asyncio").run(connector_auth._issue_session(user))
+    connector_auth.set_session_cookies(
+        type(
+            "CookieSink",
+            (),
+            {
+                "set_cookie": lambda self, key, value, **kwargs: client.cookies.set(
+                    key, value
+                )
+            },
+        )(),
+        issued,
+    )
+
+    first = client.get("/api/v1/me/wallet")
+    second = client.get("/api/v1/me/wallet")
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["wallet"]["walletId"] == "wallet-1"
+    assert "secret" not in str(first.json()).lower()
+
+    now = datetime.now(timezone.utc)
+    created = client.post(
+        "/api/v1/me/payment-mandates",
+        headers={"x-csrf-token": issued.csrf_token},
+        json={
+            "mandateId": "mandate-game-1",
+            "gameId": "game-1",
+            "chainId": 1439,
+            "tokenAddress": "0x" + "33" * 20,
+            "maxPerPaymentAtomic": 50,
+            "maxCumulativeAtomic": 100,
+            "allowedPayees": ["0x" + "22" * 20],
+            "validFrom": (now - timedelta(seconds=1)).isoformat(),
+            "expiresAt": (now + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["mandate"]["consumedAtomic"] == "0"
+    active = client.get("/api/v1/me/payment-mandates/game-1")
+    assert active.status_code == 200
+    assert active.json()["mandate"]["mandateId"] == "mandate-game-1"
+
+    revoked = client.post(
+        "/api/v1/me/payment-mandates/mandate-game-1/revoke",
+        headers={"x-csrf-token": issued.csrf_token},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["mandate"]["revokedAt"] is not None
+    assert payments.mandates["mandate-game-1"].revoked_at is not None

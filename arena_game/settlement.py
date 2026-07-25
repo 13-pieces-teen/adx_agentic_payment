@@ -53,6 +53,8 @@ class SettlementConfig:
     token_address: str | None = None
     token_symbol: str | None = None
     token_decimals: int | None = None
+    token_eip712_name: str | None = None
+    token_eip712_version: str | None = None
     required_confirmations: int = 1
 
     def __post_init__(self) -> None:
@@ -64,6 +66,8 @@ class SettlementConfig:
                     self.token_address,
                     self.token_symbol,
                     self.token_decimals,
+                    self.token_eip712_name,
+                    self.token_eip712_version,
                 )
             ):
                 raise SettlementError("disabled_settlement_has_chain_config")
@@ -89,6 +93,18 @@ class SettlementConfig:
             # Arena gold uses six atomic decimal places. The MVP deliberately
             # forbids an implicit conversion or rounding rule.
             raise SettlementError("token_decimals_must_match_gold_scale")
+        if (
+            self.token_eip712_name is None
+            or not self.token_eip712_name
+            or len(self.token_eip712_name) > 128
+        ):
+            raise SettlementError("invalid_token_eip712_name")
+        if (
+            self.token_eip712_version is None
+            or not self.token_eip712_version
+            or len(self.token_eip712_version) > 32
+        ):
+            raise SettlementError("invalid_token_eip712_version")
         if not 1 <= self.required_confirmations <= 100:
             raise SettlementError("invalid_required_confirmations")
 
@@ -101,6 +117,8 @@ class SettlementConfig:
             "tokenAddress": self.token_address,
             "tokenSymbol": self.token_symbol,
             "tokenDecimals": self.token_decimals,
+            "tokenEip712Name": self.token_eip712_name,
+            "tokenEip712Version": self.token_eip712_version,
             "requiredConfirmations": self.required_confirmations,
         }
 
@@ -143,6 +161,8 @@ class SettlementIntent:
     required_confirmations: int
     authorization_mode: Literal["single_eip3009"]
     idempotency_key: str
+    token_eip712_name: str | None = None
+    token_eip712_version: str | None = None
 
     def __post_init__(self) -> None:
         identifiers = (
@@ -191,9 +211,23 @@ class SettlementIntent:
             raise SettlementError("invalid_required_confirmations")
         if self.authorization_mode != "single_eip3009":
             raise SettlementError("unsupported_authorization_mode")
+        if (self.token_eip712_name is None) != (
+            self.token_eip712_version is None
+        ):
+            raise SettlementError("incomplete_token_eip712_domain")
+        if (
+            self.token_eip712_name is not None
+            and (
+                not self.token_eip712_name
+                or len(self.token_eip712_name) > 128
+                or not self.token_eip712_version
+                or len(self.token_eip712_version) > 32
+            )
+        ):
+            raise SettlementError("invalid_token_eip712_domain")
 
     def to_snapshot(self) -> dict[str, object]:
-        return {
+        snapshot = {
             "schemaVersion": "arena402.settlement-intent.v1",
             "settlementIntentId": self.settlement_intent_id,
             "gameId": self.game_id,
@@ -218,6 +252,10 @@ class SettlementIntent:
             "authorizationMode": self.authorization_mode,
             "idempotencyKey": self.idempotency_key,
         }
+        if self.token_eip712_name is not None:
+            snapshot["tokenEip712Name"] = self.token_eip712_name
+            snapshot["tokenEip712Version"] = self.token_eip712_version
+        return snapshot
 
     @property
     def intent_hash(self) -> str:

@@ -53,6 +53,8 @@ export type WalletSigningErrorCode =
   | "wallet_disabled"
   | "wallet_address_mismatch"
   | "wallet_signature_invalid"
+  | "wallet_secret_invalid"
+  | "wallet_backend_unavailable"
   | "deterministic_nonce_required"
   | "invalid_wallet_id";
 

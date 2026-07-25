@@ -1,6 +1,6 @@
 BEGIN;
 
--- 014 introduced the durable Connector result outbox after the production
+-- 020 introduced the durable Connector result outbox after the production
 -- runtime roles had already been granted access to the original Connector
 -- tables. Keep results immutable to the Gateway role: it may load them during
 -- restart recovery and insert newly received terminal results, but it cannot

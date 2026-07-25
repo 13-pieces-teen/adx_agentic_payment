@@ -482,7 +482,7 @@ private chain-of-thought。
 | Self-hosted Auth | `connector_gateway/auth.py`、`repository.py`、`postgres_repository.py` | 已实现 invite/register/login/session/logout、Argon2id、签名 Session Cookie、CSRF、session revoke |
 | Production config | `connector_gateway/config.py`、`production.py`、`web/api.py` | 已实现 fail-closed；遗留 Supabase 工厂已删除 |
 | Tenant-like object auth | `connector_gateway/api.py`、`web/api.py` | 已实现 user-owner scope 和跨用户对象隐藏；组织 tenant/RBAC 未实现 |
-| PostgreSQL persistence | `db/migrations/002_connector_gateway.sql`、`014_connector_agent_task_results.sql`、`persistent_service.py` | 已实现 beta 持久化与重启恢复；terminal AgentTaskResult 使用独立 immutable inbox；Event/Audit 增量且有界，其余 mutable state snapshot/upsert、单 worker |
+| PostgreSQL persistence | `db/migrations/002_connector_gateway.sql`、`020_connector_agent_task_results.sql`、`persistent_service.py` | 已实现 beta 持久化与重启恢复；terminal AgentTaskResult 使用独立 immutable inbox；Event/Audit 增量且有界，其余 mutable state snapshot/upsert、单 worker |
 | Command delivery | `connector_gateway/service.py`、`persistent_service.py` | 已实现 durable pre-delivery barrier、重排与幂等 |
 | Public ingress protection | `rate_limit.py`、`service.py` | 已实现 auth/Pairing 限流、key 上限、Pairing 过期清理与容量上限 |
 | Local Connector | `connector/` | 已实现 discovery、pair/connect/run、WSS、outbox/receipt、owned child；默认 detection-only |

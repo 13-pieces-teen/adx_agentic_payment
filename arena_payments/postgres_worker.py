@@ -1,0 +1,173 @@
+"""PostgreSQL lease adapter for the automatic settlement worker."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta
+
+from arena_game.postgres import PostgresPawnhouseRepository
+
+from .models import PaymentMandate, SettlementTerms
+from .postgres import PostgresPaymentRepository
+
+
+class PostgresAutomaticSettlementSource:
+    def __init__(
+        self,
+        *,
+        payments: PostgresPaymentRepository,
+        arena: PostgresPawnhouseRepository,
+        public_api_url: str,
+        lease_seconds: int = 60,
+    ) -> None:
+        if not 15 <= lease_seconds <= 600:
+            raise ValueError("automatic_payment_lease_seconds_out_of_range")
+        self._payments = payments
+        self._arena = arena
+        self._public_api_url = public_api_url.rstrip("/")
+        self._lease_seconds = lease_seconds
+
+    async def authorization_targets(self, *, limit: int) -> list[str]:
+        rows = await self._payments._require_pool().fetch(
+            """
+            SELECT intent.settlement_intent_id
+            FROM arena402.settlement_intents AS intent
+            LEFT JOIN arena402.x402_settlement_attempts AS attempt
+              ON attempt.settlement_intent_id = intent.settlement_intent_id
+            WHERE intent.status = 'authorization_requested'
+              AND (
+                    attempt.settlement_intent_id IS NULL
+                    OR (
+                        attempt.status IN ('reserved', 'signed')
+                        AND attempt.lease_expires_at < clock_timestamp()
+                    )
+              )
+            ORDER BY intent.created_at, intent.settlement_intent_id
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [str(row["settlement_intent_id"]) for row in rows]
+
+    async def settlement_terms(self, settlement_intent_id: str) -> SettlementTerms:
+        intent = await self._arena.settlement_intent_for_payment(
+            settlement_intent_id=settlement_intent_id
+        )
+        if not intent.token_eip712_name or not intent.token_eip712_version:
+            raise ValueError("token_eip712_domain_not_frozen")
+        return SettlementTerms(
+            settlement_intent_id=intent.settlement_intent_id,
+            intent_hash=intent.intent_hash,
+            game_id=intent.game_id,
+            payer=intent.buyer_account,
+            payee=intent.seller_account,
+            chain_id=intent.chain_id,
+            token_address=intent.token_address,
+            token_symbol=intent.token_symbol,
+            token_decimals=intent.token_decimals,
+            token_eip712_name=intent.token_eip712_name,
+            token_eip712_version=intent.token_eip712_version,
+            amount_atomic=intent.amount_atomic,
+            resource_url=(
+                f"{self._public_api_url}/api/v1/x402/settlement-intents/"
+                f"{intent.settlement_intent_id}/execute"
+            ),
+        )
+
+    async def active_mandate(
+        self, settlement_intent_id: str, now: datetime
+    ) -> PaymentMandate | None:
+        return await self._payments.active_mandate_for_settlement(
+            settlement_intent_id=settlement_intent_id,
+            now=now,
+        )
+
+    async def claim_attempt(
+        self,
+        *,
+        settlement_intent_id: str,
+        reservation_id: str,
+        payment_required: dict,
+        worker_id: str,
+        now: datetime,
+    ) -> bool:
+        lease_expires = now + timedelta(seconds=self._lease_seconds)
+        row = await self._payments._require_pool().fetchrow(
+            """
+            INSERT INTO arena402.x402_settlement_attempts (
+                settlement_intent_id, reservation_id, x402_version,
+                network, payment_required, status, lease_owner,
+                lease_expires_at, created_at, updated_at
+            )
+            VALUES ($1, $2, 2, $3, $4::jsonb, 'reserved', $5, $6, $7, $7)
+            ON CONFLICT (settlement_intent_id) DO UPDATE
+            SET lease_owner = EXCLUDED.lease_owner,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                updated_at = EXCLUDED.updated_at
+            WHERE x402_settlement_attempts.status IN ('reserved', 'signed')
+              AND x402_settlement_attempts.lease_expires_at < $7
+            RETURNING settlement_intent_id
+            """,
+            settlement_intent_id,
+            reservation_id,
+            payment_required["accepts"][0]["network"],
+            json.dumps(
+                payment_required,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            worker_id,
+            lease_expires,
+            now,
+        )
+        return row is not None
+
+    async def mark_attempt(
+        self,
+        *,
+        settlement_intent_id: str,
+        status: str,
+        worker_id: str,
+        safe_error_code: str | None = None,
+    ) -> None:
+        if status not in {
+            "signed",
+            "submitting",
+            "submitted",
+            "failed",
+            "unknown",
+        }:
+            raise ValueError("invalid_x402_attempt_status")
+        terminal = status in {"submitted", "failed", "unknown"}
+        updated = await self._payments._require_pool().execute(
+            """
+            UPDATE arena402.x402_settlement_attempts
+            SET status = $3,
+                safe_error_code = $4,
+                lease_owner = CASE WHEN $5 THEN NULL ELSE lease_owner END,
+                lease_expires_at = CASE
+                    WHEN $5 THEN NULL ELSE lease_expires_at
+                END,
+                updated_at = clock_timestamp()
+            WHERE settlement_intent_id = $1
+              AND lease_owner = $2
+            """,
+            settlement_intent_id,
+            worker_id,
+            status,
+            safe_error_code,
+            terminal,
+        )
+        if updated != "UPDATE 1":
+            raise RuntimeError("automatic_payment_lease_lost")
+
+    async def fail_settlement(
+        self,
+        *,
+        settlement_intent_id: str,
+        safe_error_code: str,
+    ) -> None:
+        await self._arena.record_automatic_failure(
+            settlement_intent_id=settlement_intent_id,
+            safe_error_code=safe_error_code,
+        )

@@ -1,4 +1,8 @@
-import { CONNECTOR_API_BASE_URL } from '@/lib/connector-api';
+import {
+  CONNECTOR_API_BASE_URL,
+  ConnectorApiError,
+  getConnectorCsrfToken,
+} from '@/lib/connector-api';
 
 export type HostedAgentStatus =
   | 'provisioning'
@@ -98,16 +102,6 @@ export class HostedAgentApiError extends Error {
   }
 }
 
-function readCookie(name: string): string {
-  if (typeof document === 'undefined') return '';
-  const prefix = `${encodeURIComponent(name)}=`;
-  const item = document.cookie
-    .split(';')
-    .map((value) => value.trim())
-    .find((value) => value.startsWith(prefix));
-  return item ? decodeURIComponent(item.slice(prefix.length)) : '';
-}
-
 function safeErrorCode(body: unknown): string | null {
   if (!body || typeof body !== 'object') return null;
   const detail = Reflect.get(body, 'detail');
@@ -126,11 +120,17 @@ async function request<T>(
   if (init?.body) headers.set('Content-Type', 'application/json');
 
   if (options?.csrf) {
-    const csrfToken = readCookie('adx_csrf');
-    if (!csrfToken) {
-      throw new HostedAgentApiError('csrf_required', 403);
+    try {
+      headers.set('X-CSRF-Token', await getConnectorCsrfToken());
+    } catch (error) {
+      if (error instanceof ConnectorApiError) {
+        throw new HostedAgentApiError(
+          error.status === 401 ? 'authentication_required' : 'request_failed',
+          error.status,
+        );
+      }
+      throw new HostedAgentApiError('network_unavailable', 0);
     }
-    headers.set('X-CSRF-Token', csrfToken);
   }
 
   let response: Response;
