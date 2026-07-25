@@ -144,8 +144,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   Arena Core 数据库/进程权限；这些边界默认关闭并 fail closed，不代表已在公网
   服务器完成 CAM 越权测试。
 - Settlement 已验证既有 testnet EIP-3009 direct relay，并已实现游戏冻结快照、
-  只读链上恢复与确认后持仓幂等提交；尚未实现通用 PaymentMandate，也尚未执行
-  当前完整链路的一笔新鲜 testnet 交易。
+  只读链上恢复与确认后持仓幂等提交；SDK 已提供按稳定 wallet id 调用、核对冻结
+  公开地址且不返回私钥的 EIP-3009 signer 接缝，以及显式 test-only 内存 Fake
+  adapter。未配置 backend 时签名 fail closed；通用 PaymentMandate、永久钱包绑定、
+  持久化 signer backend 与当前完整链路的一笔新鲜 testnet 交易仍未完成。
 - 产品前端已迁移到外部
   [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
   Vercel 部署到 `www.arena402.com`。后端已实现同源 GitHub OAuth + PKCE、不可变

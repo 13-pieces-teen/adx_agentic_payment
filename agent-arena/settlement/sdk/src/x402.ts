@@ -17,18 +17,11 @@ import {
 } from "viem";
 import { readFileSync } from "node:fs";
 import type { PaymentAuthorization, Deployments } from "./types.ts";
-
-/** EIP-3009 TransferWithAuthorization 的 EIP-712 类型定义 */
-const TRANSFER_TYPES = {
-  TransferWithAuthorization: [
-    { name: "from", type: "address" },
-    { name: "to", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "validAfter", type: "uint256" },
-    { name: "validBefore", type: "uint256" },
-    { name: "nonce", type: "bytes32" },
-  ],
-} as const;
+import {
+  EIP3009_TRANSFER_TYPES,
+  WalletSigningError,
+  type WalletSecretStore,
+} from "./wallet-secret-store.ts";
 
 export function loadDeployments(path: string): Deployments {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -60,49 +53,125 @@ export interface SignParams {
   nowSeconds: number; // 显式传入当前时间（避免脚本环境时钟问题；调用方用 Date.now()）
 }
 
-/**
- * 买方签名一笔转账授权。返回可直接交给 facilitator 的 PaymentAuthorization。
- */
-export async function signTransferAuthorization(p: SignParams): Promise<PaymentAuthorization> {
-  const domain = eip712Domain(p.dep);
+export interface WalletSignParams extends Omit<SignParams, "account" | "nonce"> {
+  walletId: string;
+  expectedFrom: `0x${string}`;
+  nonce: Hex;
+}
+
+interface PreparedAuthorization {
+  domain: ReturnType<typeof eip712Domain>;
+  to: `0x${string}`;
+  value: bigint;
+  validAfter: bigint;
+  validBefore: bigint;
+  nonce: Hex;
+}
+
+function prepareAuthorization(
+  p: Omit<SignParams, "account">,
+): PreparedAuthorization {
   const validAfter = 0n;
   const validBefore = BigInt(p.nowSeconds + (p.validForSeconds ?? 600));
   const nonce = p.nonce ?? randomNonce();
   if (!/^0x[0-9a-fA-F]{64}$/.test(nonce)) {
     throw new Error("EIP-3009 nonce must be exactly 32 bytes");
   }
-
-  const message = {
-    from: getAddress(p.account.address),
+  return {
+    domain: eip712Domain(p.dep),
     to: getAddress(p.to),
     value: p.value,
     validAfter,
     validBefore,
     nonce,
-  } as const;
+  };
+}
 
-  const signature = await p.account.signTypedData({
-    domain,
-    types: TRANSFER_TYPES,
-    primaryType: "TransferWithAuthorization",
-    message,
-  });
-
+function paymentAuthorization(
+  p: Omit<SignParams, "account">,
+  prepared: PreparedAuthorization,
+  from: `0x${string}`,
+  signature: Hex,
+): PaymentAuthorization {
   const { v, r, s } = hexToSignature(signature);
-
   return {
-    from: message.from,
-    to: message.to,
-    value: p.value.toString(),
-    validAfter: validAfter.toString(),
-    validBefore: validBefore.toString(),
-    nonce,
+    from,
+    to: prepared.to,
+    value: prepared.value.toString(),
+    validAfter: prepared.validAfter.toString(),
+    validBefore: prepared.validBefore.toString(),
+    nonce: prepared.nonce,
     v: Number(v),
     r,
     s,
     token: p.dep.usdc.address,
     chainId: p.dep.chainId,
   };
+}
+
+/**
+ * 买方签名一笔转账授权。返回可直接交给 facilitator 的 PaymentAuthorization。
+ */
+export async function signTransferAuthorization(p: SignParams): Promise<PaymentAuthorization> {
+  const prepared = prepareAuthorization(p);
+  const message = {
+    from: getAddress(p.account.address),
+    to: prepared.to,
+    value: prepared.value,
+    validAfter: prepared.validAfter,
+    validBefore: prepared.validBefore,
+    nonce: prepared.nonce,
+  } as const;
+
+  const signature = await p.account.signTypedData({
+    domain: prepared.domain,
+    types: EIP3009_TRANSFER_TYPES,
+    primaryType: "TransferWithAuthorization",
+    message,
+  });
+  return paymentAuthorization(p, prepared, message.from, signature);
+}
+
+/**
+ * Signs through an isolated store. The caller supplies only a stable wallet ID
+ * and the public address frozen into the Arena participant/Intent snapshot.
+ */
+export async function signTransferAuthorizationWithWallet(
+  p: WalletSignParams,
+  secrets: WalletSecretStore,
+): Promise<PaymentAuthorization> {
+  if (p.nonce === undefined) {
+    throw new WalletSigningError("deterministic_nonce_required");
+  }
+  const prepared = prepareAuthorization(p);
+  const signed = await secrets.signEip3009Authorization({
+    walletId: p.walletId,
+    expectedFrom: getAddress(p.expectedFrom),
+    domain: prepared.domain,
+    to: prepared.to,
+    value: prepared.value,
+    validAfter: prepared.validAfter,
+    validBefore: prepared.validBefore,
+    nonce: prepared.nonce,
+  });
+  if (getAddress(signed.from) !== getAddress(p.expectedFrom)) {
+    throw new WalletSigningError("wallet_address_mismatch");
+  }
+  try {
+    const authorization = paymentAuthorization(
+      p,
+      prepared,
+      getAddress(signed.from),
+      signed.signature,
+    );
+    if (!(await verifyAuthorizationLocally(authorization, p.dep))) {
+      throw new WalletSigningError("wallet_signature_invalid");
+    }
+    return authorization;
+  } catch (error) {
+    if (error instanceof WalletSigningError) throw error;
+    throw new WalletSigningError("wallet_signature_invalid");
+  }
 }
 
 /**
@@ -113,7 +182,7 @@ export async function verifyAuthorizationLocally(auth: PaymentAuthorization, dep
   const domain = eip712Domain(dep);
   const recovered = await recoverTypedDataAddress({
     domain,
-    types: TRANSFER_TYPES,
+    types: EIP3009_TRANSFER_TYPES,
     primaryType: "TransferWithAuthorization",
     message: {
       from: auth.from as Hex,

@@ -335,8 +335,12 @@ create game
 
 ### Phase 7：PaymentMandate 与 Settlement
 
-- [ ] 为每个 Hosted Game Participant 创建独立 `sandbox_guest` testnet wallet；
-      数据库只保存地址和不透明 signer key 引用。
+- [ ] 每个 GitHub 平台 User 首次登录时永久绑定一个 `sandbox_guest` testnet
+      wallet；后续 Game Participant 引用同一钱包，数据库只保存地址和不透明
+      signer key 引用，不在游戏结束后把钱包重新分配给其他用户。
+- [x] Settlement SDK 已建立最小 guest-wallet signer 接缝：调用方只提交稳定
+      `walletId`、冻结公开地址和 EIP-3009 授权字段；内存 Fake adapter 仅在显式
+      test-only 组合下启用，未配置 backend 时 fail closed，且没有 CSV/生产密钥接线。
 - [ ] 用户加入 Game 时一次性创建受限 Mandate，不做逐笔人工确认。
 - [ ] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
       状态；payee 只能是同局 Arena 配对出的 seller。

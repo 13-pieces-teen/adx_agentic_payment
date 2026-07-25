@@ -119,7 +119,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；创建 Connector Binding 时会自动注册 `arena_agents` 与 `arena_runtime_bindings`，但尚未接入 `arena.decide` / `arena.negotiate`，因此 route 保持 `provisioning` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；通用 Join API 已同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件；Local Connector 游戏适配仍待实现 |
-| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
+| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证；SDK 已增加不暴露私钥的 guest-wallet 签名接缝与显式 test-only Fake adapter，未配置真实 backend 时 fail closed |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
 | 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
@@ -196,7 +196,8 @@ docker compose -f docker-compose.local.yml down -v
 持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
 可继续冻结 SettlementIntent。当前开发 bridge 的新鲜 Injective testnet 支付仍需要
 逐笔人类确认；上线目标改为用户 Join 时一次确认 PaymentMandate，此后 accepted trade
-由隔离的 guest signer 自动完成。该自动路径尚未实现。
+由隔离的 guest signer 自动完成。SDK 已建立隔离签名接口和内存 Fake adapter，但
+永久钱包绑定、PaymentMandate、持久化 signer backend 与自动 Settlement Worker 尚未实现。
 
 ## 快速检查现有模块
 

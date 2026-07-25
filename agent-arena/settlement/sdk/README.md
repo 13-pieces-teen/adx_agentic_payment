@@ -3,6 +3,8 @@
 The TypeScript source under this directory provides:
 
 - viem helpers for signing an EIP-3009 authorization;
+- a guest-wallet signing seam that does not return private keys or a
+  general-purpose account;
 - a shared `SettlementSDK` interface;
 - an in-memory `MockSettlement`;
 - a testnet-backed `RealSettlement` that calls the custom relay.
@@ -25,6 +27,33 @@ The SDK does not implement a complete HTTP x402 client:
 
 `src/x402.ts` is currently an EIP-3009 signing helper named for the intended
 future integration.
+
+## Guest-wallet secret-store foundation
+
+`src/wallet-secret-store.ts` defines the narrow signing seam for future
+platform-managed `sandbox_guest` wallets. The caller supplies:
+
+- a stable wallet ID;
+- the public buyer address frozen into Arena state;
+- the exact token domain, payee, atomic amount, validity window, and
+  deterministic nonce.
+
+The store returns only the matching public address and EIP-3009 signature. It
+does not return a private key or a general-purpose `LocalAccount`.
+
+`FakeWalletSecretStore` is an explicit test adapter exported only from
+`src/testing.ts`, not the production `src/index.ts` entrypoint. It generates
+process-local keys, keeps one stable address per test wallet ID, and rejects
+unknown, disabled, or address-mismatched wallets.
+`createWalletSecretStore()` returns a disabled adapter by default.
+
+The wallet-backed signing function requires a caller-supplied nonce; it never
+generates a fresh authorization on retry. The SDK also checks the adapter's
+returned address against the frozen buyer and recovers the final signature
+before returning a payment authorization.
+
+This foundation does not read the prepared wallet CSV files, persist wallet
+bindings, implement PaymentMandate, or enable unattended chain submission.
 
 ## Arena SettlementIntent bridge
 
@@ -190,6 +219,8 @@ No platform fee is collected on-chain. Consumers must not treat
 | `src/settlement.ts` | `SettlementSDK`, `AttestationReport`, and compatibility fee constant |
 | `src/mock.ts` | In-memory implementation |
 | `src/real.ts` | Custom-relay implementation |
+| `src/wallet-secret-store.ts` | Fail-closed guest-wallet signing seam and safe error codes |
+| `src/testing.ts` | Explicit test-only adapter entrypoint |
 | `src/x402.ts` | viem EIP-3009 signing and local signature/domain checks |
 | `src/types.ts` | `PaymentAuthorization`, deployment, and result types |
 | `src/index.ts` | Source exports |
@@ -199,12 +230,15 @@ No platform fee is collected on-chain. Consumers must not treat
 ```bash
 cd agent-arena/settlement/sdk
 npm install
+npm test
 npx tsc --noEmit
 npx tsx scripts/test-mock.ts
 ```
 
-The mock test checks the current interface behavior, including compatibility
-fee metadata. It does not prove on-chain fee collection.
+The tests cover deterministic wallet authorization, default-disabled signing,
+stable fake wallet addresses, and rejection of unknown, disabled, mismatched,
+or malformed signer responses. The mock script checks compatibility fee
+metadata. Neither proves on-chain fee collection.
 
 For the state-changing relay E2E, first start the relay and then run, with
 explicit human confirmation:

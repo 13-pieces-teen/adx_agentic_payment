@@ -15,10 +15,23 @@ export { RealSettlement, type RealSettlementConfig } from "./real.ts";
 // x402 签名（SETTLE-003）
 export {
   signTransferAuthorization,
+  signTransferAuthorizationWithWallet,
   verifyAuthorizationLocally,
   checkDomainMatchesChain,
   loadDeployments,
 } from "./x402.ts";
+export type { SignParams, WalletSignParams } from "./x402.ts";
+export {
+  createWalletSecretStore,
+  DisabledWalletSecretStore,
+  WalletSigningError,
+} from "./wallet-secret-store.ts";
+export type {
+  SignEip3009AuthorizationRequest,
+  WalletAuthorizationSignature,
+  WalletSecretStore,
+  WalletSigningErrorCode,
+} from "./wallet-secret-store.ts";
 export {
   authorizationNonceForIntent,
   validateArenaSettlementIntent,

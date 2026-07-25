@@ -3,7 +3,9 @@
 > **Owner:** Felix · **Network:** Injective EVM testnet (`1439`) · **Status:** settlement prototype implemented and verified on 2026-07-23
 
 This directory contains a testnet settlement prototype built with viem, a mock
-EIP-3009 stablecoin, a custom Express relay, and a TypeScript SDK.
+EIP-3009 stablecoin, a custom Express relay, and a TypeScript SDK. The SDK now
+also defines a narrow guest-wallet signing seam and an explicitly test-only
+in-memory adapter; no persistent wallet-secret backend is configured.
 
 ## Scope boundary
 
@@ -14,6 +16,12 @@ x402's EVM `exact` scheme:
 2. a relay submits that authorization to an EIP-3009 token contract;
 3. the relay pays INJ gas;
 4. the token contract transfers mUSDC and rejects reuse of the same nonce.
+
+The guest-wallet signing seam accepts a stable wallet ID, the public address
+frozen by Arena, and the exact EIP-3009 fields. It returns only a public address
+and signature. The current Fake adapter generates process-local keys, keeps a
+stable address per test wallet ID, and refuses unknown, disabled, or
+address-mismatched wallets. The default composition disables signing.
 
 It is **not yet a complete HTTP x402 implementation**. The current code does
 not implement:
@@ -114,10 +122,14 @@ settlement/
 │   ├── src/mock.ts
 │   ├── src/real.ts
 │   ├── src/settlement.ts
+│   ├── src/testing/fake-wallet-secret-store.ts
+│   ├── src/testing.ts
 │   ├── src/types.ts
+│   ├── src/wallet-secret-store.ts
 │   ├── src/x402.ts
 │   ├── scripts/test-mock.ts
 │   ├── scripts/e2e.ts
+│   ├── test/wallet-secret-store.test.ts
 │   └── README.md
 └── scripts/
     ├── check-env.ts
