@@ -150,6 +150,29 @@ def test_github_sign_in_starts_same_origin_pkce_flow():
     assert "SameSite=lax" in state_cookie
 
 
+def test_github_sign_in_uses_configured_api_callback_origin():
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://www.arena402.com",
+        github_oauth_callback_base_url="https://api.arena402.com",
+        github_oauth_client_id="github-client-id",
+        github_oauth_client_secret="github-client-secret",
+    )
+    bundle = build_production_connector(config, MemoryConnectorRepository())
+    app = FastAPI()
+    app.include_router(bundle.router)
+    client = TestClient(app, base_url="https://api.arena402.com")
+
+    response = client.get("/api/auth/github/start", follow_redirects=False)
+
+    assert response.status_code == 307
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["redirect_uri"] == [
+        "https://api.arena402.com/api/auth/github/callback"
+    ]
+
+
 def test_github_callback_creates_session_without_persisting_access_token():
     class FakeGithubOAuthClient:
         def __init__(self) -> None:
@@ -176,7 +199,8 @@ def test_github_callback_creates_session_without_persisting_access_token():
     config = ConnectorGatewayConfig(
         database_url="postgresql://unused-in-memory",
         session_secret="session-secret-that-is-more-than-32-characters",
-        public_app_url="https://arena402.com",
+        public_app_url="https://www.arena402.com",
+        github_oauth_callback_base_url="https://api.arena402.com",
         github_oauth_client_id="github-client-id",
         github_oauth_client_secret="github-client-secret",
     )
@@ -187,7 +211,7 @@ def test_github_callback_creates_session_without_persisting_access_token():
     )
     app = FastAPI()
     app.include_router(bundle.router)
-    client = TestClient(app, base_url="https://arena402.com")
+    client = TestClient(app, base_url="https://api.arena402.com")
     started = client.get(
         "/api/auth/github/start",
         params={"return_to": "/agents?tab=hosted"},
@@ -203,12 +227,12 @@ def test_github_callback_creates_session_without_persisting_access_token():
 
     assert callback.status_code == 307
     assert callback.headers["cache-control"] == "no-store"
-    assert callback.headers["location"] == "https://arena402.com/agents?tab=hosted"
+    assert callback.headers["location"] == "https://www.arena402.com/agents?tab=hosted"
     assert oauth_client.exchanges == [
         {
             "code": "temporary-code",
             "code_verifier": oauth_client.exchanges[0]["code_verifier"],
-            "redirect_uri": "https://arena402.com/api/auth/github/callback",
+            "redirect_uri": "https://api.arena402.com/api/auth/github/callback",
         }
     ]
     assert len(oauth_client.exchanges[0]["code_verifier"]) >= 43

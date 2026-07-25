@@ -165,6 +165,7 @@ umask 077
   printf 'ADX_CONNECTOR_SESSION_SECRET=%s\n' "${session_secret}"
   printf 'ADX_GITHUB_OAUTH_CLIENT_ID=\n'
   printf 'ADX_GITHUB_OAUTH_CLIENT_SECRET=\n'
+  printf 'ADX_GITHUB_OAUTH_CALLBACK_BASE_URL=%s\n' "${public_url}"
   printf 'ADX_GITHUB_OAUTH_STATE_TTL_SECONDS=600\n'
   printf 'ADX_BOOTSTRAP_INVITE_HASH=%s\n' "${bootstrap_invite_hash}"
   printf 'ADX_CONNECTOR_SESSION_TTL_SECONDS=604800\n'

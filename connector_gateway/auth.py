@@ -245,9 +245,7 @@ class ConnectorAuth:
         code_challenge = base64.urlsafe_b64encode(
             hashlib.sha256(code_verifier.encode("ascii")).digest()
         ).rstrip(b"=").decode("ascii")
-        redirect_uri = (
-            f"{self.config.public_app_url}/api/auth/github/callback"
-        )
+        redirect_uri = self.config.github_oauth_callback_url
         signed_state = self._github_state_signer.dumps(
             {
                 "state": state,
@@ -312,9 +310,7 @@ class ConnectorAuth:
             identity = await self.github_oauth_client.authenticate(
                 code=code,
                 code_verifier=oauth_state["code_verifier"],
-                redirect_uri=(
-                    f"{self.config.public_app_url}/api/auth/github/callback"
-                ),
+                redirect_uri=self.config.github_oauth_callback_url,
             )
         except GithubOAuthError as exc:
             raise AuthError(502, "github_failed") from exc

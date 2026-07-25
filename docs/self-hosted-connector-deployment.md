@@ -108,7 +108,7 @@ sh deploy/scripts/generate-env.sh \
 grep -E '^(ADX_TLS_MODE|ADX_PUBLIC_HOST|ADX_PUBLIC_APP_URL)=' deploy/.env
 
 # 3. 在 deploy/.env 写入后端专用 GitHub OAuth App 凭据。
-#    Callback URL 必须是 https://www.arena402.com/api/auth/github/callback
+#    Callback URL 必须是 https://api.arena402.com/api/auth/github/callback
 
 # 4. 构建 Connector 安装包、迁移数据库并收敛后端服务。
 sh deploy/scripts/deploy.sh

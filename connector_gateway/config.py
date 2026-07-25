@@ -31,6 +31,7 @@ class ConnectorGatewayConfig:
     public_app_url: str
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None
+    github_oauth_callback_base_url: str | None = None
     session_cookie_name: str = "adx_session"
     csrf_cookie_name: str = "adx_csrf"
     github_oauth_state_cookie_name: str = "adx_github_oauth_state"
@@ -54,6 +55,10 @@ class ConnectorGatewayConfig:
         github_oauth_client_secret = os.getenv(
             "ADX_GITHUB_OAUTH_CLIENT_SECRET", ""
         ).strip()
+        github_oauth_callback_base_url = (
+            os.getenv("ADX_GITHUB_OAUTH_CALLBACK_BASE_URL", "").strip().rstrip("/")
+            or public_app_url
+        )
         environment = os.getenv("ADX_ENV", "production").strip().lower()
         cookie_secure_raw = os.getenv("ADX_CONNECTOR_COOKIE_SECURE", "true")
         cookie_secure = cookie_secure_raw.strip().lower() in {"1", "true", "yes"}
@@ -76,6 +81,22 @@ class ConnectorGatewayConfig:
         if environment == "production" and parsed_app_url.scheme != "https":
             raise ConnectorConfigurationError(
                 "ADX_PUBLIC_APP_URL must use HTTPS in production"
+            )
+        parsed_callback_url = urlparse(github_oauth_callback_base_url)
+        if (
+            not parsed_callback_url.scheme
+            or not parsed_callback_url.netloc
+            or parsed_callback_url.path not in {"", "/"}
+            or parsed_callback_url.params
+            or parsed_callback_url.query
+            or parsed_callback_url.fragment
+        ):
+            raise ConnectorConfigurationError(
+                "ADX_GITHUB_OAUTH_CALLBACK_BASE_URL must be an absolute origin"
+            )
+        if environment == "production" and parsed_callback_url.scheme != "https":
+            raise ConnectorConfigurationError(
+                "ADX_GITHUB_OAUTH_CALLBACK_BASE_URL must use HTTPS in production"
             )
         if bool(github_oauth_client_id) != bool(github_oauth_client_secret):
             raise ConnectorConfigurationError(
@@ -110,6 +131,7 @@ class ConnectorGatewayConfig:
             public_app_url=public_app_url,
             github_oauth_client_id=github_oauth_client_id or None,
             github_oauth_client_secret=github_oauth_client_secret or None,
+            github_oauth_callback_base_url=github_oauth_callback_base_url,
             session_cookie_name=cookie_name,
             # The browser client reads this stable non-HttpOnly double-submit
             # cookie name. Keep it independent from a customized session name.
@@ -141,3 +163,8 @@ class ConnectorGatewayConfig:
                 "ADX_CONNECTOR_MAX_PENDING_PAIRINGS", 500, 1, 10000
             ),
         )
+
+    @property
+    def github_oauth_callback_url(self) -> str:
+        base_url = self.github_oauth_callback_base_url or self.public_app_url
+        return f"{base_url.rstrip('/')}/api/auth/github/callback"
