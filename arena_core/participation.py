@@ -242,6 +242,7 @@ class PostgresArenaParticipationRepository:
                     game_config = {}
                 initial_cash = game_config.get("initial_cash_atomic", 0)
                 initial_inventory = game_config.get("initial_inventory", {})
+                settlement_config = game_config.get("settlement", {})
                 if (
                     not isinstance(initial_cash, int)
                     or isinstance(initial_cash, bool)
@@ -257,6 +258,36 @@ class PostgresArenaParticipationRepository:
                     )
                 ):
                     raise ArenaParticipationError("invalid_game_config")
+                settlement_wallet = None
+                if (
+                    isinstance(settlement_config, Mapping)
+                    and settlement_config.get("authorizationMode", "none")
+                    != "none"
+                ):
+                    chain_id = settlement_config.get("chainId")
+                    if (
+                        not isinstance(chain_id, int)
+                        or isinstance(chain_id, bool)
+                        or chain_id <= 0
+                    ):
+                        raise ArenaParticipationError(
+                            "invalid_game_config"
+                        )
+                    settlement_wallet = await connection.fetchrow(
+                        """
+                        SELECT wallet_id, chain_id, account_address
+                        FROM arena402.user_wallets
+                        WHERE user_id = $1
+                        FOR SHARE
+                        """,
+                        owner_user_id,
+                    )
+                    if settlement_wallet is None:
+                        raise ArenaParticipationError("wallet_not_bound")
+                    if int(settlement_wallet["chain_id"]) != chain_id:
+                        raise ArenaParticipationError(
+                            "wallet_chain_mismatch"
+                        )
 
                 await connection.execute(
                     """
@@ -302,6 +333,23 @@ class PostgresArenaParticipationRepository:
                     runtime["runtime_binding_id"],
                     runtime["runtime_kind"],
                 )
+                if settlement_wallet is not None:
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.participant_settlement_accounts (
+                            game_participant_id,
+                            game_id,
+                            chain_id,
+                            account_address,
+                            custody_mode
+                        )
+                        VALUES ($1, $2, $3, $4, 'sandbox_guest')
+                        """,
+                        game_agent_id,
+                        game_id,
+                        settlement_wallet["chain_id"],
+                        settlement_wallet["account_address"],
+                    )
                 await connection.execute(
                     """
                     INSERT INTO arena402.balances (

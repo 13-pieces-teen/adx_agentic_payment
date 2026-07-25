@@ -6,17 +6,24 @@ testnet. The relay pays INJ gas; buyer and payee do not submit transactions.
 
 ## Protocol boundary
 
-This is a custom payment relay, not yet a complete x402 facilitator:
+This remains a custom Injective EIP-3009 relay, but its production HTTP surface
+accepts the x402 V2 facilitator envelope:
 
-- it does not issue or consume an HTTP `402` challenge;
-- it does not exchange `PaymentRequirements` or x402 payment headers;
-- it does not use `@x402/*` packages;
-- its request and response bodies are project-specific.
+- `/verify` validates the official x402 schemas, exact requirement, CAIP-2
+  network, token, resource origin, deterministic Arena nonce, authorization
+  window, and EIP-712 signature before reading chain state;
+- `/settle` returns the V2 response consumed by Arena;
+- the relay key can be selected by explicit index from an owner-only external
+  facilitator CSV and is never returned or logged;
+- the Arena API owns the `402 Payment Required` challenge and payment headers.
+
+Public facilitator discovery and fresh testnet acceptance remain unverified.
 
 ## Start
 
-Create `settlement/.env` first; the process reads that file and
-`settlement/deployments.json`.
+For local legacy development, configure `settlement/.env`. Production uses
+`ADX_SETTLEMENT_DEPLOYMENTS_PATH`, an owner-only CSV path, explicit wallet
+index, allowed Arena API origin, and a bearer token.
 
 ```bash
 cd agent-arena/settlement/facilitator
@@ -31,37 +38,26 @@ The default port is `4021`. Override it with `FACILITATOR_PORT`.
 | Method | Route | Implemented behavior |
 |---|---|---|
 | `GET` | `/health` | Returns relay address, INJ balance, token address, and chain ID |
-| `POST` | `/verify` | Checks expiry, token nonce state, and buyer token balance |
-| `POST` | `/settle` | Runs `/verify`, then submits `transferWithAuthorization` |
-| `POST` | `/faucet` | Calls the public mUSDC `faucet(to)` |
+| `POST` | `/verify` | Validates V2 payload and checks token nonce/balance |
+| `POST` | `/settle` | Revalidates V2 payload, then submits `transferWithAuthorization` |
 
-`/settle` accepts the SETTLE-003 `PaymentAuthorization` JSON object.
-`/faucet` accepts:
-
-```json
-{ "to": "0x..." }
-```
+Both mutation endpoints require `Authorization: Bearer ...`.
 
 ## What `/verify` does and does not verify
 
-It currently checks:
+The V2 adapter checks:
 
-- `validBefore` is later than the relay's current time;
+- official payload and requirement schemas;
+- exact accepted requirement equality and configured chain/token;
+- allowed Arena resource origin, payee, amount, and deterministic intent nonce;
+- EIP-712 signature recovery and payer equality;
+- `validAfter`, `validBefore`, and the requirement timeout;
 - `authorizationState[from][nonce]` is unused;
 - `balanceOf(from)` is at least `value`.
 
-It does not currently:
-
-- recover the EIP-712 signature;
-- check `validAfter`;
-- constrain `token` to the configured mUSDC address;
-- validate the supplied `chainId`;
-- bind `to`, `value`, or a game negotiation ID to a frozen server-side
-  settlement intent.
-
-The mUSDC contract verifies the EIP-712 signature during `/settle`. An invalid
-authorization may therefore pass the precheck, revert on-chain, and still cost
-the relay gas.
+Arena separately validates the same facts against its immutable
+SettlementIntent and PaymentMandate before calling the relay. The token
+contract verifies the signature again during `/settle`.
 
 ## Transaction behavior
 

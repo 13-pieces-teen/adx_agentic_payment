@@ -7,7 +7,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
@@ -1835,7 +1835,7 @@ class PostgresPawnhouseRepository:
     ) -> dict[str, object]:
         if not _INTENT_HASH.fullmatch(approved_intent_hash):
             raise PawnhouseRepositoryError("invalid_approved_intent_hash")
-        if approval_source != "operator_cli":
+        if approval_source not in {"operator_cli", "payment_mandate"}:
             raise PawnhouseRepositoryError("invalid_approval_source")
         normalized_nonce = normalize_authorization_nonce(
             authorization_nonce
@@ -2029,7 +2029,8 @@ class PostgresPawnhouseRepository:
                     != intent["intent_hash"]
                     or approval["authorization_nonce_digest"]
                     != nonce_digest
-                    or approval["approval_source"] != "operator_cli"
+                    or approval["approval_source"]
+                    not in {"operator_cli", "payment_mandate"}
                 ):
                     raise PawnhouseRepositoryError(
                         "settlement_approval_mismatch"
@@ -2169,6 +2170,53 @@ class PostgresPawnhouseRepository:
                     }
                 )
                 return self._settlement_public(value)
+
+    async def settlement_intent_for_payment(
+        self,
+        *,
+        settlement_intent_id: str,
+    ) -> SettlementIntent:
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT *
+            FROM arena402.settlement_intents
+            WHERE settlement_intent_id = $1
+            """,
+            settlement_intent_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError("settlement_intent_not_found")
+        return self._intent_from_row(row)
+
+    async def record_mandate_approval(
+        self,
+        *,
+        settlement_intent_id: str,
+        approved_intent_hash: str,
+        authorization_nonce: str,
+    ) -> None:
+        await self.record_settlement_approval(
+            settlement_intent_id=settlement_intent_id,
+            approved_intent_hash=approved_intent_hash,
+            authorization_nonce=authorization_nonce,
+            approval_source="payment_mandate",
+        )
+
+    async def record_automatic_submission(
+        self,
+        *,
+        settlement_intent_id: str,
+        tx_hash: str,
+        authorization_nonce: str,
+        approved_intent_hash: str,
+    ) -> None:
+        await self.record_settlement_submission(
+            settlement_intent_id=settlement_intent_id,
+            tx_hash=tx_hash,
+            authorization_nonce=authorization_nonce,
+            approved_intent_hash=approved_intent_hash,
+            submission_source="sandbox_guest",
+        )
 
     async def record_chain_confirmation(
         self,
@@ -3596,6 +3644,8 @@ class PostgresPawnhouseRepository:
             token_address=settlement_config.token_address,
             token_symbol=settlement_config.token_symbol,
             token_decimals=settlement_config.token_decimals,
+            token_eip712_name=settlement_config.token_eip712_name,
+            token_eip712_version=settlement_config.token_eip712_version,
             required_confirmations=(
                 settlement_config.required_confirmations
             ),
@@ -3613,14 +3663,15 @@ class PostgresPawnhouseRepository:
                 seller_participant_id, buyer_agent_id, seller_agent_id,
                 buyer_account, seller_account, good_id, quantity,
                 unit_price_atomic, amount_atomic, chain_id, token_address,
-                token_symbol, token_decimals, required_confirmations,
+                token_symbol, token_decimals, token_eip712_name,
+                token_eip712_version, required_confirmations,
                 authorization_mode, idempotency_key, intent_snapshot,
                 intent_hash
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                $23::jsonb, $24
+                $23, $24, $25, $26::jsonb, $27
             )
             ON CONFLICT (negotiation_id) DO NOTHING
             RETURNING settlement_intent_id
@@ -3644,6 +3695,8 @@ class PostgresPawnhouseRepository:
             intent.token_address,
             intent.token_symbol,
             intent.token_decimals,
+            intent.token_eip712_name,
+            intent.token_eip712_version,
             intent.required_confirmations,
             intent.authorization_mode,
             intent.idempotency_key,
@@ -3739,6 +3792,8 @@ class PostgresPawnhouseRepository:
                 token_address=str(raw["tokenAddress"]),
                 token_symbol=str(raw["tokenSymbol"]),
                 token_decimals=int(raw["tokenDecimals"]),
+                token_eip712_name=str(raw["tokenEip712Name"]),
+                token_eip712_version=str(raw["tokenEip712Version"]),
                 required_confirmations=int(
                     raw.get("requiredConfirmations", 1)
                 ),
@@ -3775,6 +3830,16 @@ class PostgresPawnhouseRepository:
                 row["authorization_mode"]
             ),
             idempotency_key=str(row["idempotency_key"]),
+            token_eip712_name=(
+                str(row["token_eip712_name"])
+                if row.get("token_eip712_name") is not None
+                else None
+            ),
+            token_eip712_version=(
+                str(row["token_eip712_version"])
+                if row.get("token_eip712_version") is not None
+                else None
+            ),
         )
         if intent.intent_hash != row["intent_hash"]:
             raise PawnhouseRepositoryError(

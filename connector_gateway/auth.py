@@ -50,6 +50,8 @@ class AuthPrincipal:
     temporary: bool
     session_token_hash: str
     csrf_hash: str
+    identity_provider: str = "password"
+    provider_subject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +216,14 @@ class ConnectorAuth:
             temporary=bool(record.get("temporary")),
             session_token_hash=token_hash,
             csrf_hash=str(record["csrf_hash"]),
+            identity_provider=str(
+                record.get("identity_provider", "password")
+            ),
+            provider_subject=(
+                str(record["provider_subject"])
+                if record.get("provider_subject") is not None
+                else None
+            ),
         )
 
     async def require_csrf(self, request: Request, principal: AuthPrincipal) -> None:
@@ -434,6 +444,14 @@ class ConnectorAuth:
             temporary=bool(user.get("temporary")),
             session_token_hash=token_hash,
             csrf_hash=csrf_hash,
+            identity_provider=str(
+                user.get("identity_provider", "password")
+            ),
+            provider_subject=(
+                str(user["provider_subject"])
+                if user.get("provider_subject") is not None
+                else None
+            ),
         )
         return IssuedSession(
             principal=principal,

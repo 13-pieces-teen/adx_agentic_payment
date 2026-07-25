@@ -1,83 +1,183 @@
-/**
- * SETTLE-004 · facilitator HTTP 服务（Express）
- *
- * 端点：
- *   GET  /health          存活 + facilitator INJ 余额
- *   POST /verify          预检（不上链）
- *   POST /settle          代付 gas 上链结算
- *   POST /faucet          给地址发 mUSDC
- *
- * 启动：cd facilitator && npm install && npm start
- */
 import "dotenv/config";
-import express from "express";
+import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import express, { type Request } from "express";
 import { formatUnits, type Hex } from "viem";
+import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
 import { Facilitator, type PaymentAuthorization } from "./settle.ts";
+import {
+  X402FacilitatorRequestError,
+  validateX402FacilitatorRequest,
+} from "./x402-v2.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-process.loadEnvFile(resolve(__dirname, "../../.env"));
-
-const dep = JSON.parse(readFileSync(resolve(__dirname, "../../deployments.json"), "utf8"));
-const PORT = Number(process.env.FACILITATOR_PORT ?? 4021);
-
+const environment = process.env.ADX_ENV?.trim().toLowerCase() ?? "development";
+const deploymentsPath = resolve(
+  required(
+    "ADX_SETTLEMENT_DEPLOYMENTS_PATH",
+    environment === "production" ? undefined : "../deployments.json",
+  ),
+);
+const dep = JSON.parse(readFileSync(deploymentsPath, "utf8"));
+const port = Number(process.env.FACILITATOR_PORT ?? "4021");
+if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+  throw new Error("FACILITATOR_PORT is invalid");
+}
+const facilitatorKey = await resolveFacilitatorKey(environment);
+const bearerToken = required("ADX_X402_FACILITATOR_BEARER_TOKEN");
+if (bearerToken.length < 32) {
+  throw new Error("ADX_X402_FACILITATOR_BEARER_TOKEN is too short");
+}
+const allowedResourceOrigin = new URL(
+  required("ADX_FACILITATOR_ALLOWED_RESOURCE_ORIGIN"),
+).origin;
 const facilitator = new Facilitator({
-  rpc: dep.rpc,
+  rpc: process.env.ADX_ARENA_SETTLEMENT_RPC_URL?.trim() || dep.rpc,
   chainId: dep.chainId,
-  facilitatorPk: process.env.FACILITATOR_PRIVATE_KEY as Hex,
+  facilitatorPk: facilitatorKey,
 });
 
 const app = express();
-app.use(express.json());
+app.disable("x-powered-by");
+app.use(express.json({ limit: "64kb" }));
 
-app.get("/health", async (_req, res) => {
-  const bal = await facilitator.gasBalance();
-  res.json({
+app.get("/health", async (_request, response) => {
+  const balance = await facilitator.gasBalance();
+  response.setHeader("Cache-Control", "no-store");
+  response.json({
     ok: true,
     facilitator: facilitator.address,
-    injBalance: formatUnits(bal, 18),
+    injBalance: formatUnits(balance, 18),
     token: dep.usdc.address,
     chainId: dep.chainId,
+    x402Version: 2,
   });
 });
 
-app.post("/verify", async (req, res) => {
+app.post("/verify", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  if (!authorized(request)) {
+    response.status(401).json({ error: "unauthorized" });
+    return;
+  }
   try {
-    const result = await facilitator.verify(req.body as PaymentAuthorization);
-    res.json(result);
-  } catch (e: any) {
-    res.status(400).json({ ok: false, reason: e.message });
+    const value = await validateX402FacilitatorRequest(request.body, {
+      chainId: dep.chainId,
+      tokenAddress: dep.usdc.address,
+      allowedResourceOrigin,
+    });
+    const result = await facilitator.verify(value.authorization);
+    response.json({
+      isValid: result.ok,
+      payer: value.authorization.from,
+      invalidReason: result.ok ? undefined : "payment_verification_failed",
+    });
+  } catch (error) {
+    response.status(400).json({
+      isValid: false,
+      invalidReason: safeCode(error),
+    });
   }
 });
 
-app.post("/settle", async (req, res) => {
+app.post("/settle", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  if (!authorized(request)) {
+    response.status(401).json({ error: "unauthorized" });
+    return;
+  }
   try {
-    const auth = req.body as PaymentAuthorization;
-    // 先预检，避免明知失败还烧 gas
-    const pre = await facilitator.verify(auth);
-    if (!pre.ok) return res.status(400).json({ status: "error", error: pre.reason });
-    const result = await facilitator.settle(auth);
-    res.json(result);
-  } catch (e: any) {
-    res.status(500).json({ status: "error", error: e.message });
+    const value = await validateX402FacilitatorRequest(request.body, {
+      chainId: dep.chainId,
+      tokenAddress: dep.usdc.address,
+      allowedResourceOrigin,
+    });
+    const verification = await facilitator.verify(value.authorization);
+    if (!verification.ok) {
+      response.status(400).json({
+        success: false,
+        network: value.request.paymentRequirements.network,
+        errorReason: "payment_verification_failed",
+      });
+      return;
+    }
+    const result = await facilitator.settle(value.authorization);
+    if (result.status === "pending") {
+      response.status(503).json({
+        success: false,
+        network: value.request.paymentRequirements.network,
+        errorReason: "payment_submission_unknown",
+      });
+      return;
+    }
+    if (result.status !== "success" || !result.txHash) {
+      response.status(400).json({
+        success: false,
+        network: value.request.paymentRequirements.network,
+        errorReason: "payment_settlement_failed",
+      });
+      return;
+    }
+    response.json({
+      success: true,
+      transaction: result.txHash,
+      network: value.request.paymentRequirements.network,
+      payer: value.authorization.from,
+    });
+  } catch (error) {
+    const status = error instanceof X402FacilitatorRequestError ? 400 : 500;
+    response.status(status).json({
+      success: false,
+      errorReason: safeCode(error),
+    });
   }
 });
 
-app.post("/faucet", async (req, res) => {
-  try {
-    const { to } = req.body as { to: string };
-    if (!to) return res.status(400).json({ status: "error", error: "missing 'to'" });
-    const result = await facilitator.faucet(dep.usdc.address, to);
-    res.json(result);
-  } catch (e: any) {
-    res.status(500).json({ status: "error", error: e.message });
-  }
+if (
+  environment !== "production" &&
+  process.env.ADX_FACILITATOR_LEGACY_ENABLED === "true"
+) {
+  app.post("/legacy/verify", async (request, response) => {
+    const result = await facilitator.verify(
+      request.body as PaymentAuthorization,
+    );
+    response.json(result);
+  });
+}
+
+app.listen(port, "0.0.0.0", () => {
+  console.log(`arena402_x402_facilitator_ready port=${port}`);
 });
 
-app.listen(PORT, () => {
-  console.log(`🟢 facilitator on :${PORT}`);
-  console.log(`   address: ${facilitator.address}`);
-  console.log(`   token:   ${dep.usdc.address} (${dep.usdc.symbol})`);
-});
+async function resolveFacilitatorKey(currentEnvironment: string): Promise<Hex> {
+  const csvPath = process.env.ADX_FACILITATOR_CSV_PATH?.trim();
+  if (csvPath) {
+    return loadFacilitatorPrivateKey(
+      csvPath,
+      required("ADX_FACILITATOR_WALLET_INDEX"),
+    );
+  }
+  if (currentEnvironment === "production") {
+    throw new Error("ADX_FACILITATOR_CSV_PATH is required in production");
+  }
+  return required("FACILITATOR_PRIVATE_KEY") as Hex;
+}
+
+function authorized(request: Request): boolean {
+  const supplied = request.headers.authorization;
+  if (!supplied?.startsWith("Bearer ")) return false;
+  const actual = Buffer.from(supplied.slice("Bearer ".length));
+  const expected = Buffer.from(bearerToken);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function required(name: string, fallback?: string): string {
+  const value = process.env[name]?.trim() || fallback;
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+function safeCode(error: unknown): string {
+  if (error instanceof X402FacilitatorRequestError) return error.code;
+  return "facilitator_internal_error";
+}

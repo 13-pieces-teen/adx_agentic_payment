@@ -9,9 +9,11 @@
     "e2e": "tsx scripts/e2e.ts",
     "arena:settle": "tsx scripts/settle-arena-intent.ts",
     "arena:submit-only": "tsx scripts/submit-only.ts",
-    "arena:verify-restart": "tsx scripts/verify-restart.ts"
+    "arena:verify-restart": "tsx scripts/verify-restart.ts",
+    "signer:serve": "tsx scripts/serve-wallet-signer.ts"
   },
   "dependencies": {
+    "@x402/core": "^2.19.0",
     "dotenv": "^16.4.5",
     "viem": "^2.21.0"
   },

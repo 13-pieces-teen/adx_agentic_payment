@@ -2,7 +2,8 @@
 
 > 状态：王城典当行新业务内核的当前游戏契约；后端已完成 1–10 回合可配置自动编排、
 > Hosted/rule Runtime 接线、FCFS、多组协商、Round close、终场估值与排名。
-> Local Connector 游戏 Adapter、通用 PaymentMandate 和真实生产验收尚未完成。
+> Local Connector 游戏 Adapter 和真实生产验收尚未完成；PaymentMandate 与 x402
+> V2 自动链路已实现并通过 Fake E2E，但尚未执行新鲜真实 testnet 交易。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 本文维护游戏规则、跨模块状态和 Agent I/O 契约。产品边界见
@@ -196,9 +197,10 @@ testnet 交易；当前 EIP-3009 单笔人工授权只保留为开发验证路�
 记录 `inventoryCommittedAt`。链上已确认但事务尚未完成时属于
 `chain_confirmed_uncommitted` 可恢复状态，不能向玩家显示为已完成成交。
 
-该上线目标尚需实现 PaymentMandate 的网络、Token、Game、payee、
-单笔/累计额度、有效期、撤销和并发 `reserve / consume / release`。当前
-EIP-3009 direct relay 是单笔授权原型，不等于该 Mandate 或完整 HTTP x402。
+当前实现已校验 PaymentMandate 的 network、Token、Game、payee、单笔/累计额度、
+有效期、撤销和并发 `reserve / consume / release`，并用 x402 V2 header 完成自动
+提交编排。底层 EIP-3009 direct relay 仍是 testnet 原型，标准公共 Facilitator
+和新鲜真实交易尚待验收。
 
 授权、提交、链上确认或数据库提交任一步失败，都不得转移货物。详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)。

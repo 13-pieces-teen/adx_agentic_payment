@@ -113,19 +113,25 @@ remains authoritative.
 - 当前证据包括 rollback-only 提交验证和历史交易只读恢复，不等于新鲜 live
   交易已经验收。
 
-当前未实现：
+当前已实现：
 
-- 可覆盖一局多笔交易的 PaymentMandate，以及额度
+- GitHub User 永久 testnet 钱包绑定和 Game Participant 钱包快照；
+- 可覆盖一局多笔交易的 PaymentMandate，以及并发安全、幂等的额度
   `reserve / consume / release`；
-- PaymentMandate revoke 与 reserved/submitted 的竞态及完整 reorg 策略；
-- 与 Hosted Worker 完全隔离的 guest signer service 权限接线；
+- revoke 阻止新 reserve，已 submitted 记录继续走确认恢复；
+- 与 Hosted Worker 隔离、无公网端口、bearer-authenticated 的 testnet CSV signer；
+- x402 V2 challenge/retry/header、CAIP-2 network、exact 原子金额和冻结 Intent 绑定；
+- 自动 Worker lease、`submitting` ambiguity boundary 与 Fake 全链路验收。
+
+当前仍未实现或未验收：
+
+- 完整 reorg 策略；
 - 当前部署服务上的一笔新鲜、经批准 testnet 端到端交易；
-- 标准 HTTP `402 Payment Required` challenge/retry/header 流程；
-- 标准公共 x402 Facilitator 兼容；
+- 标准公共 x402 Facilitator 的真实 testnet 兼容验收；
 - 链上 escrow、退款、争议或生产手续费。
 
-因此，现有代码应称为 **EIP-3009 direct-relay settlement prototype**，
-不能称为完整标准 x402 HTTP 实现。
+因此，底层仍应称为 **EIP-3009 direct-relay settlement prototype**；HTTP
+集成可称为 x402 V2 实现，但不能称为已通过生产公共 Facilitator 验收。
 
 ## 权威状态
 

@@ -146,15 +146,17 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Settlement 已验证既有 testnet EIP-3009 direct relay，并已实现游戏冻结快照、
   只读链上恢复与确认后持仓幂等提交；SDK 已提供按稳定 wallet id 调用、核对冻结
   公开地址且不返回私钥的 EIP-3009 signer 接缝，以及显式 test-only 内存 Fake
-  adapter。未配置 backend 时签名 fail closed；通用 PaymentMandate、永久钱包绑定、
-  持久化 signer backend 与当前完整链路的一笔新鲜 testnet 交易仍未完成。
+  adapter。未配置 backend 时签名 fail closed；永久钱包绑定、PaymentMandate、
+  testnet-only CSV signer、x402 V2 与自动 Worker 已实现，当前完整链路的一笔新鲜
+  testnet 交易仍未完成。
 - 产品前端已迁移到外部
   [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
   Vercel 部署到 `www.arena402.com`。后端已实现同源 GitHub OAuth + PKCE、不可变
   GitHub subject、现有 Session/CSRF Cookie 与安全回跳；仍需配置真实 OAuth App，
   把 legacy Agent/listing/ELO client 切换到当前 API，并完成 Vercel→腾讯云公网
   联调。本仓库 `frontend/` 已退出默认生产 profile。
-- 标准 HTTP x402 challenge/retry/header 与公共 Facilitator 兼容尚未实现。
+- 标准 HTTP x402 V2 challenge/retry/header 已实现；公共 Facilitator 兼容尚未
+  完成真实 testnet 验收。
 - TEE、主网资金、链上 escrow、退款、争议、生产手续费和多链不属于已实现能力。
 
 ## 非目标
@@ -187,5 +189,6 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
       证据的批量交易方案？
 - [x] 上线签名模式冻结为 `sandbox_guest + single_eip3009`，用户 Join 时一次确认
       Game-scoped PaymentMandate，此后不逐笔确认；
-- [ ] PaymentMandate 的 `reserve / consume / release`、revoke 竞态与
-      unknown/reorg 恢复机制按上线方案实现并验证；
+- [x] PaymentMandate 的 `reserve / consume / release` 与 revoke 已实现；
+      unknown 使用 `submitting` ambiguity boundary 停止盲目重试，完整 reorg
+      策略仍待验证；

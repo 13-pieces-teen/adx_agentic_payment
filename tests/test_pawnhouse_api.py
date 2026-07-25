@@ -178,7 +178,7 @@ def test_app_mounts_read_only_game_api_without_dev_control(
     monkeypatch.delenv("ADX_ARENA_PARTICIPATION_ENABLED", raising=False)
 
     app = create_app(connector_demo_enabled=False)
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
 
     assert "/api/v1/pawnhouse/games/{game_id}" in paths
     assert "/api/dev/pawnhouse/games" not in paths
@@ -324,6 +324,8 @@ def test_create_game_freezes_explicit_eip3009_settlement_config() -> None:
                 "tokenAddress": "0x" + "11" * 20,
                 "tokenSymbol": "mUSDC",
                 "tokenDecimals": 6,
+                "tokenEip712Name": "Mock USD Coin",
+                "tokenEip712Version": "1",
                 "requiredConfirmations": 2,
             },
         },
@@ -369,25 +371,19 @@ def test_read_interfaces_do_not_require_the_development_token() -> None:
     assert timeline.status_code == 200
     assert timeline.json()["nextAfter"] == 5
 
-    automation = client.get(
-        "/api/v1/pawnhouse/games/game_1/automation"
-    )
+    automation = client.get("/api/v1/pawnhouse/games/game_1/automation")
     assert automation.status_code == 200
     assert automation.json()["action"] == "wait_settlement"
 
 
 def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:
     client, _ = _client()
-    denied = client.post(
-        "/api/dev/pawnhouse/games/game_1/run-hosted-market"
-    )
+    denied = client.post("/api/dev/pawnhouse/games/game_1/run-hosted-market")
     queued = client.post(
         "/api/dev/pawnhouse/games/game_1/run-hosted-market",
         headers={"X-Arena-Dev-Token": "development-token-for-tests"},
     )
-    status = client.get(
-        "/api/v1/pawnhouse/games/game_1/runtime-run"
-    )
+    status = client.get("/api/v1/pawnhouse/games/game_1/runtime-run")
     assert denied.status_code == 403
     assert queued.status_code == 202
     assert queued.json()["status"] == "queued"
@@ -398,9 +394,7 @@ def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:
 def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -> None:
     client, repository = _client()
     intent_id = "settlement:neg:1"
-    path = (
-        f"/api/dev/pawnhouse/settlement-intents/{intent_id}/submission"
-    )
+    path = f"/api/dev/pawnhouse/settlement-intents/{intent_id}/submission"
     body = {
         "txHash": "0x" + "44" * 32,
         "authorizationNonce": "0x" + "55" * 32,
@@ -427,18 +421,14 @@ def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -
     assert accepted.json()["status"] == "submitted"
     assert body["authorizationNonce"] not in accepted.text
     assert len(repository.submissions) == 1
-    assert repository.submissions[0]["approved_intent_hash"] == (
-        "sha256:" + "66" * 32
-    )
+    assert repository.submissions[0]["approved_intent_hash"] == ("sha256:" + "66" * 32)
 
 
 def test_settlement_approval_is_recorded_before_broadcast_and_bound_to_hash() -> None:
     client, repository = _client()
     intent_id = "settlement:neg:1"
     intent_hash = "sha256:" + "44" * 32
-    path = (
-        f"/api/dev/pawnhouse/settlement-intents/{intent_id}/approval"
-    )
+    path = f"/api/dev/pawnhouse/settlement-intents/{intent_id}/approval"
     body = {
         "approvedIntentHash": intent_hash,
         "authorizationNonce": "0x" + "44" * 32,
@@ -476,14 +466,11 @@ def test_settlement_approval_is_recorded_before_broadcast_and_bound_to_hash() ->
 
 def test_settlement_intent_projection_is_public_and_read_only() -> None:
     client, _ = _client()
-    response = client.get(
-        "/api/v1/pawnhouse/games/game_1/settlement-intents"
-    )
+    response = client.get("/api/v1/pawnhouse/games/game_1/settlement-intents")
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert (
-        response.json()["settlementIntents"][0]["status"]
-        == "authorization_requested"
+        response.json()["settlementIntents"][0]["status"] == "authorization_requested"
     )
 
 
@@ -496,6 +483,4 @@ def test_inventory_commit_receipt_is_public_and_stable() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "inventory_committed"
-    assert response.json()["inventoryCommitId"] == (
-        f"inventory-commit:{intent_id}"
-    )
+    assert response.json()["inventoryCommitId"] == (f"inventory-commit:{intent_id}")

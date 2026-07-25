@@ -335,22 +335,24 @@ create game
 
 ### Phase 7：PaymentMandate 与 Settlement
 
-- [ ] 每个 GitHub 平台 User 首次登录时永久绑定一个 `sandbox_guest` testnet
+- [x] 每个 GitHub 平台 User 首次钱包读取或入局时永久绑定一个 `sandbox_guest` testnet
       wallet；后续 Game Participant 引用同一钱包，数据库只保存地址和不透明
       signer key 引用，不在游戏结束后把钱包重新分配给其他用户。
 - [x] Settlement SDK 已建立最小 guest-wallet signer 接缝：调用方只提交稳定
       `walletId`、冻结公开地址和 EIP-3009 授权字段；内存 Fake adapter 仅在显式
-      test-only 组合下启用，未配置 backend 时 fail closed，且没有 CSV/生产密钥接线。
-- [ ] 用户加入 Game 时一次性创建受限 Mandate，不做逐笔人工确认。
-- [ ] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
+      test-only 组合下启用，未配置 backend 时 fail closed；testnet-only CSV adapter
+      要求仓库外绝对路径、严格文件权限并逐项核对派生地址。
+- [x] 用户可通过认证 API 为已加入 Game 创建一次受限 Mandate，不做逐笔人工确认。
+- [x] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
       状态；payee 只能是同局 Arena 配对出的 seller。
-- [ ] 实现并发 Intent 的 `reserve / consume / release`；锁定 Mandate、buyer cash
-      与 reservation rows，并以 `(round_id, buyer_participant_id)` 唯一约束关闭
-      同一 buyer 的并发占款。
+- [x] 实现并发 Intent 的幂等 `reserve / consume / release`；PostgreSQL 锁定
+      Mandate row，`settlement_intent_id` 唯一约束关闭重复占款，累计金额由数据库
+      CHECK 和事务更新双重限制。
 - [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；Mandate
       模式仍待实现。
-- [ ] 增加无公网端口 Settlement Worker，自动 reserve、签名、提交并持久化 tx hash；
-      第一版直接复用 settlement library，不新增独立 HTTP Facilitator 服务。
+- [x] 增加无公网端口的可选 testnet signer service 与 Settlement Worker，自动
+      reserve、签名、x402 `/verify`/`/settle`、持久化 tx hash；`submitting` 之前
+      写入 lease/ambiguity boundary，未知结果不会盲目重付。
 - [ ] funding 与 Settlement 共用数据库化 relay EOA nonce allocator；2 笔 Intent
       可同时在途，但 nonce 分配/广播短暂串行，重启只以同一 nonce 恢复。
 - [x] 本地 bridge 已验证现有 SettlementSDK/Facilitator；它保留为开发验证工具，
@@ -359,10 +361,10 @@ create game
 - [x] 链上确认后幂等提交现金和货物。
 - [ ] 自动路径按同一 EIP-3009 authorization 恢复 unknown；冻结两个确认，
       复核 receipt block hash、calldata 与 Transfer event 后才提交库存。
-- [ ] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
+- [x] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
       取消或退款路径。
-- [ ] Hosted Worker、Arena Worker 与 Settlement Worker 的 IAM、数据库和密钥域
-      完全分离。
+- [x] Hosted Worker 无 signer 权限；CSV 仅挂载到独立 signer 容器，API/Arena
+      Worker 只使用 bearer-authenticated 窄签名端口。云端更强的密钥 backend 仍待替换。
 
 详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)，上线部署和实现
