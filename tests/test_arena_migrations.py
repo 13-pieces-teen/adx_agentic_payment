@@ -51,6 +51,12 @@ QUANTITY_AND_LIMIT_ORDERS_SQL_PATH = (
     / "migrations"
     / "028_arena_quantity_and_limit_orders.sql"
 )
+CURRENT_GAME_UPDATED_AT_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "031_arena_current_game_updated_at.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -153,6 +159,16 @@ def test_quantity_and_limit_orders_keeps_applied_bytes_immutable() -> None:
     assert sql.index("SET LOCAL ROLE adx_arena_migration;") < sql.rindex(
         "COMMIT;"
     )
+
+
+def test_current_game_updated_at_migration_supports_pointer_rotation() -> None:
+    sql = CURRENT_GAME_UPDATED_AT_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "ALTER TABLE arena402.current_game" in sql
+    assert "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL" in sql
+    assert "DEFAULT clock_timestamp()" in sql
+    assert sql.index("RESET ROLE;") < sql.rindex("COMMIT;")
 
 
 def test_cli_defaults_to_connector_and_accepts_explicit_or_env_scope(
