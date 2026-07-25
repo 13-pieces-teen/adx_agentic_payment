@@ -128,6 +128,11 @@ class PawnhouseAgentRuntimeCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            _LOGGER.exception(
+                "pawnhouse_hosted_run_failed run_id=%s stage_exception=%s",
+                run_id,
+                type(exc).__name__,
+            )
             await self._pawnhouse.complete_hosted_run(
                 runtime_run_id=run_id,
                 worker_id=self._worker_id,

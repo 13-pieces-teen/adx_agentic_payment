@@ -106,6 +106,12 @@ class EvmJsonRpcConfirmationReader:
         block_number = _hex_int(receipt.get("blockNumber"))
         block_hash = receipt.get("blockHash")
         status = _hex_int(receipt.get("status"))
+        facilitator_address = _transaction_sender(receipt)
+        if facilitator_address is None:
+            transaction = self._rpc("eth_getTransactionByHash", [tx_hash])
+            facilitator_address = _transaction_sender(transaction)
+        if facilitator_address is None:
+            raise ChainReadError("transaction_sender_missing")
         latest_block = _hex_int(self._rpc("eth_blockNumber", []))
         confirmation_count = max(0, latest_block - block_number + 1)
 
@@ -113,6 +119,7 @@ class EvmJsonRpcConfirmationReader:
             return ChainConfirmation(
                 tx_hash=tx_hash,
                 chain_id=chain_id,
+                facilitator_address=facilitator_address,
                 token_address=intent.token_address,
                 from_account=intent.buyer_account,
                 to_account=intent.seller_account,
@@ -159,6 +166,7 @@ class EvmJsonRpcConfirmationReader:
         return ChainConfirmation(
             tx_hash=tx_hash,
             chain_id=chain_id,
+            facilitator_address=facilitator_address,
             token_address=intent.token_address,
             from_account=matches[0][0],
             to_account=matches[0][1],
@@ -238,6 +246,9 @@ class EvmJsonRpcConfirmationReader:
         try:
             block_number = int(transaction["block_number"])
             confirmation_count = int(transaction["confirmations"])
+            facilitator_address = _transaction_sender(transaction)
+            if facilitator_address is None:
+                raise ValueError
         except (KeyError, TypeError, ValueError):
             raise ChainReadError(
                 "blockscout_invalid_transaction"
@@ -305,6 +316,7 @@ class EvmJsonRpcConfirmationReader:
         return ChainConfirmation(
             tx_hash=tx_hash,
             chain_id=intent.chain_id,
+            facilitator_address=facilitator_address,
             token_address=intent.token_address,
             from_account=intent.buyer_account,
             to_account=intent.seller_account,
@@ -379,6 +391,18 @@ def _hex_int(value: object) -> int:
     if parsed < 0:
         raise ChainReadError("invalid_rpc_quantity")
     return parsed
+
+
+def _transaction_sender(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    sender = value.get("from")
+    if isinstance(sender, dict):
+        sender = sender.get("hash")
+    try:
+        return normalize_evm_address(str(sender))
+    except SettlementError:
+        return None
 
 
 def _topic_address(value: object) -> str:

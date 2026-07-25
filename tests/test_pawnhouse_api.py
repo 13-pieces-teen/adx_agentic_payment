@@ -371,6 +371,8 @@ def test_app_mounts_read_only_game_api_without_dev_control(
 
     assert "/api/v1/games/current" in paths
     assert "/api/v1/pawnhouse/games/{game_id}" in paths
+    assert "/api/v1/ledger/trades" in paths
+    assert "/api/v1/ledger/stats" in paths
     assert "/api/dev/pawnhouse/games" not in paths
     assert app.state.pawnhouse_mode == "read_only"
 

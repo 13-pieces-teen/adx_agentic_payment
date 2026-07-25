@@ -266,6 +266,7 @@ class SettlementIntent:
 class ChainConfirmation:
     tx_hash: str
     chain_id: int
+    facilitator_address: str
     token_address: str
     from_account: str
     to_account: str
@@ -277,6 +278,11 @@ class ChainConfirmation:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tx_hash", normalize_tx_hash(self.tx_hash))
+        object.__setattr__(
+            self,
+            "facilitator_address",
+            normalize_evm_address(self.facilitator_address),
+        )
         object.__setattr__(
             self,
             "token_address",
@@ -306,9 +312,10 @@ class ChainConfirmation:
 
     def to_snapshot(self) -> dict[str, object]:
         return {
-            "schemaVersion": "arena402.chain-confirmation.v1",
+            "schemaVersion": "arena402.chain-confirmation.v2",
             "txHash": self.tx_hash,
             "chainId": self.chain_id,
+            "facilitatorAddress": self.facilitator_address,
             "tokenAddress": self.token_address,
             "from": self.from_account,
             "to": self.to_account,

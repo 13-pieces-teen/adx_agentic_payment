@@ -468,7 +468,6 @@ class PostgresPaymentRepository:
                     SELECT cash_atomic
                     FROM arena402.balances
                     WHERE game_participant_id = $1
-                    FOR UPDATE
                     """,
                     intent["buyer_participant_id"],
                 )

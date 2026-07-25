@@ -118,6 +118,7 @@ async def _main(args: argparse.Namespace) -> int:
             confirmation=ChainConfirmation(
                 tx_hash=tx_hash,
                 chain_id=intent.chain_id,
+                facilitator_address="0x" + "44" * 20,
                 token_address=intent.token_address,
                 from_account=intent.buyer_account,
                 to_account=intent.seller_account,

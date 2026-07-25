@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from arena_payments.automatic_worker import AutomaticSettlementWorker
-from arena_payments.coordinator import X402SettlementCoordinator
+from arena_payments.coordinator import X402ExecutionResult, X402SettlementCoordinator
 from arena_payments.facilitator import FacilitatorSettlement
 from arena_payments.facilitator import FacilitatorError
 from arena_payments.repository import InMemoryPaymentRepository
@@ -60,6 +61,28 @@ class _Signer:
 class _FailingSigner:
     async def create_payment_payload(self, **_: object):
         raise RuntimeError("signer unavailable")
+
+
+class _PayloadSigner:
+    async def create_payment_payload(self, **_: object):
+        return {}
+
+
+class _ClockCapturingCoordinator:
+    def __init__(self) -> None:
+        self.execution_now: datetime | None = None
+
+    def payment_required(self, _terms):
+        return {"accepts": [{"network": "eip155:1439"}]}
+
+    async def execute(self, *, now: datetime, **_: object) -> X402ExecutionResult:
+        self.execution_now = now
+        return X402ExecutionResult(
+            success=True,
+            status="submitted",
+            transaction="0x" + "55" * 32,
+            network="eip155:1439",
+        )
 
 
 class _AmbiguousFacilitator(_Facilitator):
@@ -156,6 +179,33 @@ def test_worker_runs_wallet_to_x402_to_submission_without_human_gate() -> None:
     assert payments.mandates["mandate-1"].consumed_atomic == 0
     reservation = next(iter(payments.reservations.values()))
     assert reservation.status == "submitted"
+
+
+def test_worker_validates_signed_payload_against_post_signing_clock() -> None:
+    before_signing = datetime(2026, 7, 26, 1, 2, 3, tzinfo=timezone.utc)
+    after_signing = before_signing + timedelta(seconds=2)
+    mandate = replace(
+        _mandate(),
+        valid_from=before_signing - timedelta(hours=1),
+        expires_at=before_signing + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _Source(mandate)
+    coordinator = _ClockCapturingCoordinator()
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_PayloadSigner(),
+        coordinator=coordinator,  # type: ignore[arg-type]
+        worker_id="worker-1",
+    )
+
+    with patch("arena_payments.automatic_worker.datetime") as clock:
+        clock.now.side_effect = [before_signing, after_signing]
+        asyncio.run(worker.run_once())
+
+    assert coordinator.execution_now == after_signing
 
 
 def test_signer_failure_releases_reserved_mandate_budget() -> None:

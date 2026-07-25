@@ -16,6 +16,7 @@ SELLER = "0x" + "22" * 20
 TOKEN = "0x" + "33" * 20
 TX_HASH = "0x" + "44" * 32
 BLOCK_HASH = "0x" + "55" * 32
+FACILITATOR = "0x" + "66" * 20
 TRANSFER_TOPIC = (
     "0xddf252ad1be2c89b69c2b068fc378daa"
     "952ba7f163c4a11628f55a4df523b3ef"
@@ -69,6 +70,7 @@ def _reader(
                 "status": receipt_status,
                 "blockNumber": "0x64",
                 "blockHash": BLOCK_HASH,
+                "from": FACILITATOR,
                 "logs": [
                     {
                         "address": TOKEN,
@@ -91,6 +93,7 @@ def test_reader_binds_receipt_to_exact_frozen_transfer() -> None:
     assert confirmation is not None
     assert confirmation.success is True
     assert confirmation.confirmation_count == 2
+    assert confirmation.facilitator_address == FACILITATOR
     assert confirmation.from_account == BUYER
     assert confirmation.to_account == SELLER
     assert confirmation.amount_atomic == 7_000_000
@@ -192,6 +195,7 @@ def test_reader_uses_blockscout_fallback_for_pruned_rpc_receipt() -> None:
                 "result": "success",
                 "block_number": 100,
                 "confirmations": 20,
+                "from": {"hash": FACILITATOR},
             }
         if url.endswith(f"{TX_HASH}/token-transfers"):
             return {
@@ -225,3 +229,4 @@ def test_reader_uses_blockscout_fallback_for_pruned_rpc_receipt() -> None:
     assert confirmation.success is True
     assert confirmation.block_number == 100
     assert confirmation.confirmation_count == 20
+    assert confirmation.facilitator_address == FACILITATOR

@@ -35,12 +35,18 @@ def create_app() -> FastAPI:
         )
     database_url = _required("ADX_SETTLEMENT_DATABASE_URL")
     payments = PostgresPaymentRepository(database_url)
-    arena = PostgresPawnhouseRepository(database_url)
+    arena = PostgresPawnhouseRepository(
+        database_url,
+        database_role="adx_settlement",
+    )
     source = PostgresAutomaticSettlementSource(
         payments=payments,
         arena=arena,
         public_api_url=_https_url("ADX_PUBLIC_API_URL"),
         lease_seconds=int(os.getenv("ADX_SETTLEMENT_LEASE_SECONDS", "60")),
+        settlement_intent_id=(
+            os.getenv("ADX_SETTLEMENT_INTENT_ID", "").strip() or None
+        ),
     )
     coordinator = X402SettlementCoordinator(
         payments=payments,

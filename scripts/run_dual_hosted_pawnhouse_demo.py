@@ -9,6 +9,7 @@ credentials, passwords, session cookies, CSRF tokens, or secret references.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import http.cookiejar
 import json
 import os
@@ -17,6 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -25,6 +27,7 @@ class BrowserSession:
     base_url: str
     opener: urllib.request.OpenerDirector
     csrf_token: str
+    user_id: str
 
     def request(
         self,
@@ -100,7 +103,131 @@ def _register(base_url: str, invite: str, role: str) -> BrowserSession:
     csrf = response.get("csrf_token")
     if not isinstance(csrf, str) or not csrf:
         raise RuntimeError("registration response omitted the CSRF token")
-    return BrowserSession(base_url=base_url, opener=opener, csrf_token=csrf)
+    user = response.get("user")
+    user_id = user.get("user_id") if isinstance(user, dict) else None
+    if not isinstance(user_id, str) or not user_id:
+        raise RuntimeError("registration response omitted the user id")
+    return BrowserSession(
+        base_url=base_url,
+        opener=opener,
+        csrf_token=csrf,
+        user_id=user_id,
+    )
+
+
+async def _bind_local_test_wallets(
+    database_url: str,
+    bindings: tuple[tuple[str, str], ...],
+) -> None:
+    """Bind imported public wallet inventory for an explicit local test run."""
+
+    import asyncpg
+
+    connection = await asyncpg.connect(database_url, command_timeout=30)
+    try:
+        async with connection.transaction():
+            for user_id, wallet_id in bindings:
+                wallet = await connection.fetchrow(
+                    """
+                    SELECT chain_id, account_address, status
+                    FROM arena402.wallet_inventory
+                    WHERE wallet_id = $1
+                    FOR UPDATE
+                    """,
+                    wallet_id,
+                )
+                if wallet is None or wallet["status"] != "available":
+                    raise RuntimeError("local test wallet is not available")
+                suffix = int(wallet_id.rsplit("-", 1)[-1])
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.user_wallets (
+                        user_id, github_subject, wallet_id, chain_id,
+                        account_address
+                    )
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    user_id,
+                    str(900_000_000_000_000 + suffix),
+                    wallet_id,
+                    wallet["chain_id"],
+                    wallet["account_address"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.wallet_inventory
+                    SET status = 'bound'
+                    WHERE wallet_id = $1 AND status = 'available'
+                    """,
+                    wallet_id,
+                )
+    finally:
+        await connection.close()
+
+
+async def _activate_local_test_participants(
+    database_url: str,
+    values: tuple[tuple[str, str, str], ...],
+) -> None:
+    """Attach reviewed mandates to pending local test participants."""
+
+    import asyncpg
+
+    connection = await asyncpg.connect(database_url, command_timeout=30)
+    try:
+        async with connection.transaction():
+            for participant_id, user_id, mandate_id in values:
+                status = await connection.execute(
+                    """
+                    UPDATE arena402.game_participants AS participant
+                    SET payment_mandate_id = mandate.mandate_id,
+                        readiness = 'ready',
+                        ready_at = clock_timestamp()
+                    FROM arena402.payment_mandates AS mandate
+                    WHERE participant.game_participant_id = $1
+                      AND participant.user_id = $2
+                      AND participant.readiness = 'pending'
+                      AND mandate.mandate_id = $3
+                      AND mandate.user_id = participant.user_id
+                      AND mandate.game_id = participant.game_id
+                    """,
+                    participant_id,
+                    user_id,
+                    mandate_id,
+                )
+                if status != "UPDATE 1":
+                    raise RuntimeError(
+                        "local test participant mandate attach failed"
+                    )
+    finally:
+        await connection.close()
+
+
+def _create_payment_mandate(
+    session: BrowserSession,
+    *,
+    game_id: str,
+    mandate_id: str,
+    payee: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    session.request(
+        "POST",
+        "/api/v1/me/payment-mandates",
+        body={
+            "mandateId": mandate_id,
+            "gameId": game_id,
+            "chainId": 1439,
+            "tokenAddress": (
+                "0x06D223D12774386A96D33863D9106A800e52BDeD"
+            ),
+            "maxPerPaymentAtomic": 10_000_000,
+            "maxCumulativeAtomic": 50_000_000,
+            "allowedPayees": [payee],
+            "validFrom": (now - timedelta(seconds=5)).isoformat(),
+            "expiresAt": (now + timedelta(hours=1)).isoformat(),
+        },
+    )
 
 
 def _create_hosted_agent(
@@ -194,7 +321,23 @@ def main() -> int:
             "acceptance; this never signs or submits a transaction"
         ),
     )
+    parser.add_argument(
+        "--with-local-csv-wallet-mandates",
+        action="store_true",
+        help=(
+            "bind two already imported local test wallet IDs and create "
+            "bounded PaymentMandates; requires --with-settlement-intent"
+        ),
+    )
     args = parser.parse_args()
+    if (
+        args.with_local_csv_wallet_mandates
+        and not args.with_settlement_intent
+    ):
+        parser.error(
+            "--with-local-csv-wallet-mandates requires "
+            "--with-settlement-intent"
+        )
     buyer_invite = os.environ.get("ARENA_BUYER_INVITE")
     seller_invite = os.environ.get("ARENA_SELLER_INVITE")
     if not buyer_invite or not seller_invite:
@@ -234,6 +377,8 @@ def main() -> int:
             ),
             "tokenSymbol": "mUSDC",
             "tokenDecimals": 6,
+            "tokenEip712Name": "Mock USD Coin",
+            "tokenEip712Version": "1",
             "requiredConfirmations": 2,
         }
     _public_request(
@@ -243,6 +388,33 @@ def main() -> int:
         dev_token=args.dev_token,
         body=create_body,
     )
+    buyer_mandate_id: str | None = None
+    seller_mandate_id: str | None = None
+    database_url = ""
+    if args.with_local_csv_wallet_mandates:
+        database_url = os.environ.get("ARENA_TEST_DATABASE_URL", "").strip()
+        buyer_wallet_id = os.environ.get(
+            "ARENA_BUYER_WALLET_ID", ""
+        ).strip()
+        seller_wallet_id = os.environ.get(
+            "ARENA_SELLER_WALLET_ID", ""
+        ).strip()
+        if not database_url or not buyer_wallet_id or not seller_wallet_id:
+            parser.error(
+                "set ARENA_TEST_DATABASE_URL, ARENA_BUYER_WALLET_ID, "
+                "and ARENA_SELLER_WALLET_ID"
+            )
+        asyncio.run(
+            _bind_local_test_wallets(
+                database_url,
+                (
+                    (buyer_session.user_id, buyer_wallet_id),
+                    (seller_session.user_id, seller_wallet_id),
+                ),
+            )
+        )
+        buyer_mandate_id = f"mandate:{game_id}:buyer"
+        seller_mandate_id = f"mandate:{game_id}:seller"
     buyer_join: dict[str, Any] = {
         "agentId": buyer_agent_id,
         "portfolio": {
@@ -284,16 +456,53 @@ def main() -> int:
             ),
             "custodyMode": "wallet",
         }
-    buyer_session.request(
+    buyer_joined = buyer_session.request(
         "POST",
         f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
         body=buyer_join,
     )
-    seller_session.request(
+    seller_joined = seller_session.request(
         "POST",
         f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
         body=seller_join,
     )
+    if buyer_mandate_id is not None and seller_mandate_id is not None:
+        _create_payment_mandate(
+            buyer_session,
+            game_id=game_id,
+            mandate_id=buyer_mandate_id,
+            payee=os.environ["ARENA_SELLER_ACCOUNT"],
+        )
+        _create_payment_mandate(
+            seller_session,
+            game_id=game_id,
+            mandate_id=seller_mandate_id,
+            payee=os.environ["ARENA_BUYER_ACCOUNT"],
+        )
+        buyer_participant_id = buyer_joined.get("participantId")
+        seller_participant_id = seller_joined.get("participantId")
+        if (
+            not isinstance(buyer_participant_id, str)
+            or not isinstance(seller_participant_id, str)
+        ):
+            raise RuntimeError("participant response omitted participantId")
+        asyncio.run(
+            _activate_local_test_participants(
+                database_url,
+                (
+                    (
+                        buyer_participant_id,
+                        buyer_session.user_id,
+                        buyer_mandate_id,
+                    ),
+                    (
+                        seller_participant_id,
+                        seller_session.user_id,
+                        seller_mandate_id,
+                    ),
+                ),
+            )
+        )
     _public_request(
         base_url,
         "POST",

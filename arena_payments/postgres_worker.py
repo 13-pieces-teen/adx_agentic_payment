@@ -19,13 +19,20 @@ class PostgresAutomaticSettlementSource:
         arena: PostgresPawnhouseRepository,
         public_api_url: str,
         lease_seconds: int = 60,
+        settlement_intent_id: str | None = None,
     ) -> None:
         if not 15 <= lease_seconds <= 600:
             raise ValueError("automatic_payment_lease_seconds_out_of_range")
+        if settlement_intent_id is not None and (
+            not settlement_intent_id
+            or len(settlement_intent_id) > 512
+        ):
+            raise ValueError("invalid_automatic_settlement_intent_id")
         self._payments = payments
         self._arena = arena
         self._public_api_url = public_api_url.rstrip("/")
         self._lease_seconds = lease_seconds
+        self._settlement_intent_id = settlement_intent_id
 
     async def authorization_targets(self, *, limit: int) -> list[str]:
         rows = await self._payments._require_pool().fetch(
@@ -35,6 +42,10 @@ class PostgresAutomaticSettlementSource:
             LEFT JOIN arena402.x402_settlement_attempts AS attempt
               ON attempt.settlement_intent_id = intent.settlement_intent_id
             WHERE intent.status = 'authorization_requested'
+              AND (
+                    $2::text IS NULL
+                    OR intent.settlement_intent_id = $2::text
+              )
               AND (
                     attempt.settlement_intent_id IS NULL
                     OR (
@@ -46,6 +57,7 @@ class PostgresAutomaticSettlementSource:
             LIMIT $1
             """,
             limit,
+            self._settlement_intent_id,
         )
         return [str(row["settlement_intent_id"]) for row in rows]
 
@@ -59,12 +71,17 @@ class PostgresAutomaticSettlementSource:
             LEFT JOIN arena402.settlement_submissions AS submission
               ON submission.settlement_intent_id = attempt.settlement_intent_id
             WHERE intent.status = 'authorization_requested'
+              AND (
+                    $2::text IS NULL
+                    OR intent.settlement_intent_id = $2::text
+              )
               AND submission.settlement_intent_id IS NULL
               AND attempt.status IN ('submitting', 'unknown')
             ORDER BY attempt.updated_at, attempt.settlement_intent_id
             LIMIT $1
             """,
             limit,
+            self._settlement_intent_id,
         )
         return [str(row["settlement_intent_id"]) for row in rows]
 

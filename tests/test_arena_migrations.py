@@ -45,6 +45,12 @@ LEGACY_GAME_CAPACITY_SQL_PATH = (
     / "migrations"
     / "026_arena_drop_legacy_game_capacity_check.sql"
 )
+QUANTITY_AND_LIMIT_ORDERS_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "028_arena_quantity_and_limit_orders.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -137,6 +143,14 @@ def test_migration_scope_rejects_unknown_or_empty_selection(
         migrate_module.migration_files("legacy")
     with pytest.raises(RuntimeError, match="No arena migrations"):
         migrate_module.migration_files("arena")
+
+
+def test_quantity_and_limit_orders_restores_runner_role() -> None:
+    sql = QUANTITY_AND_LIMIT_ORDERS_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "RESET ROLE;" in sql
+    assert sql.index("RESET ROLE;") < sql.rindex("COMMIT;")
 
 
 def test_cli_defaults_to_connector_and_accepts_explicit_or_env_scope(

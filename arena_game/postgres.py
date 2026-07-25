@@ -60,8 +60,17 @@ def _id(prefix: str) -> str:
 
 
 class PostgresPawnhouseRepository:
-    def __init__(self, database_url: str, *, pool: Any | None = None) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool: Any | None = None,
+        database_role: str = "adx_arena_core",
+    ) -> None:
+        if database_role not in {"adx_arena_core", "adx_settlement"}:
+            raise ValueError("invalid_pawnhouse_database_role")
         self.database_url = database_url
+        self.database_role = database_role
         self._pool = pool
         self._owns_pool = pool is None
         self._initialize_lock = asyncio.Lock()
@@ -88,9 +97,8 @@ class PostgresPawnhouseRepository:
             await self._pool.close()
             self._pool = None
 
-    @staticmethod
-    async def _setup_connection(connection: Any) -> None:
-        await connection.execute("SET ROLE adx_arena_core")
+    async def _setup_connection(self, connection: Any) -> None:
+        await connection.execute(f"SET ROLE {self.database_role}")
         await connection.execute("SET search_path TO pg_catalog, arena402, public")
 
     def _require_pool(self) -> Any:
@@ -756,9 +764,11 @@ class PostgresPawnhouseRepository:
                     )
                     VALUES (
                         $1, $2, $3, $4, $5, 'hosted', clock_timestamp(),
-                        $6,
-                        CASE WHEN $6 IS NULL THEN 'pending' ELSE 'ready' END,
-                        CASE WHEN $6 IS NULL THEN NULL ELSE clock_timestamp() END
+                        $6::text,
+                        CASE WHEN $6::text IS NULL
+                            THEN 'pending' ELSE 'ready' END,
+                        CASE WHEN $6::text IS NULL
+                            THEN NULL ELSE clock_timestamp() END
                     )
                     """,
                     participant_id,
@@ -2604,6 +2614,121 @@ class PostgresPawnhouseRepository:
         )
         return [self._settlement_public(row) for row in rows]
 
+    async def ledger_trades(
+        self,
+        *,
+        game_id: str | None = None,
+        agent_id: str | None = None,
+        good_id: str | None = None,
+        after_created_at: datetime | None = None,
+        after_trade_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        if not 1 <= limit <= 101:
+            raise ValueError("limit must be between 1 and 101")
+        if (after_created_at is None) != (after_trade_id is None):
+            raise ValueError("ledger cursor fields must be provided together")
+        rows = await self._require_pool().fetch(
+            """
+            SELECT
+                i.settlement_intent_id,
+                i.game_id,
+                round_row.round_index,
+                i.good_id,
+                i.quantity,
+                i.unit_price_atomic,
+                i.amount_atomic,
+                i.buyer_agent_id,
+                coalesce(
+                    buyer_agent.name,
+                    i.buyer_agent_id
+                ) AS buyer_display_name,
+                i.buyer_account,
+                i.seller_agent_id,
+                coalesce(
+                    seller_agent.name,
+                    i.seller_agent_id
+                ) AS seller_display_name,
+                i.seller_account,
+                i.pairing_id,
+                i.chain_id,
+                i.status,
+                i.created_at,
+                i.chain_confirmed_at,
+                submission.tx_hash,
+                confirmation.block_number,
+                confirmation.observed_at AS confirmation_observed_at,
+                confirmation.facilitator_address
+            FROM arena402.settlement_intents AS i
+            JOIN arena402.rounds AS round_row
+              ON round_row.round_id = i.round_id
+             AND round_row.game_id = i.game_id
+            LEFT JOIN public.arena_agents AS buyer_agent
+              ON buyer_agent.agent_id = i.buyer_agent_id
+            LEFT JOIN public.arena_agents AS seller_agent
+              ON seller_agent.agent_id = i.seller_agent_id
+            LEFT JOIN arena402.settlement_submissions AS submission
+              ON submission.settlement_intent_id = i.settlement_intent_id
+            LEFT JOIN arena402.settlement_confirmations AS confirmation
+              ON confirmation.settlement_intent_id = i.settlement_intent_id
+            WHERE ($1::text IS NULL OR i.game_id = $1)
+              AND (
+                  $2::text IS NULL
+                  OR i.buyer_agent_id = $2
+                  OR i.seller_agent_id = $2
+              )
+              AND ($3::text IS NULL OR i.good_id = $3)
+              AND (
+                  $4::timestamptz IS NULL
+                  OR (i.created_at, i.settlement_intent_id)
+                     < ($4::timestamptz, $5::text)
+              )
+            ORDER BY i.created_at DESC, i.settlement_intent_id DESC
+            LIMIT $6
+            """,
+            game_id,
+            agent_id,
+            good_id,
+            after_created_at,
+            after_trade_id,
+            limit,
+        )
+        return [self._ledger_trade_public(row) for row in rows]
+
+    async def ledger_stats(self) -> dict[str, object]:
+        row = await self._require_pool().fetchrow(
+            """
+            WITH confirmed AS MATERIALIZED (
+                SELECT
+                    i.amount_atomic,
+                    i.buyer_agent_id,
+                    i.seller_agent_id
+                FROM arena402.settlement_intents AS i
+                JOIN arena402.settlement_confirmations AS confirmation
+                  ON confirmation.settlement_intent_id =
+                     i.settlement_intent_id
+            )
+            SELECT
+                count(*) AS trade_count,
+                coalesce(sum(amount_atomic), 0) AS volume_atomic,
+                (
+                    SELECT count(*)
+                    FROM (
+                        SELECT buyer_agent_id AS agent_id FROM confirmed
+                        UNION
+                        SELECT seller_agent_id AS agent_id FROM confirmed
+                    ) AS agents
+                ) AS agent_count
+            FROM confirmed
+            """
+        )
+        assert row is not None
+        return {
+            "totalTrades": int(row["trade_count"]),
+            "totalAmountAtomic": str(int(row["volume_atomic"])),
+            "agentCount": int(row["agent_count"]),
+        }
+
     async def recoverable_settlement_targets(
         self,
         *,
@@ -3161,17 +3286,20 @@ class PostgresPawnhouseRepository:
                         """
                         INSERT INTO arena402.settlement_confirmations (
                             settlement_intent_id, tx_hash, chain_id,
+                            facilitator_address,
                             token_address, from_account, to_account,
                             amount_atomic, block_number, block_hash,
                             confirmation_count, evidence_hash
                         )
                         VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12
                         )
                         """,
                         settlement_intent_id,
                         confirmation.tx_hash,
                         confirmation.chain_id,
+                        confirmation.facilitator_address,
                         confirmation.token_address,
                         confirmation.from_account,
                         confirmation.to_account,
@@ -3204,6 +3332,9 @@ class PostgresPawnhouseRepository:
                             "settlementIntentId": settlement_intent_id,
                             "txHash": confirmation.tx_hash,
                             "blockNumber": confirmation.block_number,
+                            "facilitatorAddress": (
+                                confirmation.facilitator_address
+                            ),
                             "confirmationCount": (
                                 confirmation.confirmation_count
                             ),
@@ -3220,6 +3351,9 @@ class PostgresPawnhouseRepository:
                         ),
                         "block_number": confirmation.block_number,
                         "block_hash": confirmation.block_hash,
+                        "facilitator_address": (
+                            confirmation.facilitator_address
+                        ),
                         "confirmation_count": (
                             confirmation.confirmation_count
                         ),
@@ -4873,7 +5007,7 @@ class PostgresPawnhouseRepository:
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                $23, $24, $25, $26::jsonb, $27
+                $23, $24, $25::jsonb, $26
             )
             ON CONFLICT (negotiation_id) DO NOTHING
             RETURNING settlement_intent_id
@@ -5088,6 +5222,60 @@ class PostgresPawnhouseRepository:
             }
         )
         return snapshot
+
+    @staticmethod
+    def _ledger_trade_public(
+        row: Mapping[str, object],
+    ) -> dict[str, object]:
+        confirmed_at = (
+            row.get("confirmation_observed_at")
+            or row.get("chain_confirmed_at")
+        )
+        created_at = row["created_at"]
+        return {
+            "tradeId": str(row["settlement_intent_id"]),
+            "gameId": str(row["game_id"]),
+            "round": int(row["round_index"]),
+            "goodId": str(row["good_id"]),
+            "quantity": int(row["quantity"]),
+            "priceAtomic": str(int(row["unit_price_atomic"])),
+            "amountAtomic": str(int(row["amount_atomic"])),
+            "buyer": {
+                "agentId": str(row["buyer_agent_id"]),
+                "displayName": str(row["buyer_display_name"]),
+                "accountAddress": str(row["buyer_account"]),
+            },
+            "seller": {
+                "agentId": str(row["seller_agent_id"]),
+                "displayName": str(row["seller_display_name"]),
+                "accountAddress": str(row["seller_account"]),
+            },
+            "pairingId": str(row["pairing_id"]),
+            "chainId": int(row["chain_id"]),
+            "txHash": (
+                str(row["tx_hash"])
+                if row.get("tx_hash") is not None
+                else None
+            ),
+            "blockNumber": (
+                str(int(row["block_number"]))
+                if row.get("block_number") is not None
+                else None
+            ),
+            "chainConfirmedAt": (
+                confirmed_at.isoformat()
+                if hasattr(confirmed_at, "isoformat")
+                else confirmed_at
+            ),
+            "facilitatorAddress": row.get("facilitator_address"),
+            "status": str(row["status"]),
+            "createdAt": (
+                created_at.isoformat()
+                if hasattr(created_at, "isoformat")
+                else str(created_at)
+            ),
+            "schemaVersion": "arena402.trade-ledger-entry.v1",
+        }
 
     @staticmethod
     def _inventory_commit_public(

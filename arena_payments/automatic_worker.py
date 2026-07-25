@@ -157,7 +157,11 @@ class AutomaticSettlementWorker:
                 terms=terms,
                 mandate_id=mandate.mandate_id,
                 payment_payload=payload,
-                now=now,
+                # The signer creates its EIP-3009 window from its own current
+                # clock. Reusing the pre-signing scan timestamp can make an
+                # exactly 600-second authorization appear longer than the
+                # protocol limit when signing crosses a second boundary.
+                now=datetime.now(timezone.utc),
             )
             if result.status == "failed":
                 await self._source.fail_settlement(

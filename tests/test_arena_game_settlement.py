@@ -22,6 +22,7 @@ SELLER = "0x" + "22" * 20
 TOKEN = "0x" + "33" * 20
 TX_HASH = "0x" + "44" * 32
 BLOCK_HASH = "0x" + "55" * 32
+FACILITATOR = "0x" + "66" * 20
 
 
 def _intent() -> SettlementIntent:
@@ -55,6 +56,7 @@ def _confirmation(**overrides: object) -> ChainConfirmation:
     values: dict[str, object] = {
         "tx_hash": TX_HASH,
         "chain_id": 1439,
+        "facilitator_address": FACILITATOR,
         "token_address": TOKEN,
         "from_account": BUYER,
         "to_account": SELLER,
@@ -133,6 +135,7 @@ def test_valid_confirmation_is_accepted_without_private_material() -> None:
     validate_chain_confirmation(_intent(), confirmation)
     snapshot = confirmation.to_snapshot()
     assert snapshot["txHash"] == TX_HASH
+    assert snapshot["facilitatorAddress"] == FACILITATOR
     assert snapshot["confirmationCount"] == 2
     assert "signature" not in snapshot
     assert "privateKey" not in snapshot

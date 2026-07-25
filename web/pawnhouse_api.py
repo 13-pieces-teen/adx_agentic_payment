@@ -108,6 +108,10 @@ class AddRuleParticipantBody(_Body):
 class AddHostedParticipantBody(_Body):
     agent_id: _Id = Field(alias="agentId")
     portfolio: PortfolioBody | None = None
+    payment_mandate_id: _Id | None = Field(
+        default=None,
+        alias="paymentMandateId",
+    )
     settlement_account: "SettlementAccountBody | None" = Field(
         default=None,
         alias="settlementAccount",
@@ -514,6 +518,7 @@ def create_pawnhouse_participation_router(
                 agent_id=body.agent_id,
                 portfolio=portfolio,
                 settlement_account=settlement_account,
+                payment_mandate_id=body.payment_mandate_id,
             )
         except (PortfolioError, SettlementError) as exc:
             raise HTTPException(

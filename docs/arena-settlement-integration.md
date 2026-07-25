@@ -42,6 +42,32 @@ challenge/response headers, an isolated unattended encrypted testnet signer, and
 dedicated non-public Settlement Worker. A newly approved live testnet
 transaction against the currently deployed services remains outstanding.
 
+## Public trade ledger projection
+
+The backend exposes a public, read-only projection over Arena's existing
+settlement authority:
+
+- `GET /api/v1/ledger/trades?gameId&agentId&goodId&after&limit` returns
+  newest-first trade rows with an opaque `(createdAt, tradeId)` cursor;
+- one trade row is one immutable SettlementIntent, so pending and failed
+  lifecycle states remain visible and are never presented as chain-confirmed;
+- each row includes its Round, good, fixed-point price and amount, buyer and
+  seller Agent identity, the actual settlement accounts, pairing, transaction
+  hash, block number, confirmation observation time, transaction-sender
+  Facilitator address, and current settlement status;
+- `GET /api/v1/ledger/stats` counts and sums only rows with persisted
+  `settlement_confirmations` evidence; pending submissions and failed intents
+  do not inflate the public totals;
+- both responses carry `chainId` and `explorerTxUrlTemplate`. The frontend must
+  replace `{txHash}` and must not hard-code a Blockscout host.
+
+`settlement_confirmations.observed_at` is the durable confirmation observation
+time. New confirmations also persist the EVM transaction sender as
+`facilitator_address`; historical rows may be null because that receipt field
+was not captured before migration `030`. Buyer and seller account addresses
+come from the frozen SettlementIntent and can be compared directly with the
+single verified ERC-20 `Transfer`.
+
 > 状态：钱包、PaymentMandate、x402 V2 与无人值守 Settlement Worker 已实现并
 > 默认关闭真实广播；新鲜 live testnet 端到端验收尚未完成。
 >

@@ -45,6 +45,10 @@ from arena_payments.facilitator import (
 )
 from arena_payments.postgres import PostgresPaymentRepository
 from arena_payments.x402_api import create_x402_settlement_router
+from arena_wallets import (
+    PostgresWalletRepository,
+    load_wallet_service_from_env,
+)
 from connector_gateway import (
     ConnectorArenaTaskDispatcher,
     ConnectorGateway,
@@ -63,11 +67,13 @@ from hosted_agent_runtime import CapabilityRegistry
 from web.arena_participation_api import create_arena_participation_router
 from web.game_operator_api import create_game_operator_router
 from web.hosted_agent_api import create_hosted_agent_router
+from web.ledger_api import create_ledger_router, load_ledger_metadata_from_env
 from web.pawnhouse_api import (
     create_pawnhouse_participation_router,
     create_pawnhouse_read_router,
     create_pawnhouse_router,
 )
+from web.wallet_api import create_wallet_router
 
 
 def _is_loopback_client(scope: Scope) -> bool:
@@ -293,6 +299,22 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             )
         payment_repository = PostgresPaymentRepository(payment_dsn)
 
+    wallet_repository: PostgresWalletRepository | None = None
+    wallet_service = None
+    if connector_bundle is not None:
+        wallet_dsn = (
+            os.getenv("ADX_ARENA_API_DATABASE_URL")
+            or os.getenv("ADX_CONNECTOR_DATABASE_URL")
+            or ""
+        ).strip()
+        if not wallet_dsn:
+            raise RuntimeError(
+                "ADX_ARENA_API_DATABASE_URL or ADX_CONNECTOR_DATABASE_URL is required "
+                "for wallet APIs"
+            )
+        wallet_repository = PostgresWalletRepository(wallet_dsn)
+        wallet_service = load_wallet_service_from_env()
+
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
     connector_result_core: PostgresArenaCoreRepository | None = None
     connector_task_dispatcher: ConnectorArenaTaskDispatcher | None = None
@@ -431,6 +453,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await arena_participation.initialize()
         if payment_repository is not None:
             await payment_repository.initialize()
+        if wallet_repository is not None:
+            await wallet_repository.initialize()
         if pawnhouse_repository is not None:
             await pawnhouse_repository.initialize()
         if connector_result_core is not None:
@@ -482,6 +506,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 await arena_participation.close()
             if payment_repository is not None:
                 await payment_repository.close()
+            if wallet_repository is not None:
+                await wallet_repository.close()
             if hosted_bundle is not None:
                 await hosted_bundle.close()
             if connector_bundle is not None:
@@ -502,7 +528,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=_allowed_origins(production_connector),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Accept",
             "Authorization",
@@ -528,6 +554,18 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         _mount_connector_gateway(app, connector_demo_enabled)
         app.state.connector_gateway_mode = (
             "demo" if app.state.connector_gateway_enabled else "off"
+        )
+
+    if wallet_repository is not None:
+        assert connector_bundle is not None
+        assert wallet_service is not None
+        app.state.wallet_repository = wallet_repository
+        app.include_router(
+            create_wallet_router(
+                auth=connector_bundle.auth,
+                repository=wallet_repository,
+                service=wallet_service,
+            )
         )
 
     if hosted_bundle is None:
@@ -607,6 +645,12 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     app.state.pawnhouse_mode = "off"
     if pawnhouse_repository is not None:
         app.state.pawnhouse_repository = pawnhouse_repository
+        app.include_router(
+            create_ledger_router(
+                repository=pawnhouse_repository,
+                metadata=load_ledger_metadata_from_env(),
+            )
+        )
         if connector_bundle is not None:
             app.include_router(
                 create_game_operator_router(

@@ -60,7 +60,10 @@ services:
       ADX_API_DATABASE_PASSWORD: arena402-local-api-password
       ADX_HOSTED_WORKER_DATABASE_PASSWORD: arena402-local-worker-password
       ADX_ARENA_CORE_DATABASE_PASSWORD: arena402-local-core-password
+      ADX_SETTLEMENT_DATABASE_PASSWORD: arena402-local-settlement-password
       ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD: arena402-local-controller-password
+      ADX_WALLET_SIGNER_DATABASE_PASSWORD: arena402-local-wallet-signer-password
+      ADX_WALLET_IMPORTER_DATABASE_PASSWORD: arena402-local-wallet-importer-password
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -79,6 +82,7 @@ services:
       ADX_CONNECTOR_MODE: production
       ADX_CONNECTOR_UNSAFE_DEMO: "false"
       ADX_PUBLIC_APP_URL: http://localhost:3000
+      ADX_PUBLIC_API_URL: http://127.0.0.1:8000
       ADX_ALLOWED_ORIGINS: http://localhost:3000
       ADX_CONNECTOR_COOKIE_SECURE: "false"
       ADX_CONNECTOR_AUTH_RATE_LIMIT_ATTEMPTS: "100"
@@ -92,10 +96,19 @@ services:
       ADX_HOSTED_AGENTS_ENABLED: "true"
       ADX_HOSTED_LOCAL_DEV: "true"
       ADX_ARENA_PARTICIPATION_ENABLED: "true"
+      ADX_ARENA_PAYMENTS_ENABLED: "true"
       ADX_ARENA_DEV_CONTROL: "true"
       ADX_ARENA_DEV_TOKEN: arena402-local-development-control-token
       ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:-https://k8s.testnet.json-rpc.injective.network/}
       ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: ${ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL:-https://testnet.blockscout-api.injective.network/api/v2}
+      ADX_WALLET_RPC_URL: ${ADX_WALLET_RPC_URL:-https://k8s.testnet.json-rpc.injective.network/}
+      ADX_WALLET_EXPLORER_URL: ${ADX_WALLET_EXPLORER_URL:-https://testnet.blockscout.injective.network}
+      ADX_ARENA_EXPLORER_TX_URL_TEMPLATE: ${ADX_ARENA_EXPLORER_TX_URL_TEMPLATE:-}
+      ADX_CURRENT_GAME_CHAIN_ID: ${ADX_CURRENT_GAME_CHAIN_ID:-1439}
+      ADX_ARENA402_G_TOKEN_ADDRESS: ${ADX_ARENA402_G_TOKEN_ADDRESS:-}
+      ADX_ARENA402_G_TOKEN_DECIMALS: ${ADX_ARENA402_G_TOKEN_DECIMALS:-6}
+      ADX_ARENA402_M_TOKEN_ADDRESS: ${ADX_ARENA402_M_TOKEN_ADDRESS:-}
+      ADX_ARENA402_M_TOKEN_DECIMALS: ${ADX_ARENA402_M_TOKEN_DECIMALS:-6}
       ADX_HOSTED_FINGERPRINT_PEPPER_B64: YXJlbmE0MDItbG9jYWwtZmluZ2VycHJpbnQtcGVwcGVyLTMyYnl0ZXMhIQ==
       ADX_HOSTED_WORKER_POLL_SECONDS: "0.25"
       ADX_HOSTED_WORKER_TASK_CONCURRENCY: ${ADX_HOSTED_WORKER_TASK_CONCURRENCY:-12}
