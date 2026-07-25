@@ -1,6 +1,6 @@
 # Arena 402：王城典当行游戏机制
 
-> 状态：王城典当行新业务内核的当前游戏契约；后端已完成五回合自动编排、
+> 状态：王城典当行新业务内核的当前游戏契约；后端已完成 1–10 回合可配置自动编排、
 > Hosted/rule Runtime 接线、FCFS、多组协商、Round close、终场估值与排名。
 > Local Connector 游戏 Adapter、通用 PaymentMandate 和真实生产验收尚未完成。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
@@ -79,8 +79,15 @@ Circle USDC 或生产资金。
 
 ## 一局游戏
 
-一局先完成初始资产配置，再进入 `N` 个同步回合。当前演示基线为 5 回合，每回合
-最多让每个 Agent 完成一笔交易。
+一局先完成初始资产配置，再进入 `N` 个同步回合。默认演示基线为 5 回合，开发
+接口支持 1–10 回合；`fixed_demo` 固定使用五张顺序事件，`seeded_shuffle` 从
+`pawnhouse-standard-v1` 十张事件牌组按 Game seed 确定性洗牌并冻结完整赛程。
+相同 deck 版本、seed 和回合数必须产生相同赛程。每回合最多让每个 Agent 完成
+一笔交易。
+
+Game 在创建时同时冻结 `roundCount`、`eventDeckId`、`eventMode`、
+`maxParticipants` 和配置版本。当前 `maxParticipants` 默认 16、允许 2–64；
+Arena API 和 PostgreSQL trigger 都必须拒绝超额加入，避免并发请求绕过上限。
 
 ```text
 REGISTRATION

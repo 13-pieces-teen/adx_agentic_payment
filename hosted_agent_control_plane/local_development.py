@@ -140,6 +140,9 @@ def build_local_hosted_control(
         secret_reader=secret_ports.reader,
         worker_id="hosted-worker-local-dev",
         lease_seconds=60,
+        task_concurrency=int(
+            os.getenv("ADX_HOSTED_WORKER_TASK_CONCURRENCY", "12")
+        ),
     )
     return LocalHostedControlBundle(
         repository=control_repository,

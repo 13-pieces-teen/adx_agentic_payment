@@ -81,6 +81,7 @@ services:
       ADX_PUBLIC_APP_URL: http://localhost:3000
       ADX_ALLOWED_ORIGINS: http://localhost:3000
       ADX_CONNECTOR_COOKIE_SECURE: "false"
+      ADX_CONNECTOR_AUTH_RATE_LIMIT_ATTEMPTS: "100"
       ADX_CONNECTOR_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
       ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
       ADX_ARENA_API_DATABASE_URL: postgresql://adx_api_login:arena402-local-api-password@postgres:5432/arena402
@@ -97,6 +98,7 @@ services:
       ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: ${ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL:-https://testnet.blockscout-api.injective.network/api/v2}
       ADX_HOSTED_FINGERPRINT_PEPPER_B64: YXJlbmE0MDItbG9jYWwtZmluZ2VycHJpbnQtcGVwcGVyLTMyYnl0ZXMhIQ==
       ADX_HOSTED_WORKER_POLL_SECONDS: "0.25"
+      ADX_HOSTED_WORKER_TASK_CONCURRENCY: ${ADX_HOSTED_WORKER_TASK_CONCURRENCY:-12}
       ADX_OPENAI_COMPATIBLE_ENDPOINT: ${ADX_OPENAI_COMPATIBLE_ENDPOINT:-}
       ADX_OPENAI_COMPATIBLE_MODELS: ${ADX_OPENAI_COMPATIBLE_MODELS:-}
       ADX_API_MAX_CONCURRENCY: "64"

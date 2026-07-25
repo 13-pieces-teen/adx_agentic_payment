@@ -83,6 +83,12 @@ The production Pawnhouse operator API is intentionally not exposed yet.
 present in PostgreSQL; creating/starting production Games still needs a
 separate authenticated operator surface.
 
+Set `ADX_HOSTED_WORKER_TASK_CONCURRENCY` from measured Provider latency and
+host capacity. The worker accepts `1..32`; the 2-vCPU / 4-GB single-host
+starting point remains conservative. The local development profile defaults
+to 12 only so the scripted 12-Agent demonstration does not serialize all
+calls. Do not copy that value to production before real Provider load tests.
+
 ## 4. Deploy
 
 ```sh
@@ -121,6 +127,8 @@ Required observations:
 - stopping the Hosted Worker still allows Arena Deadline Finalizer defaults;
 - a running Game advances across rounds from PostgreSQL state and freezes final
   prices/rankings without a browser session;
+- Game creation freezes its round count, event-deck version, event mode, and
+  participant cap; concurrent joins above the cap are rejected by PostgreSQL;
 - a pending accepted settlement keeps its Round in `settle`;
 - an unknown chain receipt is retried read-only and never causes a second
   authorization or payment.

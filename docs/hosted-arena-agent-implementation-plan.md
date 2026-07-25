@@ -1,6 +1,6 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与五回合游戏编排已完成，
+> 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与 1–10 回合游戏编排已完成，
 > 真实 Tencent SSM/Provider、Connector 游戏 Adapter 和生产 E2E 待验收
 > 最后更新：2026-07-25
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
@@ -344,7 +344,7 @@ Hosted Runtime 最终需要真实 Game/Participant/Round 外键。当前 Phase 1
 | Phase 3 | Fake/真实 Provider Adapter 与结构化输出 | Fake、DeepSeek/OpenAI-compatible Adapter、PromptBuilder、DirectModelDriver 和 Worker 接线已实现；真实 Key 验收待生产部署 |
 | Phase 4 | Hosted Agent API、创建 UI 与 readiness | 控制面、幂等迁移、受门控 API、生产 PostgreSQL 组合与最小 UI 壳已实现 |
 | Phase 5 | Durable Worker、deadline、retry 与恢复 | PostgreSQL queue/lease、Attempt、Finalizer 与独立 Worker 已实现；真实服务器重启验收待完成 |
-| Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | Hosted/rule 已完成，并可自动执行五回合；Connector Adapter 待实现 |
+| Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | Hosted/rule 已完成，并可自动执行 1–10 回合；Connector Adapter 待实现 |
 | Phase 7 | PaymentMandate/Settlement 接线 | 单笔 EIP-3009 意图/恢复/确认后库存提交已实现；通用 Mandate 与新鲜交易待完成 |
 | Phase 8 | 单机部署、真实 E2E 与负载校准 | Compose/资源限制已实现；真实 SSM/Provider/支付和负载校准待完成 |
 | Phase 9 | Native A2A、Agent Studio、多 Runtime | Post-MVP |
@@ -1225,6 +1225,10 @@ Arena Task queue 与 credential validation queue 使用不同 claim 路径。比
 
 再选择统一 Game `action_timeout_ms`。该值是部署配置与 Game 快照，不在 Provider Adapter
 中硬编码。
+
+2026-07-25 开发证据：本地 scripted Provider 已完成 12 Hosted Agent × 5 回合和
+12 Hosted Agent × 10 回合持久化演示。该证据验证队列、Task 并发、Arena 编排和
+数据库投影，不是 Real Provider P95/P99，也不能据此冻结生产并发或 timeout。
 
 ### 15.4 E2E 矩阵
 

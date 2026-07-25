@@ -20,6 +20,9 @@ ORCHESTRATION_SQL_PATH = (
 SETTLEMENT_APPROVAL_SQL_PATH = (
     ROOT / "db" / "migrations" / "011_arena_settlement_approval.sql"
 )
+SCALABLE_GAME_SQL_PATH = (
+    ROOT / "db" / "migrations" / "012_arena_scalable_games.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -133,3 +136,16 @@ def test_settlement_approval_is_durable_and_precedes_submission() -> None:
     assert "'legacy_migration'" in sql
     assert "GRANT SELECT, INSERT, UPDATE, DELETE" in sql
     assert "TO adx_arena_core" in sql
+
+
+def test_scalable_game_migration_enforces_the_frozen_participant_limit() -> None:
+    sql = SCALABLE_GAME_SQL_PATH.read_text(encoding="utf-8")
+    assert (
+        "CREATE OR REPLACE FUNCTION "
+        "arena402.enforce_game_participant_limit()"
+    ) in sql
+    assert "SELECT max_participants" in sql
+    assert "FOR UPDATE" in sql
+    assert "participant limit reached" in sql
+    assert "DROP TRIGGER IF EXISTS game_participants_limit_guard" in sql
+    assert "BEFORE INSERT ON arena402.game_participants" in sql

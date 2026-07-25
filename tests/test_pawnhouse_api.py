@@ -29,7 +29,7 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
-    async def start_game(self, *, game_id, events):
+    async def start_game(self, *, game_id):
         return {
             "gameId": game_id,
             "roundId": f"round:{game_id}:1",
@@ -239,6 +239,75 @@ def test_create_game_and_add_twenty_gold_rule_participant() -> None:
     assert participant.json()["runtimeKind"] == "rule"
     assert len(repository.created) == 1
     assert len(repository.participants) == 1
+
+
+def test_create_game_accepts_an_eight_round_seeded_event_deck() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "eight-round-game",
+            "eventSeed": "eight-round-fixed-seed",
+            "roundCount": 8,
+            "eventDeckId": "pawnhouse-standard-v1",
+            "eventMode": "seeded_shuffle",
+        },
+    )
+
+    assert created.status_code == 201
+    events = repository.created[0]["events"]
+    assert len(events) == 8
+    assert [event.reveal_round for event in events] == list(range(1, 9))
+    assert len({event.event_id for event in events}) == 8
+    assert repository.created[0]["event_deck_id"] == "pawnhouse-standard-v1"
+    assert repository.created[0]["event_mode"] == "seeded_shuffle"
+
+
+def test_fixed_demo_event_mode_rejects_a_non_five_round_game() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "invalid-fixed-demo",
+            "eventSeed": "invalid-fixed-demo-seed",
+            "roundCount": 8,
+        },
+    )
+
+    assert created.status_code == 422
+    assert created.json()["detail"]["code"] == (
+        "fixed_demo_requires_exactly_five_rounds"
+    )
+    assert repository.created == []
+
+
+def test_create_game_freezes_a_twelve_agent_participant_limit() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "twelve-agent-game",
+            "eventSeed": "twelve-agent-fixed-seed",
+            "maxParticipants": 12,
+        },
+    )
+
+    assert created.status_code == 201
+    assert repository.created[0]["max_participants"] == 12
+
+
+def test_start_game_uses_the_schedule_persisted_at_creation() -> None:
+    client, _ = _client()
+    started = client.post(
+        "/api/dev/pawnhouse/games/eight-round-game/start",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+    )
+
+    assert started.status_code == 200
+    assert started.json()["phase"] == "decide"
 
 
 def test_create_game_freezes_explicit_eip3009_settlement_config() -> None:

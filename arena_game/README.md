@@ -9,14 +9,15 @@ It owns:
 - deterministic fixed-point gold arithmetic;
 - the equal-20-gold initial portfolio invariant;
 - the versioned world-event effect DSL;
-- the five-round deterministic demo schedule;
+- a five-round deterministic demo schedule and a versioned deterministic
+  seed-shuffled event deck for 1–10 rounds;
 - game and round state transitions;
 - terminal valuation and pawn-promotion ranking.
 - PostgreSQL-backed pool entry, FCFS pairing, and bounded negotiation state.
 - immutable single-payment SettlementIntent snapshots;
 - read-only EVM confirmation validation;
 - confirmation-gated, idempotent cash and inventory commit.
-- durable five-round orchestration and recovery from PostgreSQL state;
+- durable N-round orchestration and recovery from PostgreSQL state;
 - per-round cash/holding snapshots, frozen terminal prices, and rankings.
 
 It does not own:
@@ -73,6 +74,14 @@ Runtime runs:
 
 ```powershell
 python scripts/run_full_hosted_pawnhouse_demo.py
+```
+
+Run 12 Hosted Agents through ten rounds after generating one JSON batch of 12
+fresh invitations:
+
+```powershell
+$env:ARENA_HOSTED_INVITES = docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 12 --json
+python scripts/run_many_hosted_pawnhouse_demo.py --agents 12 --rounds 10
 ```
 
 Both full-game demonstrations use rejecting negotiations so they can verify

@@ -27,6 +27,10 @@
   round, automatic Hosted/rule execution, four-good FCFS pools, pairing-group
   concurrency, settlement-gated round close, per-round portfolio snapshots,
   frozen final prices, terminal ranking, and completed Game state.
+- [x] Milestone 7: versioned deterministic event deck for 1–10 rounds,
+  persisted schedule recovery, configurable 2–64 participant limit with
+  database enforcement, batch invitation issuance, and 12-agent local Hosted
+  execution.
 
 The Milestone 2 demonstration is:
 
@@ -91,9 +95,29 @@ Verified local PostgreSQL evidence on 2026-07-25:
   pending settlement. Automatic orchestration did not move inventory or skip
   the chain-confirmation gate.
 
+The Milestone 7 larger-game demonstration is:
+
+```powershell
+$env:ARENA_HOSTED_INVITES = docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 12 --json
+python scripts/run_many_hosted_pawnhouse_demo.py --agents 12 --rounds 10
+```
+
+Verified local PostgreSQL evidence on 2026-07-25:
+
+- 12 Hosted Agents completed five rounds with 60 decisions, 30 pairings,
+  60 public negotiation messages, five round closes, and 12 rankings;
+- the same load completed ten rounds with 120 decisions, 60 pairings,
+  120 public negotiation messages, ten round closes, and 12 rankings;
+- both runs used the local-only scripted Provider and deliberately rejected
+  negotiations, so no fake settlement was created;
+- a rollback-only real PostgreSQL check proved an accepted Game changes from
+  `wait_settlement` to `advance_round` only after confirmation-gated,
+  idempotent inventory commit. The synthetic confirmation was rolled back and
+  no transaction was signed or broadcast.
+
 > 状态：当前跨模块实施状态与建议顺序。
 
-Arena 402 已完成 Hosted Runtime 与五回合 Pawnhouse 游戏的本地开发闭环，并已建立
+Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游戏的本地开发闭环，并已建立
 确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 游戏适配、
 通用 PaymentMandate 与生产实机验收仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
@@ -173,8 +197,8 @@ create game
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
 - [ ] 前端尚无 Game Lobby、Game View、Result 和对应 Realtime 数据流。
-- [x] 固定五回合事件表、schedule commitment、结束后 seed 揭晓与冻结终场价格已实现；
-      可随机洗牌的事件牌组仍属后续扩展。
+- [x] 固定五回合事件表、版本化十张牌组、确定性 seed 洗牌、schedule
+      commitment、结束后 seed 揭晓与冻结终场价格已实现。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令
       运行双 Hosted Agent 至冻结结算意图，并输出安全公开证据。
 

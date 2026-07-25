@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from connector_gateway.auth import AuthError, ConnectorAuth
 from arena_game import (
+    EventDeckError,
     PawnhouseRepositoryError,
     Portfolio,
     PortfolioError,
@@ -19,7 +20,8 @@ from arena_game import (
     SettlementAccount,
     SettlementConfig,
     SettlementError,
-    demo_events,
+    STANDARD_EVENT_DECK_ID,
+    build_event_schedule,
     gold,
 )
 
@@ -56,6 +58,21 @@ class CreateGameBody(_Body):
         ge=100,
         le=900_000,
         alias="actionTimeoutMs",
+    )
+    round_count: int = Field(default=5, ge=1, le=10, alias="roundCount")
+    event_deck_id: Literal["pawnhouse-standard-v1"] = Field(
+        default=STANDARD_EVENT_DECK_ID,
+        alias="eventDeckId",
+    )
+    event_mode: Literal["fixed_demo", "seeded_shuffle"] = Field(
+        default="fixed_demo",
+        alias="eventMode",
+    )
+    max_participants: int = Field(
+        default=16,
+        ge=2,
+        le=64,
+        alias="maxParticipants",
     )
     settlement: "SettlementConfigBody | None" = None
 
@@ -310,14 +327,23 @@ def create_pawnhouse_router(
                     ),
                 )
             )
+            events = build_event_schedule(
+                round_count=body.round_count,
+                seed=body.event_seed,
+                deck_id=body.event_deck_id,
+                mode=body.event_mode,
+            )
             return await repository.create_game(
                 game_id=body.game_id,
-                events=demo_events(),
+                events=events,
                 event_seed=body.event_seed,
+                event_deck_id=body.event_deck_id,
+                event_mode=body.event_mode,
                 action_timeout_ms=body.action_timeout_ms,
+                max_participants=body.max_participants,
                 settlement_config=settlement_config,
             )
-        except SettlementError as exc:
+        except (EventDeckError, SettlementError) as exc:
             raise HTTPException(
                 status_code=422,
                 detail={"code": str(exc)},
@@ -439,10 +465,7 @@ def create_pawnhouse_router(
     ) -> dict[str, object]:
         authorize(x_arena_dev_token)
         try:
-            return await repository.start_game(
-                game_id=game_id,
-                events=demo_events(),
-            )
+            return await repository.start_game(game_id=game_id)
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
