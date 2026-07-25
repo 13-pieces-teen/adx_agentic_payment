@@ -65,7 +65,7 @@ class EvmJsonRpcConfirmationReader:
 
     async def find_transaction_for_authorization(
         self,
-        intent: SettlementIntent,
+        intent: Any,
         *,
         lookback_blocks: int = 4_096,
     ) -> str | None:
@@ -171,11 +171,14 @@ class EvmJsonRpcConfirmationReader:
 
     def _find_transaction_for_authorization_sync(
         self,
-        intent: SettlementIntent,
+        intent: Any,
         lookback_blocks: int,
     ) -> str | None:
-        chain_id = _hex_int(self._rpc("eth_chainId", []))
-        if chain_id != intent.chain_id:
+        chain_id, token_address, buyer, seller, amount, intent_hash = (
+            _authorization_recovery_values(intent)
+        )
+        observed_chain_id = _hex_int(self._rpc("eth_chainId", []))
+        if observed_chain_id != chain_id:
             raise ChainReadError("settlement_rpc_chain_mismatch")
         latest = _hex_int(self._rpc("eth_blockNumber", []))
         logs = self._rpc(
@@ -184,21 +187,21 @@ class EvmJsonRpcConfirmationReader:
                 {
                     "fromBlock": hex(max(0, latest - lookback_blocks + 1)),
                     "toBlock": hex(latest),
-                    "address": intent.token_address,
+                    "address": token_address,
                     "topics": [
                         _TRANSFER_TOPIC,
-                        _address_topic(intent.buyer_account),
-                        _address_topic(intent.seller_account),
+                        _address_topic(buyer),
+                        _address_topic(seller),
                     ],
                 }
             ],
         )
         if not isinstance(logs, list):
             raise ChainReadError("invalid_authorization_recovery_logs")
-        expected_nonce = intent.intent_hash.removeprefix("sha256:")
+        expected_nonce = intent_hash.removeprefix("sha256:")
         matches: set[str] = set()
         for log in logs:
-            if not isinstance(log, dict) or _hex_int(log.get("data")) != intent.amount_atomic:
+            if not isinstance(log, dict) or _hex_int(log.get("data")) != amount:
                 continue
             tx_hash = log.get("transactionHash")
             if not isinstance(tx_hash, str) or len(tx_hash) != 66:
@@ -410,6 +413,31 @@ def _authorization_nonce_from_calldata(value: object) -> str | None:
     if not all(char in "0123456789abcdefABCDEF" for char in nonce):
         return None
     return nonce.lower()
+
+
+def _authorization_recovery_values(
+    value: Any,
+) -> tuple[int, str, str, str, int, str]:
+    """Accept the frozen Arena intent or the payment-safe terms projection."""
+
+    try:
+        chain_id = int(value.chain_id)
+        token_address = normalize_evm_address(str(value.token_address))
+        buyer_value = getattr(value, "buyer_account", None)
+        seller_value = getattr(value, "seller_account", None)
+        buyer = normalize_evm_address(
+            str(buyer_value if buyer_value is not None else value.payer)
+        )
+        seller = normalize_evm_address(
+            str(seller_value if seller_value is not None else value.payee)
+        )
+        amount = int(value.amount_atomic)
+        intent_hash = str(value.intent_hash)
+    except (AttributeError, TypeError, ValueError, SettlementError) as exc:
+        raise ChainReadError("invalid_authorization_recovery_intent") from exc
+    if chain_id <= 0 or amount <= 0 or not intent_hash.startswith("sha256:"):
+        raise ChainReadError("invalid_authorization_recovery_intent")
+    return chain_id, token_address, buyer, seller, amount, intent_hash
 
 
 __all__ = [

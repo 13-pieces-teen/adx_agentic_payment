@@ -73,6 +73,7 @@ class _Source:
         self.statuses: list[str] = []
         self.failures: list[str] = []
         self.claims = 0
+        self.recovered: list[tuple[str, str]] = []
 
     async def authorization_targets(self, *, limit: int):
         assert limit == 25
@@ -94,6 +95,29 @@ class _Source:
 
     async def fail_settlement(self, *, safe_error_code: str, **_: object):
         self.failures.append(safe_error_code)
+
+    async def unknown_submission_targets(self, *, limit: int):
+        assert limit == 25
+        return []
+
+    async def record_recovered_submission(self, *, settlement_intent_id, tx_hash, **_):
+        self.recovered.append((settlement_intent_id, tx_hash))
+
+
+class _RecoveryReader:
+    async def find_transaction_for_authorization(self, terms, **_: object):
+        assert terms.settlement_intent_id == "intent-1"
+        return "0x" + "77" * 32
+
+
+class _UnknownSource(_Source):
+    async def authorization_targets(self, *, limit: int):
+        assert limit == 25
+        return []
+
+    async def unknown_submission_targets(self, *, limit: int):
+        assert limit == 25
+        return ["intent-1"]
 
 
 class _UnknownPersistenceFailureSource(_Source):
@@ -200,3 +224,31 @@ def test_unknown_submission_never_releases_budget_on_persistence_failure() -> No
     assert source.statuses == ["signed", "submitting", "unknown"]
     assert payments.mandates["mandate-1"].reserved_atomic == 40
     assert next(iter(payments.reservations.values())).status == "reserved"
+
+
+def test_worker_recovers_unknown_submission_without_signing_or_rebroadcasting() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _UnknownSource(mandate)
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_FailingSigner(),
+        coordinator=X402SettlementCoordinator(
+            payments=payments,
+            arena=_Arena(),
+            facilitator=_Facilitator(),
+        ),
+        worker_id="worker-1",
+        authorization_recovery_reader=_RecoveryReader(),
+    )
+
+    assert asyncio.run(worker.run_once()) == 1
+    assert source.recovered == [("intent-1", "0x" + "77" * 32)]
+    assert source.statuses == []

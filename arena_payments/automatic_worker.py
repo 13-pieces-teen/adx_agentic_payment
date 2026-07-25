@@ -11,6 +11,15 @@ from .repository import PaymentRepository
 from .signer import WalletSignerClient
 
 
+class AuthorizationRecoveryReader(Protocol):
+    async def find_transaction_for_authorization(
+        self,
+        terms: SettlementTerms,
+        *,
+        lookback_blocks: int = 4_096,
+    ) -> str | None: ...
+
+
 class AutomaticSettlementSource(Protocol):
     async def authorization_targets(self, *, limit: int) -> list[str]: ...
 
@@ -57,6 +66,7 @@ class AutomaticSettlementWorker:
         coordinator: X402SettlementCoordinator,
         worker_id: str,
         scan_limit: int = 25,
+        authorization_recovery_reader: AuthorizationRecoveryReader | None = None,
     ) -> None:
         if not worker_id or not 1 <= scan_limit <= 100:
             raise ValueError("invalid_automatic_settlement_worker")
@@ -66,12 +76,42 @@ class AutomaticSettlementWorker:
         self._coordinator = coordinator
         self._worker_id = worker_id
         self._scan_limit = scan_limit
+        self._authorization_recovery_reader = authorization_recovery_reader
 
     async def run_once(self) -> int:
+        recovered = await self._recover_ambiguous_submissions()
         targets = await self._source.authorization_targets(limit=self._scan_limit)
         for settlement_intent_id in targets:
             await self._execute(settlement_intent_id)
-        return len(targets)
+        return recovered + len(targets)
+
+    async def _recover_ambiguous_submissions(self) -> int:
+        if self._authorization_recovery_reader is None:
+            return 0
+        targets_method = getattr(
+            self._source, "unknown_submission_targets", None
+        )
+        record_method = getattr(
+            self._source, "record_recovered_submission", None
+        )
+        if targets_method is None or record_method is None:
+            return 0
+        targets = await targets_method(limit=self._scan_limit)
+        recovered = 0
+        for settlement_intent_id in targets:
+            terms = await self._source.settlement_terms(settlement_intent_id)
+            tx_hash = await self._authorization_recovery_reader.find_transaction_for_authorization(
+                terms
+            )
+            if tx_hash is None:
+                continue
+            await record_method(
+                settlement_intent_id=settlement_intent_id,
+                tx_hash=tx_hash,
+                now=datetime.now(timezone.utc),
+            )
+            recovered += 1
+        return recovered
 
     async def _execute(self, settlement_intent_id: str) -> None:
         now = datetime.now(timezone.utc)

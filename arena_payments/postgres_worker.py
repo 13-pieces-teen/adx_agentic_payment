@@ -49,6 +49,58 @@ class PostgresAutomaticSettlementSource:
         )
         return [str(row["settlement_intent_id"]) for row in rows]
 
+    async def unknown_submission_targets(self, *, limit: int) -> list[str]:
+        rows = await self._payments._require_pool().fetch(
+            """
+            SELECT attempt.settlement_intent_id
+            FROM arena402.x402_settlement_attempts AS attempt
+            JOIN arena402.settlement_intents AS intent
+              ON intent.settlement_intent_id = attempt.settlement_intent_id
+            LEFT JOIN arena402.settlement_submissions AS submission
+              ON submission.settlement_intent_id = attempt.settlement_intent_id
+            WHERE intent.status = 'authorization_requested'
+              AND submission.settlement_intent_id IS NULL
+              AND attempt.status IN ('submitting', 'unknown')
+            ORDER BY attempt.updated_at, attempt.settlement_intent_id
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [str(row["settlement_intent_id"]) for row in rows]
+
+    async def record_recovered_submission(
+        self,
+        *,
+        settlement_intent_id: str,
+        tx_hash: str,
+        now: datetime,
+    ) -> None:
+        row = await self._payments._require_pool().fetchrow(
+            """
+            SELECT reservation_id
+            FROM arena402.x402_settlement_attempts
+            WHERE settlement_intent_id = $1
+              AND status IN ('submitting', 'unknown')
+            """,
+            settlement_intent_id,
+        )
+        if row is None:
+            return
+        await self._payments.submit_reservation(
+            str(row["reservation_id"]),
+            tx_hash=tx_hash,
+            now=now,
+        )
+        terms = await self.settlement_terms(settlement_intent_id)
+        await self._arena.record_automatic_submission(
+            settlement_intent_id=settlement_intent_id,
+            tx_hash=tx_hash,
+            authorization_nonce=(
+                "0x" + terms.intent_hash.removeprefix("sha256:")
+            ),
+            approved_intent_hash=terms.intent_hash,
+        )
+
     async def settlement_terms(self, settlement_intent_id: str) -> SettlementTerms:
         intent = await self._arena.settlement_intent_for_payment(
             settlement_intent_id=settlement_intent_id

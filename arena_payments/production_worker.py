@@ -13,6 +13,7 @@ import signal
 from datetime import datetime, timezone
 
 from arena_game.postgres import PostgresPawnhouseRepository
+from arena_game.evm_confirmation import EvmJsonRpcConfirmationReader
 
 from .automatic_worker import AutomaticSettlementWorker
 from .coordinator import X402SettlementCoordinator
@@ -117,6 +118,9 @@ async def main() -> None:
         worker_id=(
             os.getenv("ADX_SETTLEMENT_WORKER_ID")
             or "arena402-settlement-worker"
+        ),
+        authorization_recovery_reader=EvmJsonRpcConfirmationReader(
+            _https_url("ADX_ARENA_SETTLEMENT_RPC_URL")
         ),
     )
     worker = SettlementProductionWorker(
