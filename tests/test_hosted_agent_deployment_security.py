@@ -19,7 +19,18 @@ def test_edge_access_logs_never_emit_oauth_urls_or_query_values() -> None:
         )
         assert "format filter {" in config
         assert "request>uri replace REDACTED" in config
+        assert "request>headers>Authorization replace REDACTED" in config
+        assert "request>headers>Cookie replace REDACTED" in config
+        assert (
+            "request>headers>X-Vercel-Proxy-Signature replace REDACTED"
+            in config
+        )
+        assert (
+            "request>headers>X-Vercel-Proxy-Signature-Ts replace REDACTED"
+            in config
+        )
         assert "resp_headers>Location replace REDACTED" in config
+        assert "resp_headers>Set-Cookie replace REDACTED" in config
         assert "wrap json" in config
 
 
