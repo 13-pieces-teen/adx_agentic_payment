@@ -101,6 +101,8 @@ PositiveFixedDecimal: TypeAlias = Annotated[
     PlainSerializer(_serialize_fixed_decimal, return_type=str),
 ]
 
+OrderQuantity: TypeAlias = Annotated[int, Field(gt=0, le=1_000_000)]
+
 GoodId: TypeAlias = Annotated[
     str,
     StringConstraints(
@@ -119,11 +121,27 @@ PublicMessage: TypeAlias = Annotated[
 class BuyAction(_StrictWireModel):
     action: Literal["buy"]
     good: GoodId
+    quantity: OrderQuantity = Field(
+        default=1,
+        exclude_if=lambda value: value == 1,
+    )
+    limit_price: PositiveFixedDecimal | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class SellAction(_StrictWireModel):
     action: Literal["sell"]
     good: GoodId
+    quantity: OrderQuantity = Field(
+        default=1,
+        exclude_if=lambda value: value == 1,
+    )
+    limit_price: PositiveFixedDecimal | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class PassAction(_StrictWireModel):
@@ -192,6 +210,7 @@ __all__ = [
     "MAX_PUBLIC_MESSAGE_LENGTH",
     "NegotiateActionV1",
     "NonNegativeFixedDecimal",
+    "OrderQuantity",
     "PassAction",
     "PositiveFixedDecimal",
     "ProposeAction",

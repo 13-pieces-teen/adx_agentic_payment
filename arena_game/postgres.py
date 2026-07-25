@@ -17,13 +17,14 @@ from .events import (
     EventEffect,
     WorldEvent,
     WorldState,
+    apply_market_feedback,
     schedule_commitment,
 )
 from .goods import GOODS, GOOD_IDS, require_good
 from .market import Pairing, PoolEntry, fcfs_pair
 from .money import gold
 from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
-from .portfolio import Portfolio
+from .portfolio import Portfolio, distribute_balanced_portfolios
 from .ranking import calculate_rankings
 from .rule_runtime import RuleRuntime, RuleStrategy
 from .settlement import (
@@ -109,17 +110,20 @@ class PostgresPawnhouseRepository:
         max_negotiation_turns: int = 3,
         min_participants: int = 2,
         max_participants: int = 16,
+        portfolio_mode: str = "manual",
         settlement_config: SettlementConfig | None = None,
         operator_user_id: str | None = None,
     ) -> dict[str, object]:
         if not game_id:
             raise PawnhouseRepositoryError("game_id_required")
-        if min_participants < 2 or min_participants > 64:
+        if min_participants < 2:
             raise PawnhouseRepositoryError("invalid_min_participants")
-        if max_participants < 2 or max_participants > 64:
+        if max_participants < 2:
             raise PawnhouseRepositoryError("invalid_max_participants")
         if max_participants < min_participants:
             raise PawnhouseRepositoryError("invalid_participant_range")
+        if portfolio_mode not in {"manual", "balanced_auto"}:
+            raise PawnhouseRepositoryError("invalid_portfolio_mode")
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
         config = {
@@ -128,6 +132,7 @@ class PostgresPawnhouseRepository:
             "roundCount": len(events),
             "minParticipants": min_participants,
             "maxParticipants": max_participants,
+            "portfolioMode": portfolio_mode,
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
             "eventMode": event_mode,
@@ -198,6 +203,7 @@ class PostgresPawnhouseRepository:
             "roundCount": len(events),
             "minParticipants": start_threshold,
             "maxParticipants": max_participants,
+            "portfolioMode": "balanced_auto",
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
             "eventMode": event_mode,
@@ -444,10 +450,14 @@ class PostgresPawnhouseRepository:
         game_id: str,
         user_id: str,
         agent_id: str,
-        portfolio: Portfolio,
+        portfolio: Portfolio | None,
         strategy: RuleStrategy,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
+        portfolio = portfolio or Portfolio.initial(
+            cash_atomic=20_000_000,
+            holdings={},
+        )
         # The binding is a game-join snapshot. The same logical Agent may join
         # later games without sharing mutable strategy/configuration state.
         runtime_binding_id = f"rule:{participant_id}"
@@ -563,13 +573,17 @@ class PostgresPawnhouseRepository:
         game_id: str,
         user_id: str,
         agent_id: str,
-        portfolio: Portfolio,
+        portfolio: Portfolio | None,
         settlement_account: SettlementAccount | None = None,
         payment_mandate_id: str | None = None,
         join_authorization_id: str | None = None,
         require_current_game: bool = False,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
+        portfolio = portfolio or Portfolio.initial(
+            cash_atomic=20_000_000,
+            holdings={},
+        )
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
@@ -868,10 +882,14 @@ class PostgresPawnhouseRepository:
         game_id: str,
         user_id: str,
         agent_id: str,
-        portfolio: Portfolio,
+        portfolio: Portfolio | None,
         settlement_account: SettlementAccount | None = None,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
+        portfolio = portfolio or Portfolio.initial(
+            cash_atomic=20_000_000,
+            holdings={},
+        )
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
@@ -1172,7 +1190,8 @@ class PostgresPawnhouseRepository:
 
         game = await connection.fetchrow(
             """
-            SELECT phase, min_participants, round_count, operator_user_id
+            SELECT phase, min_participants, round_count, operator_user_id,
+                   event_seed, config_snapshot
             FROM arena402.games
             WHERE game_id = $1
             FOR UPDATE
@@ -1188,6 +1207,17 @@ class PostgresPawnhouseRepository:
             raise PawnhouseRepositoryError("game_operator_forbidden")
         if game["phase"] != "portfolio_setup":
             raise PawnhouseRepositoryError("game_not_ready")
+        game_config = (
+            json.loads(game["config_snapshot"])
+            if isinstance(game["config_snapshot"], str)
+            else dict(game["config_snapshot"])
+        )
+        if game_config.get("portfolioMode") == "balanced_auto":
+            await self._assign_balanced_portfolios_locked(
+                connection,
+                game_id=game_id,
+                seed=str(game["event_seed"]),
+            )
         count = await connection.fetchval(
             """
             SELECT count(*)
@@ -1278,6 +1308,62 @@ class PostgresPawnhouseRepository:
         )
         return {"gameId": game_id, "roundId": round_id, "phase": "decide"}
 
+    async def _assign_balanced_portfolios_locked(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        seed: str,
+    ) -> None:
+        rows = await connection.fetch(
+            """
+            SELECT game_participant_id
+            FROM arena402.game_participants
+            WHERE game_id = $1 AND readiness = 'ready'
+            ORDER BY joined_at, game_participant_id
+            FOR UPDATE
+            """,
+            game_id,
+        )
+        portfolios = distribute_balanced_portfolios(
+            [str(row["game_participant_id"]) for row in rows],
+            seed=seed,
+        )
+        for participant_id, portfolio in portfolios.items():
+            await connection.execute(
+                """
+                UPDATE arena402.balances
+                SET cash_atomic = $2, version = version + 1,
+                    updated_at = clock_timestamp()
+                WHERE game_participant_id = $1
+                """,
+                participant_id,
+                portfolio.cash_atomic,
+            )
+            for good_id, quantity in portfolio.holdings.items():
+                await connection.execute(
+                    """
+                    UPDATE arena402.holdings
+                    SET quantity = $3, initial_quantity = $3,
+                        version = version + 1, updated_at = clock_timestamp()
+                    WHERE game_participant_id = $1 AND good_id = $2
+                    """,
+                    participant_id,
+                    good_id,
+                    quantity,
+                )
+            await connection.execute(
+                """
+                UPDATE public.game_agents
+                SET initial_cash_atomic = $2,
+                    initial_inventory = $3::jsonb
+                WHERE game_agent_id = $1
+                """,
+                participant_id,
+                portfolio.cash_atomic,
+                _json(portfolio.holdings),
+            )
+
     async def run_rule_market(self, *, game_id: str) -> dict[str, object]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -1352,9 +1438,9 @@ class PostgresPawnhouseRepository:
                             INSERT INTO arena402.pool_entries (
                                 pool_entry_id, game_id, round_id,
                                 game_participant_id, source_result_id,
-                                side, good_id
+                                side, good_id, quantity, limit_price_atomic
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            VALUES ($1, $2, $3, $4, $5, $6, 1, $7)
                             RETURNING result_received_at
                             """,
                             pool_entry_id,
@@ -1364,6 +1450,7 @@ class PostgresPawnhouseRepository:
                             source_result_id,
                             decision.action,
                             decision.good,
+                            decision.target_price_atomic,
                         )
                         received_at = inserted["result_received_at"]
                     else:
@@ -1675,6 +1762,69 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            activity_rows = await connection.fetch(
+                """
+                WITH decision_stats AS (
+                    SELECT
+                        e.public_payload->>'good' AS good_id,
+                        COUNT(*) FILTER (
+                            WHERE e.public_payload->>'action' = 'buy'
+                        ) AS buy_count,
+                        COUNT(*) FILTER (
+                            WHERE e.public_payload->>'action' = 'sell'
+                        ) AS sell_count
+                    FROM arena402.game_events AS e
+                    JOIN arena402.rounds AS previous_round
+                      ON previous_round.round_id = e.round_id
+                     AND previous_round.game_id = e.game_id
+                    WHERE e.game_id = $1
+                      AND e.event_type = 'decision.applied'
+                      AND previous_round.round_index < (
+                          SELECT current_round
+                          FROM arena402.games
+                          WHERE game_id = $1
+                      )
+                    GROUP BY e.public_payload->>'good'
+                ),
+                trade_stats AS (
+                    SELECT
+                        i.good_id,
+                        COUNT(*) AS volume,
+                        (
+                            ARRAY_AGG(
+                                i.unit_price_atomic
+                                ORDER BY r.round_index DESC,
+                                         i.completed_at DESC,
+                                         i.settlement_intent_id DESC
+                            )
+                        )[1] AS last_clearing_price_atomic
+                    FROM arena402.settlement_intents AS i
+                    JOIN arena402.rounds AS r
+                      ON r.round_id = i.round_id
+                     AND r.game_id = i.game_id
+                    WHERE i.game_id = $1
+                      AND i.status = 'inventory_committed'
+                      AND r.round_index < (
+                          SELECT current_round
+                          FROM arena402.games
+                          WHERE game_id = $1
+                      )
+                    GROUP BY i.good_id
+                )
+                SELECT
+                    gg.good_id,
+                    COALESCE(ds.buy_count, 0) AS buy_count,
+                    COALESCE(ds.sell_count, 0) AS sell_count,
+                    COALESCE(ts.volume, 0) AS volume,
+                    ts.last_clearing_price_atomic
+                FROM arena402.game_goods AS gg
+                LEFT JOIN decision_stats AS ds ON ds.good_id = gg.good_id
+                LEFT JOIN trade_stats AS ts ON ts.good_id = gg.good_id
+                WHERE gg.game_id = $1
+                ORDER BY gg.good_id
+                """,
+                game_id,
+            )
             participants = await connection.fetch(
                 """
                 SELECT
@@ -1725,6 +1875,42 @@ class PostgresPawnhouseRepository:
                             )
                             for row in market_rows
                         },
+                        "market_activity": [
+                            {
+                                "good": row["good_id"],
+                                "last_clearing_price_atomic": (
+                                    None
+                                    if row["last_clearing_price_atomic"] is None
+                                    else int(row["last_clearing_price_atomic"])
+                                ),
+                                "volume": int(row["volume"]),
+                                "buy_pressure_bps": (
+                                    0
+                                    if int(row["buy_count"])
+                                    + int(row["sell_count"])
+                                    == 0
+                                    else max(
+                                        -10_000,
+                                        min(
+                                            10_000,
+                                            (
+                                                (
+                                                    int(row["buy_count"])
+                                                    - int(row["sell_count"])
+                                                )
+                                                * 10_000
+                                            )
+                                            // (
+                                                int(row["buy_count"])
+                                                + int(row["sell_count"])
+                                            ),
+                                        ),
+                                    )
+                                ),
+                                "spread_bps": None,
+                            }
+                            for row in activity_rows
+                        ],
                         "events": [
                             {
                                 "event_id": row["event_id"],
@@ -1765,6 +1951,18 @@ class PostgresPawnhouseRepository:
     ) -> dict[str, object]:
         action_name = str(action.get("action", "pass"))
         good_id = action.get("good")
+        quantity = action.get("quantity", 1)
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            quantity = 1
+        quantity = max(1, min(1_000_000, quantity))
+        limit_price_atomic = None
+        if action.get("limitPrice", action.get("limit_price")) is not None:
+            try:
+                limit_price_atomic = gold(
+                    str(action.get("limitPrice", action.get("limit_price")))
+                )
+            except (TypeError, ValueError):
+                limit_price_atomic = None
         if action_name not in {"buy", "sell", "pass"}:
             action_name = "pass"
             good_id = None
@@ -1791,6 +1989,8 @@ class PostgresPawnhouseRepository:
                         "participantId": participant_id,
                         "action": action_name,
                         "good": good_id,
+                        "quantity": quantity,
+                        "limitPriceAtomic": limit_price_atomic,
                         "resultReceivedAt": result_received_at.isoformat(),
                     }
                 if action_name == "sell":
@@ -1805,18 +2005,21 @@ class PostgresPawnhouseRepository:
                         participant_id,
                         good_id,
                     )
-                    if available is None or available < 1:
+                    if available is None or available < quantity:
                         action_name = "pass"
                         good_id = None
+                        quantity = 1
+                        limit_price_atomic = None
                 if action_name != "pass":
                     await connection.execute(
                         """
                         INSERT INTO arena402.pool_entries (
                             pool_entry_id, game_id, round_id,
                             game_participant_id, source_result_id,
-                            side, good_id, result_received_at
+                            side, good_id, quantity, limit_price_atomic,
+                            result_received_at
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                         ON CONFLICT (source_result_id) DO NOTHING
                         """,
                         f"pool:{round_id}:{participant_id}",
@@ -1826,12 +2029,16 @@ class PostgresPawnhouseRepository:
                         result_id,
                         action_name,
                         good_id,
+                        quantity,
+                        limit_price_atomic,
                         result_received_at,
                     )
                 public = {
                     "participantId": participant_id,
                     "action": action_name,
                     "good": good_id,
+                    "quantity": quantity,
+                    "limitPriceAtomic": limit_price_atomic,
                     "resultReceivedAt": result_received_at.isoformat(),
                 }
                 await self._event(
@@ -1969,6 +2176,15 @@ class PostgresPawnhouseRepository:
                 """,
                 negotiation["pairing_id"],
             )
+            pairing = await connection.fetchrow(
+                """
+                SELECT quantity, buyer_limit_price_atomic,
+                       seller_limit_price_atomic
+                FROM arena402.pairings
+                WHERE pairing_id = $1
+                """,
+                negotiation["pairing_id"],
+            )
             round_index = await connection.fetchval(
                 """
                 SELECT round_index
@@ -2008,6 +2224,12 @@ class PostgresPawnhouseRepository:
             "counterparty_name": counterparty["name"] or "Arena Agent",
             "role": role,
             "good": good_id,
+            "quantity": int(pairing["quantity"]),
+            "limit_price_atomic": (
+                pairing["buyer_limit_price_atomic"]
+                if role == "buyer"
+                else pairing["seller_limit_price_atomic"]
+            ),
             "cash_atomic": int(participant["cash_atomic"]),
             "inventory_available": int(
                 participant["inventory_available"]
@@ -2162,6 +2384,20 @@ class PostgresPawnhouseRepository:
                     )
                 else:
                     action_name = str(action.get("action"))
+                    pairing = await connection.fetchrow(
+                        """
+                        SELECT quantity, buyer_limit_price_atomic,
+                               seller_limit_price_atomic
+                        FROM arena402.pairings
+                        WHERE pairing_id = $1
+                        """,
+                        row["pairing_id"],
+                    )
+                    own_limit = (
+                        pairing["buyer_limit_price_atomic"]
+                        if row["next_role"] == "buyer"
+                        else pairing["seller_limit_price_atomic"]
+                    )
                     action_value = NegotiationAction(
                         action=action_name,
                         price_atomic=(
@@ -2176,6 +2412,22 @@ class PostgresPawnhouseRepository:
                             else None
                         ),
                     )
+                    quote_price = action_value.price_atomic
+                    if action_name == "accept" and negotiation.turns:
+                        quote_price = negotiation.turns[-1].action.price_atomic
+                    if own_limit is not None and quote_price is not None:
+                        outside_limit = (
+                            row["next_role"] == "buyer"
+                            and quote_price > int(own_limit)
+                        ) or (
+                            row["next_role"] == "seller"
+                            and quote_price < int(own_limit)
+                        )
+                        if outside_limit:
+                            action_value = NegotiationAction(
+                                action="reject",
+                                message="The proposed price is outside my limit.",
+                            )
                     turn = negotiation.apply(
                         role=row["next_role"],
                         action=action_value,
@@ -3211,14 +3463,15 @@ class PostgresPawnhouseRepository:
                     raise PawnhouseRepositoryError(
                         "buyer_cash_changed_before_commit"
                     )
-                if seller_holding_before < 1:
+                quantity = int(intent["quantity"])
+                if seller_holding_before < quantity:
                     raise PawnhouseRepositoryError(
                         "seller_inventory_changed_before_commit"
                     )
                 buyer_cash_after = buyer_cash_before - amount
                 seller_cash_after = seller_cash_before + amount
-                buyer_holding_after = buyer_holding_before + 1
-                seller_holding_after = seller_holding_before - 1
+                buyer_holding_after = buyer_holding_before + quantity
+                seller_holding_after = seller_holding_before - quantity
                 await connection.execute(
                     """
                     UPDATE arena402.balances
@@ -4171,6 +4424,7 @@ class PostgresPawnhouseRepository:
             SELECT
                 pool_entry_id, game_id, round_id, game_participant_id,
                 side, good_id, result_received_at
+                , quantity, limit_price_atomic
             FROM arena402.pool_entries
             WHERE round_id = $1
               AND status = 'unmatched'
@@ -4188,6 +4442,12 @@ class PostgresPawnhouseRepository:
                 side=row["side"],
                 good=row["good_id"],
                 entered_at=row["result_received_at"],
+                quantity=int(row["quantity"]),
+                limit_price_atomic=(
+                    None
+                    if row["limit_price_atomic"] is None
+                    else int(row["limit_price_atomic"])
+                ),
             )
             for row in rows
         )
@@ -4207,9 +4467,10 @@ class PostgresPawnhouseRepository:
                     pairing_id, game_id, round_id, good_id,
                     buyer_entry_id, seller_entry_id,
                     buyer_participant_id, seller_participant_id,
-                    pairing_sequence
+                    pairing_sequence, quantity,
+                    buyer_limit_price_atomic, seller_limit_price_atomic
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
                 pairing.pairing_id,
                 pairing.game_id,
@@ -4220,6 +4481,9 @@ class PostgresPawnhouseRepository:
                 pairing.buyer_participant_id,
                 pairing.seller_participant_id,
                 pairing.sequence,
+                pairing.quantity,
+                pairing.buyer_limit_price_atomic,
+                pairing.seller_limit_price_atomic,
             )
             await connection.execute(
                 """
@@ -4481,6 +4745,7 @@ class PostgresPawnhouseRepository:
                 n.seller_participant_id,
                 n.accepted_price_atomic,
                 p.good_id,
+                p.quantity,
                 g.config_snapshot,
                 buyer.agent_id AS buyer_agent_id,
                 seller.agent_id AS seller_agent_id,
@@ -4550,11 +4815,13 @@ class PostgresPawnhouseRepository:
                 "settlement_account_chain_mismatch"
             )
         accepted_price = int(row["accepted_price_atomic"])
-        if int(row["buyer_cash_atomic"]) < accepted_price:
+        quantity = int(row["quantity"])
+        amount = accepted_price * quantity
+        if int(row["buyer_cash_atomic"]) < amount:
             raise PawnhouseRepositoryError(
                 "buyer_has_insufficient_cash_for_settlement"
             )
-        if int(row["seller_quantity"]) < 1:
+        if int(row["seller_quantity"]) < quantity:
             raise PawnhouseRepositoryError(
                 "seller_has_no_inventory_for_settlement"
             )
@@ -4572,9 +4839,9 @@ class PostgresPawnhouseRepository:
             buyer_account=row["buyer_account"],
             seller_account=row["seller_account"],
             good=row["good_id"],
-            quantity=1,
+            quantity=quantity,
             unit_price_atomic=accepted_price,
-            amount_atomic=accepted_price,
+            amount_atomic=amount,
             chain_id=settlement_config.chain_id,
             token_address=settlement_config.token_address,
             token_symbol=settlement_config.token_symbol,
@@ -5004,6 +5271,17 @@ class PostgresPawnhouseRepository:
         if snapshot is None:
             raise PawnhouseRepositoryError("round_world_snapshot_missing")
 
+        last_clearing_prices, buy_pressure_bps = await self._market_feedback(
+            connection,
+            game_id=game_id,
+            before_round_index=round_index,
+        )
+        snapshot = apply_market_feedback(
+            snapshot,
+            last_clearing_prices=last_clearing_prices,
+            buy_pressure_bps=buy_pressure_bps,
+        )
+
         round_id = f"round:{game_id}:{round_index}"
         await connection.execute(
             """
@@ -5083,6 +5361,73 @@ class PostgresPawnhouseRepository:
             "deadlineAt": deadline_at,
             "eventId": event.event_id,
         }
+
+    @staticmethod
+    async def _market_feedback(
+        connection: Any,
+        *,
+        game_id: str,
+        before_round_index: int,
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """Read only settled history used to seed the next market snapshot."""
+
+        trade_rows = await connection.fetch(
+            """
+            SELECT DISTINCT ON (i.good_id)
+                i.good_id, i.unit_price_atomic
+            FROM arena402.settlement_intents AS i
+            JOIN arena402.rounds AS r
+              ON r.round_id = i.round_id
+             AND r.game_id = i.game_id
+            WHERE i.game_id = $1
+              AND i.status = 'inventory_committed'
+              AND r.round_index < $2
+            ORDER BY i.good_id, r.round_index DESC,
+                     i.completed_at DESC, i.settlement_intent_id DESC
+            """,
+            game_id,
+            before_round_index,
+        )
+        decision_rows = await connection.fetch(
+            """
+            SELECT
+                e.public_payload->>'good' AS good_id,
+                COUNT(*) FILTER (
+                    WHERE e.public_payload->>'action' = 'buy'
+                ) AS buy_count,
+                COUNT(*) FILTER (
+                    WHERE e.public_payload->>'action' = 'sell'
+                ) AS sell_count
+            FROM arena402.game_events AS e
+            JOIN arena402.rounds AS r
+              ON r.round_id = e.round_id
+             AND r.game_id = e.game_id
+            WHERE e.game_id = $1
+              AND e.event_type = 'decision.applied'
+              AND r.round_index < $2
+            GROUP BY e.public_payload->>'good'
+            """,
+            game_id,
+            before_round_index,
+        )
+        prices = {
+            str(row["good_id"]): int(row["unit_price_atomic"])
+            for row in trade_rows
+        }
+        pressure: dict[str, int] = {}
+        for row in decision_rows:
+            buy_count = int(row["buy_count"])
+            sell_count = int(row["sell_count"])
+            total = buy_count + sell_count
+            pressure[str(row["good_id"])] = (
+                0
+                if total == 0
+                else max(
+                    -10_000,
+                    min(10_000, ((buy_count - sell_count) * 10_000) // total),
+                )
+            )
+        return prices, pressure
 
     async def _finalize_game(
         self,
@@ -5372,6 +5717,9 @@ class PostgresPawnhouseRepository:
             "good": pairing.good,
             "buyerParticipantId": pairing.buyer_participant_id,
             "sellerParticipantId": pairing.seller_participant_id,
+            "quantity": pairing.quantity,
+            "buyerLimitPriceAtomic": pairing.buyer_limit_price_atomic,
+            "sellerLimitPriceAtomic": pairing.seller_limit_price_atomic,
             "sequence": pairing.sequence,
         }
 

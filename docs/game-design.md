@@ -89,7 +89,9 @@ Circle USDC 或生产资金。
 一笔交易。
 
 Game 在创建时同时冻结 `roundCount`、`eventDeckId`、`eventMode`、
-`maxParticipants` 和配置版本。当前 `maxParticipants` 默认 16、允许 2–64；
+`maxParticipants` 和配置版本。当前 `maxParticipants` 默认 16、下限为 2，
+Game Core 不再设置固定全局上限；部署方必须按 worker、Provider 和数据库容量
+控制 Operator 创建的单局规模。产品侧 Current Game 仍独立限制为最多 12 人；
 Arena API 和 PostgreSQL trigger 都必须拒绝超额加入，避免并发请求绕过上限。
 
 ```text

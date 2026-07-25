@@ -59,6 +59,21 @@ def test_fcfs_uses_authoritative_time_then_stable_entry_id() -> None:
     ]
 
 
+def test_fcfs_pairs_quantity_and_preserves_both_limit_prices() -> None:
+    buyer = _entry("buyer", "buyer", "buy", 0)
+    seller = _entry("seller", "seller", "sell", 1)
+    object.__setattr__(buyer, "quantity", 4)
+    object.__setattr__(buyer, "limit_price_atomic", gold("7"))
+    object.__setattr__(seller, "quantity", 2)
+    object.__setattr__(seller, "limit_price_atomic", gold("6"))
+
+    pairing = fcfs_pair((buyer, seller))[0]
+
+    assert pairing.quantity == 2
+    assert pairing.buyer_limit_price_atomic == gold("7")
+    assert pairing.seller_limit_price_atomic == gold("6")
+
+
 def test_fcfs_rejects_cross_round_and_self_pairing() -> None:
     cross_round = _entry("seller", "seller", "sell", 1)
     object.__setattr__(cross_round, "round_id", "round_2")
@@ -185,4 +200,3 @@ def test_rule_runtime_can_complete_a_deterministic_negotiation() -> None:
     negotiation.apply(role="seller", action=seller_response)
     assert negotiation.status is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
     assert negotiation.accepted_price_atomic == gold("7")
-

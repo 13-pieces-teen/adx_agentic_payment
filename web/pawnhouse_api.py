@@ -73,8 +73,11 @@ class CreateGameBody(_Body):
     max_participants: int = Field(
         default=16,
         ge=2,
-        le=64,
         alias="maxParticipants",
+    )
+    portfolio_mode: Literal["manual", "balanced_auto"] = Field(
+        default="manual",
+        alias="portfolioMode",
     )
     settlement: "SettlementConfigBody | None" = None
 
@@ -98,13 +101,13 @@ class RuleStrategyBody(_Body):
 class AddRuleParticipantBody(_Body):
     user_id: _Id = Field(alias="userId")
     agent_id: _Id = Field(alias="agentId")
-    portfolio: PortfolioBody
+    portfolio: PortfolioBody | None = None
     strategy: RuleStrategyBody
 
 
 class AddHostedParticipantBody(_Body):
     agent_id: _Id = Field(alias="agentId")
-    portfolio: PortfolioBody
+    portfolio: PortfolioBody | None = None
     settlement_account: "SettlementAccountBody | None" = Field(
         default=None,
         alias="settlementAccount",
@@ -113,7 +116,7 @@ class AddHostedParticipantBody(_Body):
 
 class AddConnectorParticipantBody(_Body):
     agent_id: _Id = Field(alias="agentId")
-    portfolio: PortfolioBody
+    portfolio: PortfolioBody | None = None
     settlement_account: "SettlementAccountBody | None" = Field(
         default=None,
         alias="settlementAccount",
@@ -497,9 +500,13 @@ def create_pawnhouse_participation_router(
                     custody_mode=body.settlement_account.custody_mode,
                 )
             )
-            portfolio = Portfolio.initial(
-                cash_atomic=gold(body.portfolio.cash),
-                holdings=body.portfolio.holdings,
+            portfolio = (
+                None
+                if body.portfolio is None
+                else Portfolio.initial(
+                    cash_atomic=gold(body.portfolio.cash),
+                    holdings=body.portfolio.holdings,
+                )
             )
             participant_id = await repository.add_hosted_participant(
                 game_id=game_id,
@@ -554,9 +561,13 @@ def create_pawnhouse_participation_router(
                     custody_mode=body.settlement_account.custody_mode,
                 )
             )
-            portfolio = Portfolio.initial(
-                cash_atomic=gold(body.portfolio.cash),
-                holdings=body.portfolio.holdings,
+            portfolio = (
+                None
+                if body.portfolio is None
+                else Portfolio.initial(
+                    cash_atomic=gold(body.portfolio.cash),
+                    holdings=body.portfolio.holdings,
+                )
             )
             participant_id = await repository.add_connector_participant(
                 game_id=game_id,
@@ -660,6 +671,7 @@ def create_pawnhouse_router(
                 event_mode=body.event_mode,
                 action_timeout_ms=body.action_timeout_ms,
                 max_participants=body.max_participants,
+                portfolio_mode=body.portfolio_mode,
                 settlement_config=settlement_config,
             )
         except (EventDeckError, SettlementError) as exc:
@@ -681,9 +693,13 @@ def create_pawnhouse_router(
     ) -> dict[str, object]:
         authorize(x_arena_dev_token)
         try:
-            portfolio = Portfolio.initial(
-                cash_atomic=gold(body.portfolio.cash),
-                holdings=body.portfolio.holdings,
+            portfolio = (
+                None
+                if body.portfolio is None
+                else Portfolio.initial(
+                    cash_atomic=gold(body.portfolio.cash),
+                    holdings=body.portfolio.holdings,
+                )
             )
             strategy = RuleStrategy(
                 intent=body.strategy.intent,

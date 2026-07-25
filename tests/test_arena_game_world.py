@@ -15,6 +15,7 @@ from arena_game import (
     PortfolioError,
     RoundPhase,
     WorldState,
+    apply_market_feedback,
     apply_basis_points,
     build_event_schedule,
     demo_events,
@@ -22,6 +23,7 @@ from arena_game import (
     gold,
     schedule_commitment,
 )
+from arena_game.portfolio import distribute_balanced_portfolios
 
 
 def test_gold_is_fixed_point_and_rejects_float() -> None:
@@ -87,6 +89,24 @@ def test_demo_event_schedule_is_deterministic_and_resets_gem_bubble() -> None:
     assert round_five.final_prices["gems"] == INITIAL_PRICES["gems"]
 
 
+def test_market_feedback_is_bounded_and_keeps_event_price_as_anchor() -> None:
+    event = demo_events()[0]
+    snapshot = WorldState({event.event_id: event}).reveal(
+        event.event_id,
+        round_index=1,
+    )
+
+    feedback = apply_market_feedback(
+        snapshot,
+        last_clearing_prices={"iron": gold("20")},
+        buy_pressure_bps={"iron": 10_000},
+    )
+
+    assert snapshot.market_prices["iron"] == gold("10")
+    assert feedback.market_prices["iron"] == gold("15")
+    assert feedback.market_prices["grain"] == INITIAL_PRICES["grain"]
+
+
 def test_seeded_event_deck_builds_a_replayable_ten_round_schedule() -> None:
     first = build_event_schedule(
         round_count=10,
@@ -112,6 +132,49 @@ def test_seeded_event_deck_builds_a_replayable_ten_round_schedule() -> None:
     ]
     assert [event.reveal_round for event in first] == list(range(1, 11))
     assert len({event.event_id for event in first}) == 10
+
+
+def test_game_config_accepts_two_hundred_participants() -> None:
+    config = GameConfig(max_participants=200)
+
+    assert config.max_participants == 200
+
+
+def test_balanced_auto_portfolios_are_deterministic_and_equal_value() -> None:
+    first = distribute_balanced_portfolios(
+        ("agent_a", "agent_b", "agent_c"),
+        seed="portfolio-seed",
+    )
+    replay = distribute_balanced_portfolios(
+        ("agent_a", "agent_b", "agent_c"),
+        seed="portfolio-seed",
+    )
+
+    assert first == replay
+    assert all(
+        portfolio.net_worth(INITIAL_PRICES) == gold("20")
+        for portfolio in first.values()
+    )
+    assert all(sum(portfolio.holdings.values()) == 1 for portfolio in first.values())
+
+
+def test_game_balanced_auto_mode_assigns_missing_portfolios_at_lock() -> None:
+    game = PawnhouseGame(
+        game_id="game_auto_portfolio",
+        config=GameConfig(portfolio_mode="balanced_auto"),
+        events=demo_events(),
+        event_seed="portfolio-seed",
+    )
+    game.join(user_id="user_a", agent_id="agent_a")
+    game.join(user_id="user_b", agent_id="agent_b")
+
+    game.lock_portfolios()
+
+    assert set(game.portfolio_snapshot()) == {"agent_a", "agent_b"}
+    assert all(
+        portfolio.net_worth(INITIAL_PRICES) == gold("20")
+        for portfolio in game.portfolio_snapshot().values()
+    )
 
 
 def test_game_requires_unique_users_and_locked_twenty_gold_portfolios() -> None:

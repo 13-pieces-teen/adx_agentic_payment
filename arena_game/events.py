@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Iterable, Literal, Mapping
 
@@ -250,6 +250,33 @@ class WorldState:
             final[effect.good] = INITIAL_PRICES[effect.good]
 
 
+def apply_market_feedback(
+    snapshot: WorldSnapshot,
+    *,
+    last_clearing_prices: Mapping[GoodId, int],
+    buy_pressure_bps: Mapping[GoodId, int],
+) -> WorldSnapshot:
+    """Apply bounded endogenous pressure to an event-derived snapshot.
+
+    Events remain the fundamental anchor.  A previous clearing price contributes
+    at most 25 percent of the next reference price, while order-flow pressure
+    contributes at most 2 percent.  All arithmetic stays in integer basis
+    points so replay remains deterministic.
+    """
+
+    market = dict(snapshot.market_prices)
+    for good in GOOD_IDS:
+        event_price = market[good]
+        last_price = last_clearing_prices.get(good)
+        pressure = max(-10_000, min(10_000, buy_pressure_bps.get(good, 0)))
+        if last_price is not None and last_price > 0:
+            event_price = (event_price * 3 + last_price) // 4
+        pressure_effect = max(-2_000, min(2_000, pressure // 5))
+        market[good] = max(1, apply_basis_points(event_price, pressure_effect))
+
+    return replace(snapshot, market_prices=market)
+
+
 def schedule_commitment(
     events: Iterable[WorldEvent],
     *,
@@ -280,5 +307,6 @@ __all__ = [
     "WorldEvent",
     "WorldSnapshot",
     "WorldState",
+    "apply_market_feedback",
     "schedule_commitment",
 ]

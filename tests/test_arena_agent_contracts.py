@@ -16,6 +16,9 @@ from arena_agent_contracts import (
     AgentRuntimeDriver,
     AgentTaskResultV1,
     ArenaAgentTaskV1,
+    ArenaDecideInputV1,
+    ArenaMarketActivityV1,
+    ArenaReputationV1,
     BuyAction,
     DecideActionV1,
     NegotiateActionV1,
@@ -152,6 +155,38 @@ def test_decide_action_is_a_strict_discriminated_union(payload, expected_type):
 def test_invalid_decide_action_is_rejected(payload):
     with pytest.raises(ValidationError):
         TypeAdapter(DecideActionV1).validate_python(payload)
+
+
+def test_decide_input_accepts_bounded_market_activity_feedback() -> None:
+    activity = ArenaMarketActivityV1(
+        good="ruby",
+        last_clearing_price="9.500000",
+        volume=4,
+        buy_pressure_bps=2500,
+        spread_bps=None,
+    )
+    view = ArenaDecideInputV1(
+        phase="decide",
+        game_id="game_01",
+        round_id="round_03",
+        round_index=3,
+        cash="100.000000",
+        holdings={"ruby": 5},
+        market={"ruby": "9.200000"},
+        reputation=ArenaReputationV1(failed_negotiations=1),
+        market_activity=[activity],
+        deadline_at="2026-07-24T12:00:20Z",
+    )
+
+    assert view.market_activity[0].last_clearing_price == Decimal("9.500000")
+    assert view.model_dump(by_alias=True)["marketActivity"][0]["volume"] == 4
+
+    with pytest.raises(ValidationError):
+        ArenaMarketActivityV1(
+            good="ruby",
+            volume=1,
+            buy_pressure_bps=10_001,
+        )
 
 
 def test_proposal_uses_decimal_not_binary_float_and_preserves_scale():

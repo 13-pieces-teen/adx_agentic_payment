@@ -16,7 +16,7 @@ from arena_core.hashing import sha256_identifier
 from hosted_agent_runtime.prompt_builder import (
     MAX_STRATEGY_BYTES,
     OUTPUT_VERSION_V1,
-    PROMPT_VERSION_V1,
+    PROMPT_VERSION_V2,
     PromptBuildError,
     PromptBuilder,
 )
@@ -65,12 +65,12 @@ def test_prompt_is_deterministic_versioned_and_bounded() -> None:
     )
 
     assert first == second
-    assert first.prompt_version == PROMPT_VERSION_V1
+    assert first.prompt_version == PROMPT_VERSION_V2
     assert first.context_version == AGENT_TASK_SCHEMA_VERSION_V1
     assert first.output_version == OUTPUT_VERSION_V1
     assert first.size_bytes > 0
     envelope = json.loads(first.input_json)
-    assert envelope["promptVersion"] == PROMPT_VERSION_V1
+    assert envelope["promptVersion"] == PROMPT_VERSION_V2
     assert envelope["contextVersion"] == AGENT_TASK_SCHEMA_VERSION_V1
     assert envelope["outputVersion"] == OUTPUT_VERSION_V1
     assert envelope["task"]["taskId"] == "task-1"

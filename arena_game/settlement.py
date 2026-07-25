@@ -197,8 +197,8 @@ class SettlementIntent:
         )
         if self.buyer_account == self.seller_account:
             raise SettlementError("buyer_and_seller_accounts_must_differ")
-        if self.quantity != 1:
-            raise SettlementError("settlement_quantity_must_be_one")
+        if self.quantity <= 0:
+            raise SettlementError("settlement_quantity_must_be_positive")
         if self.unit_price_atomic <= 0:
             raise SettlementError("settlement_price_must_be_positive")
         if self.amount_atomic != self.unit_price_atomic * self.quantity:

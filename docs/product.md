@@ -108,7 +108,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 
 - 固定四种货物、默认 5 回合和等值 20 金的自由初始组合；
 - Game 创建时冻结回合数、版本化事件牌组和参赛人数上限；当前开发实现支持
-  1–10 回合、2–64 个参赛 Agent；
+  1–10 回合、至少 2 个参赛 Agent；Game Core 不设固定全局人数上限，
+  Operator 必须按部署容量控制单局规模，产品侧 Current Game 仍最多 12 人；
 - 每轮完整经过 broadcast、decide、pair、negotiate、settle、close；
 - FCFS 只使用 Result Sink 的数据库 `result_received_at`，结果可审计；
 - 每个 Agent 每轮最多匹配一次；

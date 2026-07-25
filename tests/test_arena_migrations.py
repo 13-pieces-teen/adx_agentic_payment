@@ -33,6 +33,18 @@ CURRENT_GAME_JOIN_SQL_PATH = (
     / "migrations"
     / "027_current_game_join_readiness.sql"
 )
+UNBOUNDED_GAME_CAPACITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "025_arena_unbounded_game_capacity.sql"
+)
+LEGACY_GAME_CAPACITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "026_arena_drop_legacy_game_capacity_check.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -370,3 +382,19 @@ def test_current_game_join_migration_freezes_readiness_and_dynamic_payees():
     assert "payment_mandate_id IS NOT NULL" in sql
     assert "portfolio_locked_at IS NOT NULL" in sql
     assert "GRANT SELECT, INSERT, UPDATE ON" in sql
+
+
+def test_unbounded_game_capacity_keeps_the_per_game_limit_authoritative():
+    sql = UNBOUNDED_GAME_CAPACITY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "DROP CONSTRAINT IF EXISTS games_max_participants_check" in sql
+    assert "CHECK (max_participants >= min_participants)" in sql
+    assert "arena402.current_game" in sql
+
+
+def test_unbounded_game_capacity_drops_the_legacy_inline_check():
+    sql = LEGACY_GAME_CAPACITY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "DROP CONSTRAINT IF EXISTS games_check" in sql
+    assert "DROP CONSTRAINT IF EXISTS games_max_participants_check" in sql
+    assert sql.count("CHECK (max_participants >= min_participants)") == 1

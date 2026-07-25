@@ -25,10 +25,16 @@ class PoolEntry:
     side: MarketSide
     good: GoodId
     entered_at: datetime
+    quantity: int = 1
+    limit_price_atomic: int | None = None
 
     def __post_init__(self) -> None:
         if self.entered_at.tzinfo is None or self.entered_at.utcoffset() is None:
             raise MarketError("entered_at must include a timezone")
+        if self.quantity <= 0:
+            raise MarketError("pool quantity must be positive")
+        if self.limit_price_atomic is not None and self.limit_price_atomic <= 0:
+            raise MarketError("pool limit price must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +48,13 @@ class Pairing:
     buyer_participant_id: str
     seller_participant_id: str
     sequence: int
+    quantity: int = 1
+    buyer_limit_price_atomic: int | None = None
+    seller_limit_price_atomic: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.quantity <= 0:
+            raise MarketError("pairing quantity must be positive")
 
 
 def fcfs_pair(entries: Iterable[PoolEntry]) -> tuple[Pairing, ...]:
@@ -100,6 +113,9 @@ def fcfs_pair(entries: Iterable[PoolEntry]) -> tuple[Pairing, ...]:
                     buyer_participant_id=buyer.participant_id,
                     seller_participant_id=seller.participant_id,
                     sequence=index,
+                    quantity=min(buyer.quantity, seller.quantity),
+                    buyer_limit_price_atomic=buyer.limit_price_atomic,
+                    seller_limit_price_atomic=seller.limit_price_atomic,
                 )
             )
     return tuple(output)

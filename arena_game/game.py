@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Mapping
 
 from .events import WorldEvent, WorldSnapshot, WorldState, schedule_commitment
-from .portfolio import Portfolio
+from .portfolio import Portfolio, distribute_balanced_portfolios
 from .ranking import RankingEntry, calculate_rankings
 
 
@@ -42,6 +42,7 @@ class GameConfig:
     max_negotiation_turns: int = 3
     min_participants: int = 2
     max_participants: int = 16
+    portfolio_mode: str = "manual"
 
     def __post_init__(self) -> None:
         if self.round_count < 1 or self.round_count > 20:
@@ -53,9 +54,10 @@ class GameConfig:
         if (
             self.min_participants < 2
             or self.max_participants < self.min_participants
-            or self.max_participants > 64
         ):
             raise GameError("invalid participant bounds")
+        if self.portfolio_mode not in {"manual", "balanced_auto"}:
+            raise GameError("invalid portfolio_mode")
 
 
 @dataclass(slots=True)
@@ -133,6 +135,13 @@ class PawnhouseGame:
             raise GameError("game is not in portfolio setup")
         if len(self.participants) < self.config.min_participants:
             raise GameError("not enough participants")
+        if self.config.portfolio_mode == "balanced_auto":
+            portfolios = distribute_balanced_portfolios(
+                tuple(self.participants),
+                seed=self.event_seed,
+            )
+            for agent_id, portfolio in portfolios.items():
+                self.participants[agent_id].portfolio = portfolio
         if any(item.portfolio is None for item in self.participants.values()):
             raise GameError("every participant must configure a portfolio")
         self.phase = GamePhase.PORTFOLIO_LOCKED

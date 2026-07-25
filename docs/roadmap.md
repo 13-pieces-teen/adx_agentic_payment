@@ -28,7 +28,8 @@
   concurrency, settlement-gated round close, per-round portfolio snapshots,
   frozen final prices, terminal ranking, and completed Game state.
 - [x] Milestone 7: versioned deterministic event deck for 1–10 rounds,
-  persisted schedule recovery, configurable 2–64 participant limit with
+  persisted schedule recovery, frozen per-Game participant limit without a
+  repository-wide upper bound, with
   database enforcement, batch invitation issuance, and 12-agent local Hosted
   execution.
 

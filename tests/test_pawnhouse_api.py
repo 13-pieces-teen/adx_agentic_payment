@@ -629,6 +629,22 @@ def test_create_game_freezes_a_twelve_agent_participant_limit() -> None:
     assert repository.created[0]["max_participants"] == 12
 
 
+def test_create_game_accepts_a_two_hundred_agent_participant_limit() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "two-hundred-agent-game",
+            "eventSeed": "two-hundred-agent-fixed-seed",
+            "maxParticipants": 200,
+        },
+    )
+
+    assert created.status_code == 201
+    assert repository.created[0]["max_participants"] == 200
+
+
 def test_start_game_uses_the_schedule_persisted_at_creation() -> None:
     client, _ = _client()
     started = client.post(

@@ -17,6 +17,8 @@ It owns:
 - immutable single-payment SettlementIntent snapshots;
 - read-only EVM confirmation validation;
 - confirmation-gated, idempotent cash and inventory commit.
+- quantity-aware FCFS orders with optional fixed-point limit prices;
+- deterministic `balanced_auto` portfolio allocation for equal-value starts;
 - durable N-round orchestration and recovery from PostgreSQL state;
 - per-round cash/holding snapshots, frozen terminal prices, and rankings.
 
@@ -44,6 +46,10 @@ schema.
 - The event schedule is committed before play and can be verified after the
   seed is revealed.
 - Rankings use only terminal net worth. Ties are ordered by stable Agent ID.
+- Orders default to quantity one for wire compatibility, while explicit
+  quantities are clipped by Arena inventory and matched at the smaller side.
+- A `balanced_auto` game assigns each ready participant one deterministic good
+  unit plus cash at portfolio lock; `manual` remains the default mode.
 
 ## Persistent rule-Agent demonstration
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from hashlib import sha256
+from typing import Mapping, Sequence
 
 from .goods import GOOD_IDS, GoodId, INITIAL_PRICES
 from .money import gold
@@ -14,6 +15,33 @@ INITIAL_NET_WORTH_ATOMIC = gold("20")
 
 class PortfolioError(ValueError):
     pass
+
+
+def distribute_balanced_portfolios(
+    agent_ids: Sequence[str],
+    *,
+    seed: str,
+) -> dict[str, "Portfolio"]:
+    """Give every participant equal net worth and a deterministic inventory seed.
+
+    Each participant receives one deterministic good unit and the remainder in
+    cash. This creates both buyer and seller liquidity without changing the
+    fixed 20-gold starting valuation.
+    """
+
+    if len(set(agent_ids)) != len(agent_ids):
+        raise PortfolioError("agent ids must be unique")
+    portfolios: dict[str, Portfolio] = {}
+    for index, agent_id in enumerate(agent_ids):
+        digest = sha256(f"{seed}:{agent_id}:{index}".encode()).digest()
+        good = GOOD_IDS[int.from_bytes(digest[:4], "big") % len(GOOD_IDS)]
+        holdings = {good_id: 0 for good_id in GOOD_IDS}
+        holdings[good] = 1
+        portfolios[agent_id] = Portfolio.initial(
+            cash_atomic=INITIAL_NET_WORTH_ATOMIC - INITIAL_PRICES[good],
+            holdings=holdings,
+        )
+    return portfolios
 
 
 def normalize_holdings(values: Mapping[str, int]) -> dict[GoodId, int]:
@@ -74,6 +102,7 @@ __all__ = [
     "INITIAL_NET_WORTH_ATOMIC",
     "Portfolio",
     "PortfolioError",
+    "distribute_balanced_portfolios",
     "normalize_holdings",
     "portfolio_value",
 ]

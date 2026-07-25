@@ -13,6 +13,7 @@ from arena_agent_contracts import (
     ArenaDecideInputV1,
     ArenaDecideLimitsV1,
     ArenaGoodRuleV1,
+    ArenaMarketActivityV1,
     ArenaNegotiateInputV1,
     ArenaNegotiationMessageV1,
     ArenaPublicCounterpartyV1,
@@ -291,6 +292,26 @@ class PawnhouseAgentRuntimeCoordinator:
                 )
                 for good_id in GOOD_IDS
             ],
+            market_activity=[
+                ArenaMarketActivityV1(
+                    good=str(item["good"]),
+                    last_clearing_price=(
+                        None
+                        if item.get("last_clearing_price_atomic") is None
+                        else _gold_decimal(
+                            int(item["last_clearing_price_atomic"])
+                        )
+                    ),
+                    volume=int(item.get("volume", 0)),
+                    buy_pressure_bps=int(item.get("buy_pressure_bps", 0)),
+                    spread_bps=(
+                        None
+                        if item.get("spread_bps") is None
+                        else int(item["spread_bps"])
+                    ),
+                )
+                for item in list(context.get("market_activity", []))
+            ],
             deadline_at=context["deadline_at"],
         )
 
@@ -330,7 +351,12 @@ class PawnhouseAgentRuntimeCoordinator:
             negotiation_id=str(context["negotiation_id"]),
             role=str(context["role"]),
             good=str(context["good"]),
-            quantity=1,
+            quantity=int(context["quantity"]),
+            limit_price=(
+                None
+                if context.get("limit_price_atomic") is None
+                else _gold_decimal(int(context["limit_price_atomic"]))
+            ),
             cash=_gold_decimal(int(context["cash_atomic"])),
             inventory_available=int(context["inventory_available"]),
             counterparty=ArenaPublicCounterpartyV1(

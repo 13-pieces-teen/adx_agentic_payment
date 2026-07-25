@@ -8,6 +8,7 @@ from .events import (
     WorldEvent,
     WorldSnapshot,
     WorldState,
+    apply_market_feedback,
     schedule_commitment,
 )
 from .event_deck import (
@@ -44,6 +45,7 @@ from .portfolio import (
     INITIAL_NET_WORTH_ATOMIC,
     Portfolio,
     PortfolioError,
+    distribute_balanced_portfolios,
     normalize_holdings,
     portfolio_value,
 )
@@ -100,6 +102,7 @@ __all__ = [
     "PawnhouseHostedCoordinator",
     "Portfolio",
     "PortfolioError",
+    "distribute_balanced_portfolios",
     "PostgresPawnhouseRepository",
     "RankingEntry",
     "RuleDecision",
@@ -119,6 +122,7 @@ __all__ = [
     "WorldEvent",
     "WorldSnapshot",
     "WorldState",
+    "apply_market_feedback",
     "apply_basis_points",
     "build_event_schedule",
     "calculate_rankings",

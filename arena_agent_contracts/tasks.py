@@ -134,6 +134,16 @@ class ArenaGoodRuleV1(_StrictWireModel):
     price_decimal_places: Annotated[int, Field(ge=0, le=18)] = 6
 
 
+class ArenaMarketActivityV1(_StrictWireModel):
+    """Public, bounded activity summary for one traded good."""
+
+    good: GoodId
+    last_clearing_price: NonNegativeFixedDecimal | None = None
+    volume: NonNegativeInt = 0
+    buy_pressure_bps: int = Field(ge=-10_000, le=10_000)
+    spread_bps: NonNegativeInt | None = None
+
+
 class ArenaDecideLimitsV1(_StrictWireModel):
     allowed_actions: list[AllowedDecideAction] = Field(
         default_factory=_default_allowed_actions
@@ -179,6 +189,7 @@ class ArenaDecideInputV1(_StrictWireModel):
     completed_actions: list[ArenaCompletedActionV1] = Field(default_factory=list)
     completed_trades: list[ArenaTradeSummaryV1] = Field(default_factory=list)
     goods: list[ArenaGoodRuleV1] = Field(default_factory=list)
+    market_activity: list[ArenaMarketActivityV1] = Field(default_factory=list)
     deadline_at: UtcDateTime
 
     @model_validator(mode="after")
@@ -240,6 +251,7 @@ class ArenaNegotiateInputV1(_StrictWireModel):
     role: Literal["buyer", "seller"]
     good: GoodId
     quantity: PositiveInt
+    limit_price: PositiveFixedDecimal | None = None
     cash: NonNegativeFixedDecimal
     inventory_available: NonNegativeInt
     counterparty: ArenaPublicCounterpartyV1
@@ -346,6 +358,7 @@ __all__ = [
     "ArenaDecideInputV1",
     "ArenaDecideLimitsV1",
     "ArenaGoodRuleV1",
+    "ArenaMarketActivityV1",
     "ArenaNegotiateInputV1",
     "ArenaNegotiationMessageV1",
     "ArenaPublicCounterpartyV1",
