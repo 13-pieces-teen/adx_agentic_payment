@@ -606,6 +606,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             create_payment_account_router(
                 auth=connector_bundle.auth,
                 repository=payment_repository,
+                wallet_service=wallet_service,
             )
         )
         admin_subjects = frozenset(

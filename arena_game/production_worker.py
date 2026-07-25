@@ -218,7 +218,7 @@ async def main() -> None:
             os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "10")
         ),
         max_participants=int(
-            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "12")
+            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "100")
         ),
         action_timeout_ms=int(
             os.getenv("ADX_CURRENT_GAME_ACTION_TIMEOUT_MS", "90000")

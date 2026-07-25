@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,14 @@ class _Pool:
     async def fetch(self, query: str, *args: object) -> list[dict[str, str]]:
         self.calls.append((query, args))
         return []
+
+    async def fetchrow(
+        self,
+        query: str,
+        *args: object,
+    ) -> dict[str, str]:
+        self.calls.append((query, args))
+        return {"settlement_intent_id": str(args[0])}
 
 
 class _Payments:
@@ -54,6 +63,34 @@ def test_source_rejects_invalid_explicit_intent_scope() -> None:
             public_api_url="https://api.example.test",
             settlement_intent_id="x" * 513,
         )
+
+
+def test_claim_persists_the_selected_facilitator_shard() -> None:
+    pool = _Pool()
+    source = PostgresAutomaticSettlementSource(
+        payments=_Payments(pool),  # type: ignore[arg-type]
+        arena=object(),  # type: ignore[arg-type]
+        public_api_url="https://api.example.test",
+    )
+
+    claimed = asyncio.run(
+        source.claim_attempt(
+            settlement_intent_id="intent-1",
+            reservation_id="reservation-1",
+            payment_required={
+                "accepts": [{"network": "eip155:1439"}]
+            },
+            facilitator_id="shard-3",
+            worker_id="worker-1",
+            now=datetime(2026, 7, 26, tzinfo=timezone.utc),
+        )
+    )
+
+    query, args = pool.calls[0]
+    assert claimed is True
+    assert "facilitator_id" in query
+    assert "EXCLUDED.facilitator_id" in query
+    assert args[4] == "shard-3"
 
 
 def test_settlement_repository_uses_least_privilege_database_role() -> None:

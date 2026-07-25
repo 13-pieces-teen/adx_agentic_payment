@@ -2,11 +2,14 @@
 
 > 状态：2026-07-25 批准的 Hosted testnet 上线目标。
 >
-> 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排、
+> 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排，
+> 并已把生产 Current Game 硬上限配置为 100、Hosted Worker 配置为
+> 4 副本 × 25 task slot、Facilitator 配置为 4 个独立 EOA shard。
 > GitHub User 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
 > 隔离的 PostgreSQL 密文 signer、自动提交编排、只读链上确认和确认后库存提交。
 > 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自动链路已通过
-> Fake E2E；公共 Facilitator、新鲜 testnet 交易与完整生产 E2E 尚未验收。
+> Fake E2E；100 Agent、四 shard live testnet、公共 Facilitator、新鲜 testnet
+> 交易与完整生产 E2E 尚未验收。旧 2C4G 证据不能用于证明当前配置容量。
 
 ## 1. 上线目标
 
@@ -15,7 +18,7 @@
 ```text
 用户创建 Hosted Agent
   -> 加入 testnet Game，并一次性同意该局自动支付
-  -> 10 个 Hosted Agent 参加；Hosted Worker 最多 5 个调用同时在途
+  -> 最多 100 个 Hosted Agent 参加；4 个 Hosted Worker 各有 25 个 task slot
   -> 每种货物按数据库时间 FCFS 配对
   -> 最多三轮公开协商
   -> accept 后自动 reserve 支付额度
@@ -28,14 +31,15 @@
 用户不需要逐笔点击确认。浏览器和用户电脑离线后，Hosted Agent 仍能完成决策、
 协商和 testnet 支付。
 
-MVP 上线容量目标：
+生产配置目标：
 
-- 展示局默认 10 个 Hosted Agent，硬上限 12；
+- Current Game 默认开赛阈值 10 个 Hosted Agent，硬上限 100；
 - 固定展示 5 回合；代码继续支持 1–10 回合，但不作为首发容量承诺；
-- Decide Task 同批创建，Hosted Provider 调用最多 5 个同时在途；
-- 最多 5 组协商并发，同一组内严格顺序执行；它与 Hosted Provider 全局并发 5
-  共用同一上限；
-- 最多 2 笔自动 Settlement 同时在途；
+- Decide Task 同批创建，Hosted Worker 以 4 副本 × 25 task slot 起步；
+- 同一组协商严格顺序执行，不同 pairing 可并发，但仍受 Provider 配额和数据库
+  barrier 约束；
+- Settlement Worker 以 4 个执行 slot 确定性路由到 4 个独立 EOA Facilitator
+  shard；
 - 首发部署同一时间只运行一局 active Game。
 
 ## 2. 首发范围
@@ -97,15 +101,16 @@ API 的公开 x402 paid retry 只把签名 payload 转发到 bearer-authenticate
 Settlement ingress；API 不持有 signer token、Facilitator authorization，也不直接
 修改 reservation 或提交链上交易。
 
-第一版通过 x402 V2 `/verify` 与 `/settle` 调用显式配置的 Facilitator；可使用
-外部 HTTPS 服务，或 Compose `testnet-facilitator` profile 中不发布宿主机端口的
-内网服务。Facilitator 未配置时 fail closed。签名器同样只加入 data network。
+第一版通过 x402 V2 `/verify` 与 `/settle` 调用显式配置的 Facilitator shard；
+生产 Compose 的 `testnet-facilitator` profile 启动四个不发布宿主机端口的内网
+服务，也可替换为四个外部 HTTPS endpoint。任一必需 shard 未配置时 fail closed。
+签名器同样只加入 data network。
 
 自动支付新增的外部依赖只保留四个：
 
 - PostgreSQL 中的 per-wallet AES-256-GCM 信封密文；
 - 仓库外、宿主机 `0400` 的 32-byte wallet KEK，仅只读挂载给 signer；
-- 一个批准的外部 HTTPS 或内网 x402 V2 Facilitator；
+- 四个批准的外部 HTTPS 或内网 x402 V2 Facilitator shard；
 - 一个 Injective EVM RPC：提交、确认，并在结果未知时按 block/transaction
   扫描恢复。Blockscout 只作为运维查看工具，不是运行时依赖。
 
@@ -444,8 +449,12 @@ Worker，以及可选 `wallet-signer` 和 `arena-facilitator`。后两者分别�
 
    验证数据库计数和 signer health 后，将 CSV 移出运行服务器或安全删除；系统不会
    自动删除源文件；
-4. 配置外部 HTTPS 或 `http://arena-facilitator:4021`、唯一 facilitator id、
-   内部 signer URL 与至少 32 字节 bearer token；
+4. 在仓库外准备 Facilitator CSV，使用四个不同 EOA，`facilitator_index`
+   1–4 各恰好一行，权限 `0600`，并配置
+   `ADX_FACILITATOR_CSV_HOST_PATH`；四个内网 endpoint
+   `http://arena-facilitator-{1..4}:4021`（或四个外部 HTTPS endpoint）必须各有
+   唯一 facilitator id、钱包索引和至少 32 字符的独立 bearer token。部署脚本会
+   在启动前校验索引、token/authorization 配对与 CSV 行；
 5. 先保持 `ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false` 完成 API、数据库、
    signer health 与管理快照验收；
 6. 第一笔真实 testnet 验收先把 `ADX_SETTLEMENT_INTENT_ID` 设置为已人工复核的
@@ -471,44 +480,49 @@ docker compose --profile wallet-admin run --rm --build wallet-vault-rotate \
 `ADX_WALLET_MASTER_KEY_VERSION` 一起切到新 version 并重启。确认 signer health
 和合成签名通过后才能销毁旧 KEK。
 
-## 6. 2C4G/70GB MVP 容量配置
+## 6. 100 Agent / 4 Facilitator 生产容量配置
 
-首发基线：
+当前配置基线：
 
 ```text
-host: 2 vCPU / 4 GB RAM / 70 GB disk
+host: must be re-sized and load-tested; the old 2 vCPU / 4 GB host is rejected
 active games: 1
-max participants: 12
-default participants: 10
+max participants: 100
+start threshold: 10
 demo rounds: 5
-hosted task concurrency: 5
-negotiation concurrency: 5
-settlement concurrency: 2
+hosted worker replicas: 4
+hosted task concurrency per replica: 25
+theoretical hosted task slots: 100
+settlement execution concurrency: 4
+facilitator shards: 4 independent EOA services
 API processes: 1
 API max concurrency: 64
-PostgreSQL max_connections: 40
+PostgreSQL max_connections: 120
 ```
 
-常驻容器内存上限：
+Compose 常驻容器内存上限：
 
 | 服务 | 内存上限 |
 |---|---:|
 | PostgreSQL | 768 MB |
 | API | 512 MB |
-| Hosted Worker | 512 MB |
+| Hosted Worker | 4 × 512 MB |
 | Arena Worker | 320 MB |
 | Settlement Worker | 256 MB |
 | Wallet signer | 256 MB |
 | Credential Controller | 192 MB |
+| Facilitator | 4 × 256 MB |
 | Caddy | 128 MB |
 
-启用全部可选 Worker 后按 Compose 上限控制，实际常驻内存需要在 2C4G 验收中
-测量；若接近上限应先降低 Worker 并发，不能通过交换或关闭安全边界硬撑。
+仅上述服务的配置上限已约 5.5 GB，尚未计入 Docker、宿主机、构建和瞬时内存，
+所以旧 2C4G 主机不再是支持目标。生产主机必须按实际峰值留出充足 headroom，并在
+100 Agent 验收前完成 CPU、内存、磁盘和网络重新定容；不能通过交换或关闭安全
+边界硬撑。
 Vercel 前端不占用这台服务器；`legacy-web` profile 不得在 MVP 生产机启动。
 
-40 个数据库连接按当前连接池上界预留：API 最多 20、Hosted Worker 5、Arena
-Worker 5、Credential Controller 2、自动支付循环复用 Arena pool，剩余连接留给
-migration、健康检查和运维。不得再增加进程或连接池而不重新计算该预算。
+120 个数据库连接是当前起步值。所有服务必须继续满足
+`sum(replica_count × pool_max_size) <= 84`，其余至少 30% 留给 migration、健康
+检查、恢复和运维。增加 Worker 副本、API 进程或连接池前必须重新计算预算。
 
 关键实现要求：
 
@@ -516,29 +530,41 @@ migration、健康检查和运维。不得再增加进程或连接池而不重�
 - Coordinator 使用一个事务批量创建本轮 Decide Task，并在提交末尾把 Runtime Run
   标记为 `dispatch_ready`；Hosted claim 函数只领取该状态的 Task；
 - 比赛 Task 优先于 credential validation；
-- Worker 一次最多 claim 5 个 Task；10 Agent 为两个 wave，12 Agent 为三个 wave；
-- 同一 pairing 的 negotiate 严格串行，不同 pairing 最多 5 组并发；
-- 自动支付循环可以同时处理最多 2 个 Intent；facilitator relay nonce 分配/广播短暂串行，
-  链上等待与确认保持 2 笔并发；
-- 创建 Game 时拒绝超过 12 个参与者；
+- 每个 Hosted Worker 最多同时执行 25 个 Task，4 副本提供 100 个理论 slot；
+- 同一 pairing 的 negotiate 严格串行，不同 pairing 可并发，但不能绕过
+  Provider 全局配额；
+- 自动支付循环同时处理最多 4 个 Intent，并按冻结 Intent hash 固定到 4 个独立
+  EOA shard；每个 shard 内部当前仍串行等待链上确认；
+- 创建 Current Game 时拒绝超过 100 个参与者；
 - 已有 active Game 时拒绝启动第二局；
 - 不通过不可控排队来“支持”更多 Agent。
 
-生产 `action_timeout_ms` 由真实 Provider 的 5 并发、10/12 Agent wave 测试确定。
+生产 `action_timeout_ms` 由真实 Provider 的 10/12/25/50/100 Agent wave 测试确定。
 同一个冻结值必须同时满足：
 
 ```text
 max_attempts = 2
-decide budget >= ceil(participants * max_attempts / 5) * provider_p99 + margin
-negotiate budget >= max_turns * ceil(pairings * max_attempts / 5)
+effective_provider_concurrency =
+  min(100, sum(provider quota and rate-limit slots))
+decide budget >=
+  ceil(participants * max_attempts / effective_provider_concurrency)
+  * provider_p99 + margin
+negotiate budget >=
+  max_turns
+  * ceil(pairings * max_attempts / effective_provider_concurrency)
                     * provider_p99 + margin
 ```
 
-Settlement 另冻结 `settlement_timeout_ms = 600000`；10 Agent 的最坏 5 笔成交按
-2 + 2 + 1 三个 wave 提交。每个 Intent 使用最近确认区块的 timestamp 冻结
+Settlement 另冻结 `settlement_timeout_ms = 600000`；100 Agent 的最坏 50 笔
+成交在 4 shard 起步配置下至少需要 13 个 shard wave。每个 Intent 使用最近确认
+区块的 timestamp 冻结
 `authorization_valid_after`，并令 `authorization_valid_before =
 authorization_valid_after + 420` 秒；剩余 180 秒用于等待过期区块再获得两个确认、
 查询 authorization state 和完成最终 release/commit。
+
+由于当前每个 Facilitator shard 仍在内存队列中等待确认，420/600 秒窗口能否覆盖
+50 笔最坏场景必须由 live testnet 数据验证；未通过时应提高 shard 数或先实现广播/
+确认解耦，不能把过期 Intent 当作容量成功。
 
 600 秒是终态 deadline，不是“进入 submitted_unknown 即通过”。到 deadline 时：
 
@@ -549,10 +575,10 @@ authorization_valid_after + 420` 秒；剩余 180 秒用于等待过期区块再
 
 不上线第二套通用 Round watchdog。
 
-MVP 的 FCFS key 明确定义为数据库 Result Sink 写入的
-`(result_received_at, pool_entry_id)`，不是 Task 创建顺序。5 + 5 wave 会把平台调度
-延迟计入 FCFS，因此这只是资源受限展示语义，不作为正式 Tournament 公平性证明；
-扩容到同轮全部 Decide 并发前不开放竞技性排名承诺。
+FCFS key 明确定义为数据库 Result Sink 写入的
+`(result_received_at, pool_entry_id)`，不是 Task 创建顺序。100 个理论 task slot
+不能消除 Provider 限流、进程调度或网络导致的 launch skew；在 100 Agent
+launch-skew 验收前，不把该生产配置作为正式 Tournament 公平性证明。
 
 磁盘边界：
 
@@ -603,12 +629,15 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 
 ### 8.1 必须通过
 
-- 10 个 Hosted Agent 在 2C4G 生产机完成 5 回合；
+- 10/12 Agent 回归通过后，25/50/100 个 Hosted Agent 在重新定容的生产机完成
+  5 回合；
 - 浏览器关闭后 Game 继续；
-- 同一轮 10 个 Decide Task 经两个 wave 后均在统一 deadline 内终态；
-- 单轮 5 组 pairing 可以同时进入协商，每组内部最多三轮严格串行；
-- 受控场景产生 5 笔 accepted trade，并按 2 + 2 + 1 wave 全部进入支付终态；
-- 监控证据中至少一次同时存在 2 笔非终态 SettlementIntent；
+- 同一轮 100 个 Decide Task 均在统一 deadline 内终态，并记录实际 Provider
+  wave 与 launch skew；
+- 单轮最多 50 组 pairing 不丢失，每组内部最多三轮严格串行；
+- 受控场景产生最多 50 笔 accepted trade，并经 4 shard 全部进入安全支付终态；
+- 监控证据中至少一次同时存在 4 笔、且分属 4 个 Facilitator shard 的非终态
+  SettlementIntent；
 - 600 秒内不得残留 `submitted_unknown`；`settlement_recovery_required` 计为
   MVP 失败，不计作安全完成；
 - accepted trade 无人工操作自动产生 testnet 交易；
@@ -616,6 +645,8 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 - 链上确认后现金和库存只更新一次；
 - 至少一局包含多笔自动交易并完成最终排名；
 - Settlement Worker 或 signer 重启不会生成第二笔支付；
+- 任一 Facilitator shard 重启或不可用时，已持久化 route 不会静默换 shard 或
+  生成第二笔支付；
 - 超额或过期 Mandate 不广播交易；
 - Provider Key、wallet key、signature 和 reasoning 不进入数据库、日志或 API；
 - Hosted Worker 数据库 role 无法修改 Mandate、Settlement 和 Inventory；
@@ -625,17 +656,19 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 
 ### 8.2 容量通过标准
 
-以 10 Agent 为 MVP 必须通过、12 Agent 为非阻塞容量验证：
+10/12 Agent 是历史回归基线，100 Agent 才是当前生产配置的容量门槛：
 
-- 12 Agent 能完成 5 回合并生成最终排名；若未通过，不阻塞 10 Agent MVP；
-- 同一轮 12 个 Decide Task 经三个 wave 后均在统一 action deadline 内终态；
-- 最坏 6 组 pairing 按 5 + 1 wave 完成，不丢 pairing；
-- 2 笔 Settlement 可同时在途，relay EOA nonce 连续且无碰撞或 gap；
+- 10、12、25、50、100 Agent 均完成 5 回合并生成最终排名；
+- 同一轮 100 个 Decide Task 均在统一 action deadline 内终态；
+- 最坏 50 组 pairing 完成且不丢 pairing；
+- 4 笔 Settlement 可同时在途并落到 4 个不同 EOA shard；每个 EOA nonce 连续且
+  无碰撞或无法解释的 gap；
 - 无 Task 因 Worker claim 批次在开始执行前已经过期；
 - 默认动作只来自真实 Provider/输出/deadline 失败，不来自 Worker 并发不足；
 - PostgreSQL 无连接耗尽；
 - API、Hosted Worker、Arena Worker、wallet-signer 无 OOM/restart loop；
-- 宿主机峰值内存不超过 3.2 GB，无 swap thrash，磁盘剩余不低于 15 GB；
+- 宿主机峰值内存不超过重新定容后预算的 80%，无 swap thrash，磁盘剩余不低于
+  15 GB；
 - 完整 Game 可以从 PostgreSQL 状态恢复并继续。
 
 ## 9. 实施顺序
@@ -650,8 +683,9 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
    - Join 创建 wallet/Mandate、accept 自动排队、失败关闭 pairing、Round 自动继续。
 4. **Production API 与 Compose**
    - 正式 Game command、wallet-signer profile、环境变量、权限与健康检查。
-5. **10/12 Agent E2E**
-   - 真实 Provider、自动 testnet 支付、多回合排名、发布证据和活动文档同步。
+5. **10/12/25/50/100 Agent E2E**
+   - 真实 Provider、四 shard 自动 testnet 支付、多回合排名、发布证据和活动
+     文档同步。
 
 不并行实现 Local Connector、Native A2A、主网或多局调度。
 

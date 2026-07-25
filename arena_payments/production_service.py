@@ -14,7 +14,7 @@ from arena_game.evm_confirmation import EvmJsonRpcConfirmationReader
 
 from .automatic_worker import AutomaticSettlementWorker
 from .coordinator import X402SettlementCoordinator
-from .facilitator import HttpX402FacilitatorClient
+from .facilitator import build_facilitator_client
 from .internal_api import create_internal_settlement_router
 from .postgres import PostgresPaymentRepository
 from .postgres_worker import PostgresAutomaticSettlementSource
@@ -51,14 +51,7 @@ def create_app() -> FastAPI:
     coordinator = X402SettlementCoordinator(
         payments=payments,
         arena=arena,
-        facilitator=HttpX402FacilitatorClient(
-            _required("ADX_X402_FACILITATOR_URL"),
-            facilitator_id=_required("ADX_X402_FACILITATOR_ID"),
-            authorization=(
-                os.getenv("ADX_X402_FACILITATOR_AUTHORIZATION", "").strip()
-                or None
-            ),
-        ),
+        facilitator=build_facilitator_client(os.environ),
     )
     worker = SettlementProductionWorker(
         automatic=AutomaticSettlementWorker(
@@ -72,6 +65,9 @@ def create_app() -> FastAPI:
             worker_id=(
                 os.getenv("ADX_SETTLEMENT_WORKER_ID")
                 or "arena402-settlement-worker"
+            ),
+            execution_concurrency=int(
+                os.getenv("ADX_SETTLEMENT_WORKER_CONCURRENCY", "4")
             ),
             authorization_recovery_reader=EvmJsonRpcConfirmationReader(
                 _https_url("ADX_ARENA_SETTLEMENT_RPC_URL")

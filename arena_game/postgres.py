@@ -20,11 +20,15 @@ from .events import (
     apply_market_feedback,
     schedule_commitment,
 )
-from .goods import GOODS, GOOD_IDS, require_good
+from .goods import GOODS, GOOD_IDS, INITIAL_PRICES, require_good
 from .market import Pairing, PoolEntry, fcfs_pair
 from .money import gold
 from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
-from .portfolio import Portfolio, distribute_balanced_portfolios
+from .portfolio import (
+    INITIAL_NET_WORTH_ATOMIC,
+    Portfolio,
+    distribute_balanced_portfolios,
+)
 from .ranking import calculate_rankings
 from .rule_runtime import RuleRuntime, RuleStrategy
 from .settlement import (
@@ -44,6 +48,7 @@ class PawnhouseRepositoryError(RuntimeError):
 
 
 _INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
+CURRENT_GAME_MAX_PARTICIPANTS = 100
 
 
 def _json(value: object) -> str:
@@ -52,6 +57,15 @@ def _json(value: object) -> str:
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+    )
+
+
+def _should_assign_balanced_portfolios(config: Mapping[str, object]) -> bool:
+    """Keep legacy managed Current Games from overwriting Join-time choices."""
+
+    return (
+        config.get("portfolioMode") == "balanced_auto"
+        and config.get("currentGameManaged") is not True
     )
 
 
@@ -191,16 +205,20 @@ class PostgresPawnhouseRepository:
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
         start_threshold: int = 10,
-        max_participants: int = 12,
+        max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
         settlement_config: SettlementConfig | None = None,
     ) -> dict[str, object]:
         """Atomically keep one joinable/running product Game authoritative."""
 
         if not game_id:
             raise PawnhouseRepositoryError("game_id_required")
-        if not 2 <= start_threshold <= 12:
+        if not 2 <= start_threshold <= CURRENT_GAME_MAX_PARTICIPANTS:
             raise PawnhouseRepositoryError("invalid_start_threshold")
-        if not start_threshold <= max_participants <= 12:
+        if not (
+            start_threshold
+            <= max_participants
+            <= CURRENT_GAME_MAX_PARTICIPANTS
+        ):
             raise PawnhouseRepositoryError("invalid_max_participants")
 
         commitment = schedule_commitment(events, seed=event_seed)
@@ -211,7 +229,7 @@ class PostgresPawnhouseRepository:
             "roundCount": len(events),
             "minParticipants": start_threshold,
             "maxParticipants": max_participants,
-            "portfolioMode": "balanced_auto",
+            "portfolioMode": "manual",
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
             "eventMode": event_mode,
@@ -362,8 +380,8 @@ class PostgresPawnhouseRepository:
                 SELECT TRUE, game_id, min_participants, max_participants
                 FROM arena402.games
                 WHERE game_id = $1
-                  AND min_participants BETWEEN 2 AND 12
-                  AND max_participants BETWEEN min_participants AND 12
+                  AND min_participants BETWEEN 2 AND 100
+                  AND max_participants BETWEEN min_participants AND 100
                 ON CONFLICT (singleton) DO NOTHING
                 """,
                 game_id,
@@ -1222,7 +1240,7 @@ class PostgresPawnhouseRepository:
             if isinstance(game["config_snapshot"], str)
             else dict(game["config_snapshot"])
         )
-        if game_config.get("portfolioMode") == "balanced_auto":
+        if _should_assign_balanced_portfolios(game_config):
             await self._assign_balanced_portfolios_locked(
                 connection,
                 game_id=game_id,
@@ -4417,6 +4435,19 @@ class PostgresPawnhouseRepository:
                 "maxCumulativeAtomic": "50000000",
                 "allowedPayeeRule": "SAME_GAME_SETTLEMENT_ACCOUNT",
                 "expiresAt": expires_at.isoformat(),
+            },
+            "portfolioRequirements": {
+                "initialNetWorthAtomic": str(INITIAL_NET_WORTH_ATOMIC),
+                "goldDecimals": 6,
+                "initialPricesAtomic": {
+                    good_id: str(INITIAL_PRICES[good_id])
+                    for good_id in GOOD_IDS
+                },
+                "allowedGoods": list(GOOD_IDS),
+                "defaultPortfolio": {
+                    "cashAtomic": str(INITIAL_NET_WORTH_ATOMIC),
+                    "holdings": {good_id: 0 for good_id in GOOD_IDS},
+                },
             },
             "safeErrorCode": None,
             "schemaVersion": "arena.game-join-preflight.v1",

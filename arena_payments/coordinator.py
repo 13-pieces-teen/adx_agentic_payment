@@ -73,6 +73,15 @@ class X402SettlementCoordinator:
     def payment_required(self, terms: SettlementTerms) -> dict[str, Any]:
         return self._protocol.payment_required(terms)
 
+    def facilitator_id(
+        self,
+        payment_requirements: dict[str, Any],
+    ) -> str:
+        resolver = getattr(self._facilitator, "facilitator_id_for", None)
+        if resolver is None:
+            return "configured"
+        return str(resolver(payment_requirements))
+
     async def execute(
         self,
         *,

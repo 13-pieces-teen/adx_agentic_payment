@@ -116,7 +116,7 @@ view、Game Agent 配置、绝对 `deadlineAt` 和 hash。两种 Task kind 为�
   `action="propose" | "accept" | "reject"`。
 
 所有 Runtime 使用同一 Game 的 `action_timeout_ms`；具体默认值由真实
-Provider/Model/thinking 与 2/5/10/12 Agent 负载的 P95/P99 加缓冲校准，而不是在
+Provider/Model/thinking 与 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，而不是在
 Adapter 中写死。每个 AgentTask 最多两个 Provider/Runtime Attempt，只在错误可重试
 且剩余时间足够时重试，不自动切换 Provider、Model 或 Runtime。
 

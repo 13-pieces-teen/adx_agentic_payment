@@ -186,6 +186,7 @@ WAITING 时与 `/game` 使用同一大厅组件，但锁定 `gameId`：
   -> 登录检查
   -> 选择一个 Ready Hosted Agent
   -> Join preflight
+  -> 配置并确认等值 20 金的初始资产
   -> 查看并确认本局 PaymentMandate
   -> 创建或确认 Game-scoped Mandate
   -> 提交 Join
@@ -204,7 +205,18 @@ WAITING 时与 `/game` 使用同一大厅组件，但锁定 `gameId`：
 
 MVP 不显示 Local Agent 为可选。后端返回不支持时，前端不得通过隐藏校验强行提交。
 
-### 8.3 PaymentMandate 确认
+### 8.3 初始资产配置
+
+前端使用 Join preflight 返回的 `portfolioRequirements` 展示现金与四种货物的
+公开初始价，并实时计算剩余可分配价值。可以提供“全现金”“均衡持仓”和“自定义”
+快捷入口，但提交 Join 时必须展开为 `cashAtomic` 与四种货物的整数数量；不能只
+提交预设名称，也不能用二进制浮点数计算最终值。
+
+提交前必须显示总值恰好为 20 金；服务端仍会独立校验。用户返回修改 Agent 或
+Mandate 时保留未提交的本地表单状态，Join 成功后以响应中的 `initialPortfolio`
+作为锁定结果。
+
+### 8.4 PaymentMandate 确认
 
 确认页必须清楚展示：
 
@@ -225,7 +237,7 @@ MVP 不显示 Local Agent 为可选。后端返回不支持时，前端不得通
 单大厅中的 payee 范围必须由后端以同局 Settlement Account 规则或等价安全方式
 生成。前端不得收集、拼接或提交任意钱包地址列表。
 
-### 8.4 Join 成功
+### 8.5 Join 成功
 
 - 显示 `READY` 和最新 `readyCount / startThreshold`；
 - 如果本次 Join 触发启动，直接进入 `/game/:gameId`；

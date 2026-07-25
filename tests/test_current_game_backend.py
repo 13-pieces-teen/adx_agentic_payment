@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 from arena_game import build_event_schedule
-from arena_game.postgres import PostgresPawnhouseRepository
+from arena_game.postgres import (
+    PostgresPawnhouseRepository,
+    _should_assign_balanced_portfolios,
+)
 
 
 class _Pool:
@@ -68,6 +72,7 @@ class _Acquire:
 class _CreateConnection:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
 
     def transaction(self):
         return _Transaction()
@@ -79,6 +84,7 @@ class _CreateConnection:
         *_: object,
     ):
         self.queries.append(query)
+        self.fetchval_calls.append((query, (game_id, *_)))
         return game_id
 
     async def execute(self, query: str, *_: object):
@@ -231,4 +237,26 @@ def test_ensure_current_game_creates_and_atomically_rotates_terminal_pointer() -
     assert any(
         "ON CONFLICT (singleton) DO UPDATE" in query
         for query in connection.queries
+    )
+    game_insert = next(
+        values
+        for query, values in connection.fetchval_calls
+        if "INSERT INTO arena402.games" in query
+    )
+    config = json.loads(str(game_insert[6]))
+    assert config["portfolioMode"] == "manual"
+
+
+def test_legacy_managed_current_game_does_not_overwrite_joined_portfolios() -> None:
+    assert not _should_assign_balanced_portfolios(
+        {
+            "portfolioMode": "balanced_auto",
+            "currentGameManaged": True,
+        }
+    )
+    assert _should_assign_balanced_portfolios(
+        {
+            "portfolioMode": "balanced_auto",
+            "currentGameManaged": False,
+        }
     )

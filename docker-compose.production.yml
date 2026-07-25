@@ -6,6 +6,44 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-facilitator-base: &facilitator-base
+  profiles:
+    - testnet-facilitator
+  build:
+    context: .
+    dockerfile: deploy/docker/Dockerfile.facilitator
+  restart: unless-stopped
+  init: true
+  volumes:
+    - ${ADX_FACILITATOR_CSV_HOST_PATH:-./deploy/secrets/arena402-facilitators.csv}:/run/arena402/facilitators.csv:ro
+  networks:
+    - edge
+    - data
+  expose:
+    - "4021"
+  read_only: true
+  tmpfs:
+    - /tmp:size=32m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - >-
+        fetch("http://127.0.0.1:4021/health").then(r => {
+          if (!r.ok) process.exit(1)
+        }).catch(() => process.exit(1))
+    interval: 15s
+    timeout: 5s
+    retries: 10
+    start_period: 20s
+  stop_grace_period: 30s
+  cpus: 0.20
+  mem_limit: 256m
+  logging: *default-logging
+
 x-api-environment: &api-environment
   ADX_CONNECTOR_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
   ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
@@ -82,7 +120,7 @@ services:
       - -c
       - work_mem=4MB
       - -c
-      - max_connections=40
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-120}
       - -c
       - wal_compression=on
       - -c
@@ -228,7 +266,7 @@ services:
       ADX_OPENAI_COMPATIBLE_MODELS: ${ADX_OPENAI_COMPATIBLE_MODELS:-}
       ADX_HOSTED_WORKER_LEASE_SECONDS: ${ADX_HOSTED_WORKER_LEASE_SECONDS:-600}
       ADX_HOSTED_WORKER_POLL_SECONDS: ${ADX_HOSTED_WORKER_POLL_SECONDS:-1}
-      ADX_HOSTED_WORKER_TASK_CONCURRENCY: ${ADX_HOSTED_WORKER_TASK_CONCURRENCY:-5}
+      ADX_HOSTED_WORKER_TASK_CONCURRENCY: ${ADX_HOSTED_WORKER_TASK_CONCURRENCY:-25}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       provision-db-roles:
@@ -312,7 +350,7 @@ services:
       ADX_CURRENT_GAME_POLL_SECONDS: ${ADX_CURRENT_GAME_POLL_SECONDS:-1}
       ADX_CURRENT_GAME_ROUND_COUNT: ${ADX_CURRENT_GAME_ROUND_COUNT:-5}
       ADX_CURRENT_GAME_START_THRESHOLD: ${ADX_CURRENT_GAME_START_THRESHOLD:-10}
-      ADX_CURRENT_GAME_MAX_PARTICIPANTS: ${ADX_CURRENT_GAME_MAX_PARTICIPANTS:-12}
+      ADX_CURRENT_GAME_MAX_PARTICIPANTS: ${ADX_CURRENT_GAME_MAX_PARTICIPANTS:-100}
       ADX_CURRENT_GAME_ACTION_TIMEOUT_MS: ${ADX_CURRENT_GAME_ACTION_TIMEOUT_MS:-90000}
       ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS: ${ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS:-3}
       ADX_CURRENT_GAME_CHAIN_ID: ${ADX_CURRENT_GAME_CHAIN_ID:-1439}
@@ -366,13 +404,24 @@ services:
       ADX_SETTLEMENT_INTENT_ID: ${ADX_SETTLEMENT_INTENT_ID:-}
       ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
       ADX_PUBLIC_API_URL: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
-      ADX_X402_FACILITATOR_URL: ${ADX_X402_FACILITATOR_URL:?Set ADX_X402_FACILITATOR_URL in deploy/.env}
-      ADX_X402_FACILITATOR_ID: ${ADX_X402_FACILITATOR_ID:?Set ADX_X402_FACILITATOR_ID in deploy/.env}
-      ADX_X402_FACILITATOR_AUTHORIZATION: ${ADX_X402_FACILITATOR_AUTHORIZATION:-}
+      ADX_X402_FACILITATOR_SHARD_COUNT: ${ADX_X402_FACILITATOR_SHARD_COUNT:-4}
+      ADX_X402_FACILITATOR_1_URL: ${ADX_X402_FACILITATOR_1_URL:-http://arena-facilitator-1:4021}
+      ADX_X402_FACILITATOR_1_ID: ${ADX_X402_FACILITATOR_1_ID:-arena402-injective-testnet-1}
+      ADX_X402_FACILITATOR_1_AUTHORIZATION: ${ADX_X402_FACILITATOR_1_AUTHORIZATION:-}
+      ADX_X402_FACILITATOR_2_URL: ${ADX_X402_FACILITATOR_2_URL:-http://arena-facilitator-2:4021}
+      ADX_X402_FACILITATOR_2_ID: ${ADX_X402_FACILITATOR_2_ID:-arena402-injective-testnet-2}
+      ADX_X402_FACILITATOR_2_AUTHORIZATION: ${ADX_X402_FACILITATOR_2_AUTHORIZATION:-}
+      ADX_X402_FACILITATOR_3_URL: ${ADX_X402_FACILITATOR_3_URL:-http://arena-facilitator-3:4021}
+      ADX_X402_FACILITATOR_3_ID: ${ADX_X402_FACILITATOR_3_ID:-arena402-injective-testnet-3}
+      ADX_X402_FACILITATOR_3_AUTHORIZATION: ${ADX_X402_FACILITATOR_3_AUTHORIZATION:-}
+      ADX_X402_FACILITATOR_4_URL: ${ADX_X402_FACILITATOR_4_URL:-http://arena-facilitator-4:4021}
+      ADX_X402_FACILITATOR_4_ID: ${ADX_X402_FACILITATOR_4_ID:-arena402-injective-testnet-4}
+      ADX_X402_FACILITATOR_4_AUTHORIZATION: ${ADX_X402_FACILITATOR_4_AUTHORIZATION:-}
       ADX_WALLET_SIGNER_URL: ${ADX_WALLET_SIGNER_URL:?Set ADX_WALLET_SIGNER_URL in deploy/.env}
       ADX_WALLET_SIGNER_TOKEN: ${ADX_WALLET_SIGNER_TOKEN:?Set ADX_WALLET_SIGNER_TOKEN in deploy/.env}
       ADX_SETTLEMENT_SERVICE_TOKEN: ${ADX_SETTLEMENT_SERVICE_TOKEN:?Set ADX_SETTLEMENT_SERVICE_TOKEN in deploy/.env}
       ADX_SETTLEMENT_WORKER_POLL_SECONDS: ${ADX_SETTLEMENT_WORKER_POLL_SECONDS:-0.5}
+      ADX_SETTLEMENT_WORKER_CONCURRENCY: ${ADX_SETTLEMENT_WORKER_CONCURRENCY:-4}
       ADX_SETTLEMENT_LEASE_SECONDS: ${ADX_SETTLEMENT_LEASE_SECONDS:-60}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
@@ -529,53 +578,57 @@ services:
     mem_limit: 256m
     logging: *default-logging
 
-  arena-facilitator:
-    profiles:
-      - testnet-facilitator
-    build:
-      context: .
-      dockerfile: deploy/docker/Dockerfile.facilitator
-    restart: unless-stopped
-    init: true
+  arena-facilitator-1:
+    <<: *facilitator-base
     environment:
       ADX_ENV: production
       ADX_SETTLEMENT_DEPLOYMENTS_PATH: /app/deployments.json
       ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
       ADX_FACILITATOR_CSV_PATH: /run/arena402/facilitators.csv
-      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_WALLET_INDEX:-1}
-      ADX_X402_FACILITATOR_BEARER_TOKEN: ${ADX_X402_FACILITATOR_BEARER_TOKEN:-}
+      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_1_WALLET_INDEX:-1}
+      ADX_X402_FACILITATOR_BEARER_TOKEN: ${ADX_X402_FACILITATOR_1_BEARER_TOKEN:-}
       ADX_FACILITATOR_ALLOWED_RESOURCE_ORIGIN: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
       FACILITATOR_PORT: "4021"
       TZ: ${TZ:-Asia/Shanghai}
-    volumes:
-      - ${ADX_FACILITATOR_CSV_HOST_PATH:-./deploy/secrets/arena402-facilitators.csv}:/run/arena402/facilitators.csv:ro
-    networks:
-      - edge
-      - data
-    expose:
-      - "4021"
-    read_only: true
-    tmpfs:
-      - /tmp:size=32m,mode=1777
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - >-
-          fetch("http://127.0.0.1:4021/health").then(r => {
-            if (!r.ok) process.exit(1)
-          }).catch(() => process.exit(1))
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-    stop_grace_period: 30s
-    cpus: 0.20
-    mem_limit: 256m
-    logging: *default-logging
+
+  arena-facilitator-2:
+    <<: *facilitator-base
+    environment:
+      ADX_ENV: production
+      ADX_SETTLEMENT_DEPLOYMENTS_PATH: /app/deployments.json
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
+      ADX_FACILITATOR_CSV_PATH: /run/arena402/facilitators.csv
+      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_2_WALLET_INDEX:-2}
+      ADX_X402_FACILITATOR_BEARER_TOKEN: ${ADX_X402_FACILITATOR_2_BEARER_TOKEN:-}
+      ADX_FACILITATOR_ALLOWED_RESOURCE_ORIGIN: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
+      FACILITATOR_PORT: "4021"
+      TZ: ${TZ:-Asia/Shanghai}
+
+  arena-facilitator-3:
+    <<: *facilitator-base
+    environment:
+      ADX_ENV: production
+      ADX_SETTLEMENT_DEPLOYMENTS_PATH: /app/deployments.json
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
+      ADX_FACILITATOR_CSV_PATH: /run/arena402/facilitators.csv
+      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_3_WALLET_INDEX:-3}
+      ADX_X402_FACILITATOR_BEARER_TOKEN: ${ADX_X402_FACILITATOR_3_BEARER_TOKEN:-}
+      ADX_FACILITATOR_ALLOWED_RESOURCE_ORIGIN: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
+      FACILITATOR_PORT: "4021"
+      TZ: ${TZ:-Asia/Shanghai}
+
+  arena-facilitator-4:
+    <<: *facilitator-base
+    environment:
+      ADX_ENV: production
+      ADX_SETTLEMENT_DEPLOYMENTS_PATH: /app/deployments.json
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
+      ADX_FACILITATOR_CSV_PATH: /run/arena402/facilitators.csv
+      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_4_WALLET_INDEX:-4}
+      ADX_X402_FACILITATOR_BEARER_TOKEN: ${ADX_X402_FACILITATOR_4_BEARER_TOKEN:-}
+      ADX_FACILITATOR_ALLOWED_RESOURCE_ORIGIN: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
+      FACILITATOR_PORT: "4021"
+      TZ: ${TZ:-Asia/Shanghai}
 
   web:
     profiles:

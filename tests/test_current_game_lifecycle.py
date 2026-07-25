@@ -42,7 +42,7 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     assert len(repository.calls) == 1
     call = repository.calls[0]
     assert call["start_threshold"] == 10
-    assert call["max_participants"] == 12
+    assert call["max_participants"] == 100
     assert call["event_mode"] == "seeded_shuffle"
     assert call["settlement_config"] is settlement
     assert len(call["events"]) == 5  # type: ignore[arg-type]
@@ -62,3 +62,18 @@ def test_lifecycle_rejects_capacity_below_start_threshold() -> None:
         assert "max_participants" in str(exc)
     else:
         raise AssertionError("invalid capacity must be rejected")
+
+
+def test_lifecycle_rejects_capacity_above_production_limit() -> None:
+    repository = _Repository()
+
+    try:
+        CurrentGameLifecycleWorker(
+            repository=repository,  # type: ignore[arg-type]
+            settlement_config=SettlementConfig(),
+            max_participants=101,
+        )
+    except ValueError as exc:
+        assert "max_participants" in str(exc)
+    else:
+        raise AssertionError("capacity above 100 must be rejected")

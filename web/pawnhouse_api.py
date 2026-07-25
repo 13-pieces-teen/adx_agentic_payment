@@ -12,6 +12,7 @@ from connector_gateway.auth import AuthError, ConnectorAuth
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
 from arena_game import (
     EventDeckError,
+    INITIAL_NET_WORTH_ATOMIC,
     PawnhouseRepositoryError,
     Portfolio,
     PortfolioError,
@@ -87,6 +88,18 @@ class PortfolioBody(_Body):
     holdings: dict[str, int]
 
 
+class InitialPortfolioBody(_Body):
+    cash_atomic: Annotated[
+        str,
+        StringConstraints(
+            min_length=1,
+            max_length=38,
+            pattern=r"^(0|[1-9][0-9]*)$",
+        ),
+    ] = Field(alias="cashAtomic")
+    holdings: dict[Literal["grain", "iron", "warhorse", "gems"], int]
+
+
 class RuleStrategyBody(_Body):
     intent: Literal["buy", "sell", "pass"]
     good: Literal["grain", "iron", "warhorse", "gems"]
@@ -135,6 +148,7 @@ class JoinCurrentGameBody(_Body):
     agent_id: _Id = Field(alias="agentId")
     payment_mandate_id: _Id = Field(alias="paymentMandateId")
     join_authorization_id: _Id = Field(alias="joinAuthorizationId")
+    portfolio: InitialPortfolioBody | None = None
 
 
 class SettlementConfigBody(_Body):
@@ -422,14 +436,22 @@ def create_pawnhouse_participation_router(
                 detail=exc.detail,
             ) from None
         try:
+            portfolio = (
+                Portfolio.initial(
+                    cash_atomic=INITIAL_NET_WORTH_ATOMIC,
+                    holdings={},
+                )
+                if body.portfolio is None
+                else Portfolio.initial(
+                    cash_atomic=int(body.portfolio.cash_atomic),
+                    holdings=body.portfolio.holdings,
+                )
+            )
             participant_id = await repository.add_hosted_participant(
                 game_id=game_id,
                 user_id=principal.user_id,
                 agent_id=body.agent_id,
-                portfolio=Portfolio.initial(
-                    cash_atomic=gold("20"),
-                    holdings={},
-                ),
+                portfolio=portfolio,
                 payment_mandate_id=body.payment_mandate_id,
                 join_authorization_id=body.join_authorization_id,
                 require_current_game=True,
@@ -438,7 +460,13 @@ def create_pawnhouse_participation_router(
         except (PortfolioError, SettlementError) as exc:
             raise HTTPException(
                 status_code=422,
-                detail={"code": str(exc)},
+                detail={
+                    "code": (
+                        "invalid_portfolio"
+                        if isinstance(exc, PortfolioError)
+                        else str(exc)
+                    )
+                },
             ) from None
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
@@ -449,9 +477,11 @@ def create_pawnhouse_participation_router(
             "readiness": "READY",
             "status": game["status"] if game is not None else "WAITING",
             "readyCount": game["readyCount"] if game is not None else 0,
-            "startThreshold": (
-                game["startThreshold"] if game is not None else 0
-            ),
+            "startThreshold": game["startThreshold"] if game is not None else 0,
+            "initialPortfolio": {
+                "cashAtomic": str(portfolio.cash_atomic),
+                "holdings": portfolio.holdings,
+            },
             "schemaVersion": "arena.game-join.v2",
         }
 

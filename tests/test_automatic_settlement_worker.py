@@ -7,8 +7,12 @@ from unittest.mock import patch
 
 from arena_payments.automatic_worker import AutomaticSettlementWorker
 from arena_payments.coordinator import X402ExecutionResult, X402SettlementCoordinator
-from arena_payments.facilitator import FacilitatorSettlement
-from arena_payments.facilitator import FacilitatorError
+from arena_payments.facilitator import (
+    FacilitatorError,
+    FacilitatorSettlement,
+    ShardedFacilitatorClient,
+)
+from arena_payments.models import MandateLimits
 from arena_payments.repository import InMemoryPaymentRepository
 from tests.test_arena_payments import _mandate, _terms
 
@@ -85,6 +89,11 @@ class _ClockCapturingCoordinator:
         )
 
 
+class _RoutedCoordinator(_ClockCapturingCoordinator):
+    def facilitator_id(self, _payment_required):
+        return "shard-3"
+
+
 class _AmbiguousFacilitator(_Facilitator):
     async def settle(self, **_: object) -> FacilitatorSettlement:
         raise FacilitatorError("facilitator_unreachable", ambiguous=True)
@@ -96,6 +105,7 @@ class _Source:
         self.statuses: list[str] = []
         self.failures: list[str] = []
         self.claims = 0
+        self.claimed_facilitator_ids: list[str] = []
         self.recovered: list[tuple[str, str]] = []
 
     async def authorization_targets(self, *, limit: int):
@@ -109,8 +119,14 @@ class _Source:
     async def active_mandate(self, settlement_intent_id: str, now: datetime):
         return self.mandate
 
-    async def claim_attempt(self, **_: object):
+    async def claim_attempt(
+        self,
+        *,
+        facilitator_id: str,
+        **_: object,
+    ):
         self.claims += 1
+        self.claimed_facilitator_ids.append(facilitator_id)
         return self.claims == 1
 
     async def mark_attempt(self, *, status: str, **_: object):
@@ -148,6 +164,59 @@ class _UnknownPersistenceFailureSource(_Source):
         self.statuses.append(status)
         if status == "unknown":
             raise RuntimeError("attempt persistence unavailable")
+
+
+class _ConcurrentSource(_Source):
+    async def authorization_targets(self, *, limit: int):
+        assert limit == 25
+        return [f"intent-{index}" for index in range(1, 5)]
+
+    async def settlement_terms(self, settlement_intent_id: str):
+        return _terms(settlement_intent_id, amount=20)
+
+    async def claim_attempt(
+        self,
+        *,
+        facilitator_id: str,
+        **_: object,
+    ):
+        self.claimed_facilitator_ids.append(facilitator_id)
+        return True
+
+
+class _ConcurrencyTracker:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+
+
+class _ConcurrentFacilitator:
+    def __init__(self, tracker: _ConcurrencyTracker) -> None:
+        self.tracker = tracker
+
+    async def verify(self, **_: object) -> bool:
+        return True
+
+    async def settle(
+        self, *, payment_requirements, **_: object
+    ) -> FacilitatorSettlement:
+        self.tracker.active += 1
+        self.tracker.max_active = max(
+            self.tracker.max_active,
+            self.tracker.active,
+        )
+        await asyncio.sleep(0.02)
+        self.tracker.active -= 1
+        return FacilitatorSettlement(
+            success=True,
+            transaction=(
+                "0x"
+                + payment_requirements["extra"]["arena402IntentHash"][
+                    -64:
+                ]
+            ),
+            network=payment_requirements["network"],
+        )
 
 
 def test_worker_runs_wallet_to_x402_to_submission_without_human_gate() -> None:
@@ -206,6 +275,30 @@ def test_worker_validates_signed_payload_against_post_signing_clock() -> None:
         asyncio.run(worker.run_once())
 
     assert coordinator.execution_now == after_signing
+
+
+def test_worker_persists_facilitator_route_before_signing() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _Source(mandate)
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_PayloadSigner(),
+        coordinator=_RoutedCoordinator(),  # type: ignore[arg-type]
+        worker_id="worker-1",
+    )
+
+    asyncio.run(worker.run_once())
+
+    assert source.claimed_facilitator_ids == ["shard-3"]
+    assert source.statuses == ["signed", "submitting", "submitted"]
 
 
 def test_signer_failure_releases_reserved_mandate_budget() -> None:
@@ -302,3 +395,42 @@ def test_worker_recovers_unknown_submission_without_signing_or_rebroadcasting() 
     assert asyncio.run(worker.run_once()) == 1
     assert source.recovered == [("intent-1", "0x" + "77" * 32)]
     assert source.statuses == []
+
+
+def test_worker_executes_four_facilitator_routes_concurrently() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        limits=MandateLimits(
+            max_per_payment_atomic=50,
+            max_cumulative_atomic=200,
+        ),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _ConcurrentSource(mandate)
+    tracker = _ConcurrencyTracker()
+    coordinator = X402SettlementCoordinator(
+        payments=payments,
+        arena=_Arena(),
+        facilitator=ShardedFacilitatorClient(
+            {
+                f"shard-{index}": _ConcurrentFacilitator(tracker)
+                for index in range(1, 5)
+            }
+        ),
+    )
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_Signer(),
+        coordinator=coordinator,
+        worker_id="worker-1",
+        execution_concurrency=4,
+    )
+
+    assert asyncio.run(worker.run_once()) == 4
+    assert tracker.max_active == 4
+    assert len(source.claimed_facilitator_ids) == 4

@@ -157,6 +157,7 @@ class PostgresAutomaticSettlementSource:
         settlement_intent_id: str,
         reservation_id: str,
         payment_required: dict,
+        facilitator_id: str,
         worker_id: str,
         now: datetime,
     ) -> bool:
@@ -165,16 +166,27 @@ class PostgresAutomaticSettlementSource:
             """
             INSERT INTO arena402.x402_settlement_attempts (
                 settlement_intent_id, reservation_id, x402_version,
-                network, payment_required, status, lease_owner,
+                network, payment_required, facilitator_id, status, lease_owner,
                 lease_expires_at, created_at, updated_at
             )
-            VALUES ($1, $2, 2, $3, $4::jsonb, 'reserved', $5, $6, $7, $7)
+            VALUES (
+                $1, $2, 2, $3, $4::jsonb, $5, 'reserved', $6, $7, $8, $8
+            )
             ON CONFLICT (settlement_intent_id) DO UPDATE
-            SET lease_owner = EXCLUDED.lease_owner,
+            SET facilitator_id = COALESCE(
+                    x402_settlement_attempts.facilitator_id,
+                    EXCLUDED.facilitator_id
+                ),
+                lease_owner = EXCLUDED.lease_owner,
                 lease_expires_at = EXCLUDED.lease_expires_at,
                 updated_at = EXCLUDED.updated_at
             WHERE x402_settlement_attempts.status IN ('reserved', 'signed')
-              AND x402_settlement_attempts.lease_expires_at < $7
+              AND x402_settlement_attempts.lease_expires_at < $8
+              AND (
+                    x402_settlement_attempts.facilitator_id IS NULL
+                    OR x402_settlement_attempts.facilitator_id
+                        = EXCLUDED.facilitator_id
+              )
             RETURNING settlement_intent_id
             """,
             settlement_intent_id,
@@ -185,6 +197,7 @@ class PostgresAutomaticSettlementSource:
                 sort_keys=True,
                 separators=(",", ":"),
             ),
+            facilitator_id,
             worker_id,
             lease_expires,
             now,

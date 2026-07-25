@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -35,6 +36,7 @@ class AutomaticSettlementSource(Protocol):
         settlement_intent_id: str,
         reservation_id: str,
         payment_required: dict,
+        facilitator_id: str,
         worker_id: str,
         now: datetime,
     ) -> bool: ...
@@ -66,23 +68,38 @@ class AutomaticSettlementWorker:
         coordinator: X402SettlementCoordinator,
         worker_id: str,
         scan_limit: int = 25,
+        execution_concurrency: int = 1,
         authorization_recovery_reader: AuthorizationRecoveryReader | None = None,
     ) -> None:
         if not worker_id or not 1 <= scan_limit <= 100:
             raise ValueError("invalid_automatic_settlement_worker")
+        if not 1 <= execution_concurrency <= 64:
+            raise ValueError("invalid_automatic_settlement_concurrency")
         self._source = source
         self._payments = payments
         self._signer = signer
         self._coordinator = coordinator
         self._worker_id = worker_id
         self._scan_limit = scan_limit
+        self._execution_concurrency = execution_concurrency
         self._authorization_recovery_reader = authorization_recovery_reader
 
     async def run_once(self) -> int:
         recovered = await self._recover_ambiguous_submissions()
         targets = await self._source.authorization_targets(limit=self._scan_limit)
-        for settlement_intent_id in targets:
-            await self._execute(settlement_intent_id)
+        semaphore = asyncio.Semaphore(self._execution_concurrency)
+
+        async def execute_one(settlement_intent_id: str) -> None:
+            async with semaphore:
+                await self._execute(settlement_intent_id)
+
+        results = await asyncio.gather(
+            *(execute_one(settlement_intent_id) for settlement_intent_id in targets),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
         return recovered + len(targets)
 
     async def _recover_ambiguous_submissions(self) -> int:
@@ -125,10 +142,17 @@ class AutomaticSettlementWorker:
             now=now,
         )
         payment_required = self._coordinator.payment_required(terms)
+        resolver = getattr(self._coordinator, "facilitator_id", None)
+        facilitator_id = (
+            str(resolver(payment_required["accepts"][0]))
+            if resolver is not None
+            else "configured"
+        )
         claimed = await self._source.claim_attempt(
             settlement_intent_id=settlement_intent_id,
             reservation_id=reservation.reservation_id,
             payment_required=payment_required,
+            facilitator_id=facilitator_id,
             worker_id=self._worker_id,
             now=now,
         )

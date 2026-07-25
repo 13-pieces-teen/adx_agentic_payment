@@ -1287,8 +1287,8 @@ External:
 - Arena Core Worker 不监听公网端口，以数据库 leader/lease 防止重复 finalizer；
 - Hosted Worker 不监听公网端口，只主动访问 Provider 与 Secret Manager；
 - Credential Controller 只消费持久化 Secret lifecycle job；
-- 使用 PostgreSQL queue，2C4G MVP 的 Worker 并发保持有界并通过
-  2/5/10/12 Agent 压测调整；
+- 使用 PostgreSQL queue，生产 Hosted Worker 以 4 副本 × 25 task slot 起步，
+  并通过 2/5/10/12/25/50/100 Agent 压测调整；
 - Arena Task 与 credential validation 使用独立 claim/并发槽，比赛 Task 优先；
 - 单局最大 Agent 和同时 Game 数由容量测试冻结；超过容量时拒绝开局，不用排队延迟
   决定竞技结果；
@@ -1410,7 +1410,8 @@ External:
 - [ ] redirect、环境代理、metadata IP 和超大 Provider response 测试均被拒绝；
 - [ ] Secret backend 不可用时 fail closed；
 - [ ] 自定义 endpoint、tools、shell、文件和浏览器访问均不可用；
-- [ ] 2/5/10/12 Agent 压测记录 P50/P95/P99、timeout、retry、Token 和整局耗时；
+- [ ] 2/5/10/12/25/50/100 Agent 压测记录 P50/P95/P99、timeout、retry、Token
+      和整局耗时；
 - [ ] 默认 `action_timeout_ms` 来自真实测试，而不是文档中的固定猜测值；
 - [ ] 完成依赖锁、secret scan、漏洞扫描与发布证据。
 

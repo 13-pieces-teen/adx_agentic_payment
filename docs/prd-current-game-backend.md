@@ -113,12 +113,12 @@ Join 预检失败时不得增加 `readyCount`。不能使用登录人数、前�
 | 配置 | 测试环境建议 | 正式环境建议 |
 |---|---:|---:|
 | `startThreshold` | 2，或管理员手动启动 | 10 |
-| `maxParticipants` | 12 | 12，产品目标参与数 10 |
+| `maxParticipants` | 12 | 100，默认开赛阈值仍为 10 |
 
 约束：
 
 ```text
-2 <= startThreshold <= maxParticipants <= 12
+2 <= startThreshold <= maxParticipants <= 100
 ```
 
 底层 Game Core 可继续支持更宽的开发范围，但单一大厅产品接口必须应用上述产品上限。
@@ -232,7 +232,7 @@ GET /api/v1/games/current
     "status": "WAITING",
     "readyCount": 7,
     "startThreshold": 10,
-    "maxParticipants": 12,
+    "maxParticipants": 100,
     "roundCount": 5,
     "currentRound": 0,
     "roundPhase": null,
@@ -306,6 +306,26 @@ Content-Type: application/json
     "maxCumulativeAtomic": "50000000",
     "allowedPayeeRule": "SAME_GAME_SETTLEMENT_ACCOUNT",
     "expiresAt": "2026-07-25T12:00:00Z"
+  },
+  "portfolioRequirements": {
+    "initialNetWorthAtomic": "20000000",
+    "goldDecimals": 6,
+    "initialPricesAtomic": {
+      "grain": "2000000",
+      "iron": "5000000",
+      "warhorse": "8000000",
+      "gems": "3000000"
+    },
+    "allowedGoods": ["grain", "iron", "warhorse", "gems"],
+    "defaultPortfolio": {
+      "cashAtomic": "20000000",
+      "holdings": {
+        "grain": 0,
+        "iron": 0,
+        "warhorse": 0,
+        "gems": 0
+      }
+    }
   },
   "safeErrorCode": null,
   "schemaVersion": "arena.game-join-preflight.v1"
@@ -391,9 +411,34 @@ X-CSRF-Token: ...
 {
   "agentId": "agent-123",
   "paymentMandateId": "mandate-opaque-id",
-  "joinAuthorizationId": "join-auth-opaque-id"
+  "joinAuthorizationId": "join-auth-opaque-id",
+  "portfolio": {
+    "cashAtomic": "2000000",
+    "holdings": {
+      "grain": 1,
+      "iron": 1,
+      "warhorse": 1,
+      "gems": 1
+    }
+  }
 }
 ```
+
+`portfolio` 必须按预检返回的初始价满足：
+
+```text
+cashAtomic
+  + grain*2000000
+  + iron*5000000
+  + warhorse*8000000
+  + gems*3000000
+= 20000000
+```
+
+`cashAtomic` 使用十进制整数字符串，持仓数量使用非负整数。服务端校验并在 Join
+事务中锁定组合，开赛时不得再次随机分配或覆盖。为兼容尚未升级的客户端，
+`portfolio` 暂时可省略并回退为 20 金全现金；产品前端应始终显式提交用户确认的
+组合。
 
 ```json
 {
@@ -423,6 +468,7 @@ X-CSRF-Token: ...
 | 409 | `user_already_joined` | 用户已用另一 Agent 加入 |
 | 409 | `runtime_not_ready` | Runtime 未 Ready |
 | 409 | `mandate_not_ready` | Mandate 未确认、过期、撤销或额度不足 |
+| 422 | `invalid_portfolio` | 初始组合包含未知货物、非法数量或总值不等于 20 金 |
 | 409 | `idempotency_conflict` | Key 被不同请求复用 |
 
 ### 6.7 退出等待游戏

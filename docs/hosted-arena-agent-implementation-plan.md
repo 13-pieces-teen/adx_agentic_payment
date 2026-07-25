@@ -1226,23 +1226,24 @@ accepted trade。
 
 不增加公网 Worker/Controller port。PostgreSQL 保持 internal network only。API、
 Arena Core、Hosted Worker、Credential Controller、Settlement Worker 和 migration
-使用独立数据库 role。首发保持单个 PostgreSQL、单个 API 和每类 Worker 一个实例，
-不增加 Redis、Kafka、Kubernetes 或多副本协调。
+使用独立数据库 role。生产配置保持单个 PostgreSQL、单个 API 和单个 Settlement/
+Arena Worker；Hosted Worker 以 4 副本运行，Settlement 路由到 4 个独立 EOA
+Facilitator 服务。不增加 Redis、Kafka 或 Kubernetes。
 
 Provider 出站只允许固定 HTTPS Host，关闭 redirect/env proxy，并在主机层增加 egress
 firewall/proxy。容量测试冻结单局最大 Agent 与同时 Game 数；超过容量时拒绝开局，
-不能用无限排队伪装容量。2C4G MVP 的两个 Decide wave 会把平台排队计入
-`result_received_at` FCFS，因此只作为展示，不宣称 Tournament 公平性。
+不能用无限排队伪装容量。Provider 限流、Worker 调度产生的 launch skew 会被计入
+`result_received_at` FCFS，因此 100 Agent 实测通过前不宣称 Tournament 公平性。
 
-首发部署基线改为现有 2 vCPU / 4 GB RAM / 70 GB 单机：展示局默认 10 Agent、
-硬上限 12、固定 5 回合、同一时间一局 active Game、Hosted Task 并发 5、
-Negotiation pairing 并发 5、Settlement 在途并发 2。单一 relay EOA 的 nonce 分配/广播
-由数据库锁短暂串行。具体 `action_timeout_ms` 由真实 Provider 的 5 并发、
-10/12 Agent wave 延迟测试冻结，并覆盖 Decide 排队以及最多三轮 Negotiation；
+当前生产配置为：默认开赛阈值 10 Agent、硬上限 100、固定 5 回合、同一时间
+一局 active Game、4 个 Hosted Worker × 25 task slot、Settlement 执行并发 4，
+并确定性路由到 4 个独立 relay EOA。旧 2 vCPU / 4 GB / 70 GB 单机基线已不再
+适用，必须重新定容。具体 `action_timeout_ms` 由真实 Provider 的
+10/12/25/50/100 Agent wave 延迟测试冻结，并覆盖 Decide 排队以及最多三轮 Negotiation；
 `settlement_timeout_ms` 首发冻结为 600000，authorization 有效期 420 秒，剩余
 180 秒用于过期区块的两个确认和最终恢复；unknown 不能算终态，超时仍无法安全判定时
-Game 进入 `settlement_recovery_required` 并判定本次 MVP 失败。12 Agent 只做非阻塞容量验证，
-16 Agent 推迟到扩容后。
+Game 进入 `settlement_recovery_required` 并判定本次验收失败。12 Agent 只作为
+历史回归基线，100 Agent 是当前生产配置的容量门槛。
 
 ### 15.2 依赖与供应链
 
@@ -1275,7 +1276,7 @@ Provider x Model x thinking mode
 - retry rate；
 - timeout/default rate；
 - input/output/reasoning tokens；
-- 2/5/10/12 Agent 整轮 wall time；
+- 2/5/10/12/25/50/100 Agent 整轮 wall time；
 - Worker queue age、CPU、内存。
 
 Arena Task queue 与 credential validation queue 使用不同 claim 路径。比赛 Task 有高
@@ -1331,13 +1332,13 @@ Arena Task queue 与 credential validation queue 使用不同 claim 路径。比
 - [ ] 至少一个真实 Provider 的 structured invocation 通过；
 - [ ] guest signer/relay Secret 权限与 Hosted/Arena Worker 隔离；
 - [ ] accepted trade 自动完成当前链路的新鲜 testnet 支付；
-- [ ] 10 Agent 受控场景产生 5 笔 accepted trade，按 2 + 2 + 1 wave 终态，
-      且监控至少观察到 2 笔 Settlement 同时在途；
+- [ ] 100 Agent 受控场景产生最多 50 笔 accepted trade，经 4 个 shard 全部安全
+      终态，且监控至少观察到 4 笔 Settlement 同时在途并分属 4 个 EOA；
 - [ ] 600 秒内无残留 `submitted_unknown`；进入 `settlement_recovery_required`
       必须停止排名并使本次验收失败；
 - [ ] 外部网络 E2E 保存证据；
-- [ ] 2C4G 生产机上 10 Agent × 5 回合必须通过；
-- [ ] 12 Agent × 5 回合作为非阻塞容量验证；
+- [ ] 10/12 Agent × 5 回合回归通过；
+- [ ] 25/50/100 Agent × 5 回合在重新定容的生产机上通过；
 - [ ] 默认 timeout 有数据依据；
 - [ ] 安全扫描无真实 secret。
 

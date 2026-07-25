@@ -40,7 +40,7 @@ def test_csv_is_limited_to_non_running_wallet_admin_profile() -> None:
 
 
 def test_rotation_profile_needs_no_csv_or_private_key_ciphertext_access() -> None:
-    rotation = _service("wallet-vault-rotate", "arena-facilitator")
+    rotation = _service("wallet-vault-rotate", "arena-facilitator-1")
     assert "- wallet-admin" in rotation
     assert 'restart: "no"' in rotation
     assert 'command: ["npm", "run", "wallet:vault-rotate"]' in rotation

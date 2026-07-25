@@ -104,8 +104,10 @@ the Hosted production payment path. The approved testnet launch target is:
 - wallet funding and Settlement share one database-backed relay EOA nonce
   allocator; preparation and confirmation may be concurrent while nonce
   allocation and broadcast are briefly serialized;
-- the 2 vCPU / 4 GB / 70 GB MVP target is one active Game with 10 Hosted Agents,
-  a hard cap of 12, bounded Worker waves, and platform testnet wallets only.
+- the production configuration admits one active Game with a default start
+  threshold of 10 and a hard cap of 100, using four Hosted Worker replicas and
+  four independent Facilitator EOA shards; the old 2 vCPU / 4 GB / 70 GB
+  evidence does not validate that capacity.
 
 This target deliberately does not add externally supplied user wallets,
 escrow, Redis, Kafka, or multi-Game scheduling. The
@@ -146,11 +148,16 @@ remains authoritative.
   DEK 的版本轮换；运行时不挂载 CSV；
 - x402 V2 challenge/retry/header、CAIP-2 network、exact 原子金额和冻结 Intent 绑定；
 - 自动 Worker lease、`submitting` ambiguity boundary 与 Fake 全链路验收。
+- 基于冻结 `arena402IntentHash` 的确定性四分片路由、签名前持久化
+  `facilitator_id`、4 路 Settlement Worker 执行槽，以及 Compose 中四个独立
+  Facilitator EOA 服务。
 
 当前仍未实现或未验收：
 
 - 完整 reorg 策略；
 - 当前部署服务上的一笔新鲜、经批准 testnet 端到端交易；
+- 四个 Facilitator shard 的 live testnet 吞吐、单 shard 故障恢复，以及 durable
+  per-EOA nonce outbox/fencing；
 - 标准公共 x402 Facilitator 的真实 testnet 兼容验收；
 - 链上 escrow、退款、争议或生产手续费。
 

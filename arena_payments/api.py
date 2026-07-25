@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from arena_wallets import InjectiveWalletService, WalletChainError
 from connector_gateway.auth import AuthError, ConnectorAuth
 
 from .models import MandateLimits, PaymentMandate
@@ -81,6 +82,7 @@ def create_payment_account_router(
     *,
     auth: ConnectorAuth,
     repository: PaymentRepository,
+    wallet_service: InjectiveWalletService | None = None,
 ) -> APIRouter:
     router = APIRouter()
     service = ArenaPaymentService(repository=repository)
@@ -108,6 +110,38 @@ def create_payment_account_router(
             status = 409 if detail == "wallet_pool_exhausted" else 403
             raise HTTPException(status_code=status, detail=detail) from exc
         return {"wallet": _wallet_public(wallet)}
+
+    @router.get("/api/v1/me/wallet/overview")
+    async def my_wallet_overview(request: Request) -> dict[str, object]:
+        if wallet_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "wallet_overview_unavailable"},
+            )
+        user = await principal(request)
+        try:
+            wallet = await service.get_or_bind_github_wallet(
+                user_id=user.user_id,
+                identity_provider=user.identity_provider,
+                provider_subject=user.provider_subject,
+            )
+        except WalletUnavailable as exc:
+            detail = str(exc)
+            status = 409 if detail == "wallet_pool_exhausted" else 403
+            raise HTTPException(status_code=status, detail=detail) from exc
+        try:
+            overview = await wallet_service.overview_for_address(wallet.address)
+        except WalletChainError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code},
+            ) from None
+        return {
+            **overview,
+            "walletId": wallet.wallet_id,
+            "custodyMode": "sandbox_guest",
+            "boundAt": wallet.bound_at.isoformat(),
+        }
 
     @router.get("/api/v1/me/payment-mandates/{game_id}")
     async def active_mandate(

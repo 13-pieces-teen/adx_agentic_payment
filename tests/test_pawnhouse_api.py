@@ -490,6 +490,15 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
         "status": "WAITING",
         "readyCount": 1,
         "startThreshold": 2,
+        "initialPortfolio": {
+            "cashAtomic": "20000000",
+            "holdings": {
+                "grain": 0,
+                "iron": 0,
+                "warhorse": 0,
+                "gems": 0,
+            },
+        },
         "schemaVersion": "arena.game-join.v2",
     }
     joined = repository.participants[0]
@@ -497,6 +506,84 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
     assert joined["payment_mandate_id"] == "mandate-current"
     assert joined["join_authorization_id"] == "ja-current"
     assert joined["portfolio"].cash_atomic == 20_000_000
+
+
+def test_current_game_join_accepts_an_exact_twenty_gold_custom_portfolio() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/games/game_current/participants",
+        headers={"x-csrf-token": "csrf"},
+        json={
+            "agentId": "agent-current",
+            "paymentMandateId": "mandate-current",
+            "joinAuthorizationId": "ja-current",
+            "portfolio": {
+                "cashAtomic": "2000000",
+                "holdings": {
+                    "grain": 1,
+                    "iron": 1,
+                    "warhorse": 1,
+                    "gems": 1,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["initialPortfolio"] == {
+        "cashAtomic": "2000000",
+        "holdings": {
+            "grain": 1,
+            "iron": 1,
+            "warhorse": 1,
+            "gems": 1,
+        },
+    }
+    portfolio = repository.participants[0]["portfolio"]
+    assert portfolio.cash_atomic == 2_000_000
+    assert portfolio.holdings == {
+        "grain": 1,
+        "iron": 1,
+        "warhorse": 1,
+        "gems": 1,
+    }
+
+
+def test_current_game_join_rejects_a_portfolio_that_mints_extra_value() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/games/game_current/participants",
+        headers={"x-csrf-token": "csrf"},
+        json={
+            "agentId": "agent-current",
+            "paymentMandateId": "mandate-current",
+            "joinAuthorizationId": "ja-current",
+            "portfolio": {
+                "cashAtomic": "20000000",
+                "holdings": {"warhorse": 1},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_portfolio"
+    assert repository.participants == []
 
 
 def test_current_game_withdraw_is_authenticated_and_owner_scoped() -> None:

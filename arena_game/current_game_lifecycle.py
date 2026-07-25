@@ -6,7 +6,10 @@ import uuid
 from datetime import datetime, timezone
 
 from .event_deck import STANDARD_EVENT_DECK_ID, build_event_schedule
-from .postgres import PostgresPawnhouseRepository
+from .postgres import (
+    CURRENT_GAME_MAX_PARTICIPANTS,
+    PostgresPawnhouseRepository,
+)
 from .settlement import SettlementConfig
 
 
@@ -20,17 +23,25 @@ class CurrentGameLifecycleWorker:
         settlement_config: SettlementConfig,
         round_count: int = 5,
         start_threshold: int = 10,
-        max_participants: int = 12,
+        max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
     ) -> None:
         if round_count < 1:
             raise ValueError("round_count must be positive")
-        if not 2 <= start_threshold <= 12:
-            raise ValueError("start_threshold must be between 2 and 12")
-        if not start_threshold <= max_participants <= 12:
+        if not 2 <= start_threshold <= CURRENT_GAME_MAX_PARTICIPANTS:
             raise ValueError(
-                "max_participants must be between start_threshold and 12"
+                "start_threshold must be between 2 and "
+                f"{CURRENT_GAME_MAX_PARTICIPANTS}"
+            )
+        if not (
+            start_threshold
+            <= max_participants
+            <= CURRENT_GAME_MAX_PARTICIPANTS
+        ):
+            raise ValueError(
+                "max_participants must be between start_threshold and "
+                f"{CURRENT_GAME_MAX_PARTICIPANTS}"
             )
         if action_timeout_ms <= 0:
             raise ValueError("action_timeout_ms must be positive")

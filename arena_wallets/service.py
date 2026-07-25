@@ -82,7 +82,10 @@ class InjectiveWalletService:
         self._rpc_call_override = rpc_call
 
     async def overview(self, binding: ExternalWalletBinding) -> dict[str, object]:
-        address = normalize_address(binding.address)
+        return await self.overview_for_address(binding.address)
+
+    async def overview_for_address(self, address: str) -> dict[str, object]:
+        address = normalize_address(address)
         chain_id = int(await self._rpc("eth_chainId", []), 16)
         if chain_id != self.chain_id:
             raise WalletChainError("wallet_rpc_chain_mismatch")

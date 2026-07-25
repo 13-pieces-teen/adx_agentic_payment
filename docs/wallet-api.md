@@ -1,5 +1,62 @@
 # Arena 402 wallet API
 
+## Platform-assigned wallet API
+
+Arena platform wallets are allocated from the imported `wallet_inventory` only
+after a GitHub-authenticated user exists. The allocation is lazy and atomic:
+the first request claims one `available` wallet, binds it to the user's GitHub
+subject, and marks the inventory row `bound`. Later requests return the same
+wallet. The API never returns `secret_ref`, a private key, or a seed phrase.
+
+`GET /api/v1/me/wallet`
+
+```json
+{
+  "wallet": {
+    "walletId": "agent-wallet-0001",
+    "chainId": 1439,
+    "address": "0x...",
+    "custodyMode": "sandbox_guest",
+    "boundAt": "2026-07-26T12:00:00+00:00"
+  }
+}
+```
+
+`GET /api/v1/me/wallet/overview`
+
+This endpoint performs the same lazy allocation if needed, then reads the
+assigned address through Injective EVM JSON-RPC. It returns:
+
+```json
+{
+  "walletId": "agent-wallet-0001",
+  "custodyMode": "sandbox_guest",
+  "boundAt": "2026-07-26T12:00:00+00:00",
+  "address": "0x...",
+  "chainId": 1439,
+  "network": "injective-testnet",
+  "native": { "symbol": "INJ", "balance": "0" },
+  "tokens": [
+    {
+      "symbol": "arena402-g",
+      "contract": "0x...",
+      "balance": "0"
+    }
+  ],
+  "checkedAt": "2026-07-26T12:00:01+00:00"
+}
+```
+
+The frontend only needs to change `getWalletBinding()` to request
+`/api/v1/me/wallet` and unwrap `response.wallet`, and
+`getWalletOverview()` to request `/api/v1/me/wallet/overview`.
+
+The platform-assigned wallet API is intentionally separate from the
+user-controlled wallet challenge API below. The latter proves ownership of an
+external wallet and must not be used for platform custody.
+
+## User-controlled wallet binding
+
 This API binds one user-controlled Injective EVM Testnet wallet to the
 authenticated Arena user. It is separate from `arena402.user_wallets`, which
 stores platform-managed settlement wallets.

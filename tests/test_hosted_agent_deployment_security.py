@@ -86,6 +86,38 @@ def test_production_workers_are_separate_non_public_services() -> None:
     assert "ADX_SETTLEMENT_SERVICE_URL" in api_environment
 
 
+def test_production_uses_four_independent_facilitator_shards() -> None:
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "deploy" / "scripts" / "deploy.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for index in range(1, 5):
+        assert f"  arena-facilitator-{index}:" in compose
+        assert (
+            f"ADX_FACILITATOR_WALLET_INDEX: "
+            f'${{ADX_FACILITATOR_{index}_WALLET_INDEX:-{index}}}'
+        ) in compose
+        assert f"ADX_X402_FACILITATOR_{index}_URL:" in compose
+        assert f"ADX_X402_FACILITATOR_{index}_ID:" in compose
+        assert f"ADX_X402_FACILITATOR_{index}_AUTHORIZATION:" in compose
+    assert "ADX_X402_FACILITATOR_SHARD_COUNT: ${" in compose
+    assert "ADX_SETTLEMENT_WORKER_CONCURRENCY: ${" in compose
+    assert (
+        "compose --profile testnet-facilitator up -d "
+        "arena-facilitator-1 arena-facilitator-2 "
+        "arena-facilitator-3 arena-facilitator-4"
+    ) in deploy
+    assert "Facilitator bearer tokens must be unique." in deploy
+    assert "Facilitator wallet indices must be unique." in deploy
+    assert (
+        "Facilitator CSV must contain exactly one row for wallet index"
+        in deploy
+    )
+
+
 def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> None:
     generator = (
         ROOT / "deploy" / "scripts" / "generate-env.sh"
@@ -120,8 +152,8 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
         in deploy
     )
     assert (
-        'compose --profile hosted up -d hosted-worker '
-        "credential-controller"
+        'compose --profile hosted up -d --scale hosted-worker="'
+        '${hosted_worker_replicas}" hosted-worker credential-controller'
     ) in deploy
     assert "compose --profile arena up -d arena-worker" in deploy
     assert "compose --profile settlement up -d settlement-worker" in deploy
@@ -129,6 +161,7 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
     assert "PostgreSQL AES-GCM Hosted credentials" in deploy
     assert "Tencent SSM Hosted credentials" in deploy
     assert "hosted-master.key" in deploy
+    assert "ADX_HOSTED_WORKER_REPLICAS" in deploy
 
 
 def test_hosted_master_key_is_file_mounted_only_into_decryption_processes() -> None:

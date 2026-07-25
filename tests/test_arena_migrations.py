@@ -57,6 +57,12 @@ CURRENT_GAME_UPDATED_AT_SQL_PATH = (
     / "migrations"
     / "031_arena_current_game_updated_at.sql"
 )
+CURRENT_GAME_CAPACITY_100_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "032_arena_current_game_capacity_100.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -403,6 +409,15 @@ def test_current_game_migration_has_single_pointer_and_product_limits():
     assert "max_participants BETWEEN start_threshold AND 12" in sql
     assert "REFERENCES arena402.games(game_id)" in sql
     assert "GRANT SELECT ON arena402.current_game TO adx_arena_api" in sql
+
+
+def test_current_game_capacity_migration_raises_product_limit_to_100():
+    sql = CURRENT_GAME_CAPACITY_100_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "current_game_start_threshold_check" in sql
+    assert "start_threshold BETWEEN 2 AND 100" in sql
+    assert "current_game_max_participants_check" in sql
+    assert "max_participants BETWEEN start_threshold AND 100" in sql
 
 
 def test_current_game_join_migration_freezes_readiness_and_dynamic_payees():

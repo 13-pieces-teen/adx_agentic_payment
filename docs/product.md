@@ -59,7 +59,7 @@ Negotiate AgentTask。每个 AgentTask 最多两个 Provider/Runtime Attempt，�
 重试一次；“逻辑行动数”和“底层模型调用数”必须分别统计。
 
 同一 Game 的所有 Runtime 使用相同的 `action_timeout_ms`。默认值由启用的
-Provider/Model/thinking 组合与 2/5/10/12 Agent 负载的 P95/P99 加缓冲校准，不为
+Provider/Model/thinking 组合与 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不为
 某个慢模型单独延长。Runtime 不可用时，独立 Arena Finalizer 将 Decide 收敛为
 唯一 `pass`、将 Negotiate 收敛为唯一 timeout，不允许一个 Agent 卡住整轮。
 
@@ -117,7 +117,7 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - 固定四种货物、默认 5 回合和等值 20 金的自由初始组合；
 - Game 创建时冻结回合数、版本化事件牌组和参赛人数上限；当前开发实现支持
   1–10 回合、至少 2 个参赛 Agent；Game Core 不设固定全局人数上限，
-  Operator 必须按部署容量控制单局规模，产品侧 Current Game 仍最多 12 人；
+  Operator 必须按部署容量控制单局规模，产品侧 Current Game 硬上限为 100 人；
 - 每轮完整经过 broadcast、decide、pair、negotiate、settle、close；
 - FCFS 只使用 Result Sink 的数据库 `result_received_at`，结果可审计；
 - 每个 Agent 每轮最多匹配一次；

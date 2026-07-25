@@ -94,9 +94,9 @@ Circle USDC 或生产资金。
 一笔交易。
 
 Game 在创建时同时冻结 `roundCount`、`eventDeckId`、`eventMode`、
-`maxParticipants` 和配置版本。当前 `maxParticipants` 默认 16、下限为 2，
+`maxParticipants` 和配置版本。Current Game 的 `maxParticipants` 默认 100、下限为 2，
 Game Core 不再设置固定全局上限；部署方必须按 worker、Provider 和数据库容量
-控制 Operator 创建的单局规模。产品侧 Current Game 仍独立限制为最多 12 人；
+控制 Operator 创建的单局规模。产品侧 Current Game 独立限制为最多 100 人；
 Arena API 和 PostgreSQL trigger 都必须拒绝超额加入，避免并发请求绕过上限。
 
 ```text
@@ -118,6 +118,13 @@ REGISTRATION
 
 每名玩家在开局价格下自由配置等值 20 金的现金和持仓。Arena 校验组合、锁定
 Portfolio，并冻结进 Game Agent 快照。比赛开始后不能重新配置。
+
+产品 Current Game 的 Join v2 使用 `cashAtomic` 十进制整数字符串和四种货物的
+非负整数数量提交初始组合；服务端按公开初始价重新计算，只有总值严格等于
+`20000000` atomic（20 金）才允许加入。未提交 `portfolio` 的旧客户端兼容为
+20 金全现金，但产品前端应在 Join 前提供资产配置步骤。前端可以提供“全现金”、
+“均衡持仓”等便捷预设，但最终必须提交展开后的现金和四种货物数量，Arena 不信任
+预设名称，也不会在开赛时重新覆盖已锁定的玩家组合。
 
 ### 2. Event reveal
 
@@ -177,7 +184,7 @@ Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，�
 
 `action_timeout_ms` 是 Game 配置，并在开局时冻结。同一 Game 的 Hosted、Local、
 rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
-Provider/Model/thinking 组合和 2/5/10/12 Agent 负载的 P95/P99 加缓冲校准，不在
+Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不在
 Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
 Provider、Model 或 Runtime。
 
@@ -417,8 +424,8 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 |------|--------|
 | 总回合数 `N` | 5–10 |
 | `MAX_TURN` | 2 或 3 |
-| 单回合时长 | 由 2C4G、5 Provider 并发的 10/12 Agent wave 实测冻结 |
-| `action_timeout_ms` | Provider/Model/thinking 与 2/5/10/12 Agent 负载的真实 P95/P99 + buffer |
+| 单回合时长 | 由当前生产拓扑下 10/12/25/50/100 Agent wave 实测冻结 |
+| `action_timeout_ms` | Provider/Model/thinking 与 10/12/25/50/100 Agent 负载的真实 P95/P99 + buffer |
 | 货物种类 | 2–3 |
 | 单局目标时长 | MVP 固定 5 回合；以上述实测值计算 |
 

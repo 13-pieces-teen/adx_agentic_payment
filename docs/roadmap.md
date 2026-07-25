@@ -246,6 +246,10 @@ create game
       投影、Withdraw、阈值原子自动启动、交易列表和结果接口
       仍按 `prd-current-game-backend.md` 顺序实施。旧 Participant 在这些校验落库前
       只显示为 `PENDING`，不计入 `readyCount`。
+- [x] Current Game Join v2 已支持玩家提交 `cashAtomic` 与四种货物数量；
+      Arena 按冻结初始价校验总值严格等于 20 金并在 Join 时锁定。Current Game
+      使用 `manual` portfolio mode，开赛不再用 `balanced_auto` 覆盖玩家组合；
+      旧客户端省略组合时兼容为 20 金全现金。
 - [x] Connector Binding 创建时自动注册 owner-scoped `arena_agents` 与
       `arena_runtime_bindings`，迁移会回填既有 Binding；缺少 Arena 专用 capability
       时 route 保持 `provisioning`。
@@ -431,19 +435,24 @@ create game
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
       及独立权限。
-- [x] 增加独立数据库角色、无公网端口的 Settlement Worker；首发保持单个
-      PostgreSQL、单个 API 和每类 Worker
-      一个实例，不增加 Redis/Kafka/Kubernetes。
+- [x] 增加独立数据库角色、无公网端口的 Settlement Worker；生产配置保持单个
+      PostgreSQL、单个 API，Hosted Worker 以 4 副本 × 25 task slot 起步，
+      Settlement Worker 以 4 个执行 slot 驱动 4 个独立 EOA Facilitator shard，
+      不增加 Redis/Kafka/Kubernetes。
+- [x] Current Game 代码、数据库新 migration 与生产默认值已把硬上限从 12
+      提高到 100；历史 migration 保持不变。
 - [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
-- [ ] 现有 2C4G/70GB 生产机以 10 Hosted Agent × 5 回合为 MVP 必须通过，
-      12 Agent 为非阻塞容量验证；记录 P50/P95/P99、queue age、timeout、retry、
-      Token、每轮 wall time 和资源占用，16 Agent 推迟到扩容后。
-- [ ] 依据 5 并发、10/12 Agent wave 证据冻结统一 `action_timeout_ms`；首发单局
-      默认 10、上限 12、同一时间一局 active Game。
-- [ ] 2C4G MVP 明确采用 `result_received_at` FCFS，并披露两个 Decide wave 的
-      平台排队偏差；不把该部署称为 Tournament 公平性验证。
-- [ ] 冻结 `settlement_timeout_ms=600000`，在 10 Agent 受控场景验证 5 笔
-      accepted trade 按 2 + 2 + 1 wave 终态，并观察到 2 笔同时在途。
+- [ ] 重新做生产主机容量规划；旧 2C4G/70GB、10/12 Agent 验收只保留为回归基线，
+      不能用于证明 100 Agent 容量。按 10/12/25/50/100 Agent 记录 P50/P95/P99、
+      queue age、timeout、retry、Token、每轮 wall time 和资源占用。
+- [ ] 依据 4 × 25 Hosted task slot 的真实 Provider wave 证据冻结统一
+      `action_timeout_ms`；生产单局默认开赛阈值 10、硬上限 100，同一时间一局
+      active Game。
+- [ ] 100 Agent 场景继续采用 `result_received_at` FCFS，并披露 Provider
+      限流和 Worker wave 带来的平台排队偏差；未通过 launch-skew 验收前不把该
+      部署称为 Tournament 公平性验证。
+- [ ] 冻结 `settlement_timeout_ms=600000`，先回归 10/12 Agent，再在 100 Agent
+      最坏 50 笔 accepted trade 场景验证 4 shard 路由、在途并发、终态与恢复。
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；
       `submitted_unknown` 不算终态，超时仍无安全证据时 Game 进入
       `settlement_recovery_required`、停止排名并使 MVP 验收失败。
@@ -452,6 +461,9 @@ create game
 
 ### Phase 9：Post-MVP
 
+- 100 Agent 单局与 4 Facilitator shard 的生产配置基础已落地；容量、故障恢复和
+  live testnet 仍按 [`arena-scale-out-design.md`](arena-scale-out-design.md)
+  分阶段验收。300 active Agent、多局并发仍是 Post-MVP；
 - Native A2A Endpoint Adapter；
 - LangGraph/通用 Agent Studio；
 - 多 Runtime failover；

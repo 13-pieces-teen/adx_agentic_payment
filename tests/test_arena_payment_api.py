@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from arena_wallets.service import InjectiveWalletService
 from arena_payments.api import create_payment_account_router
 from arena_payments.models import WalletInventoryItem
 from arena_payments.repository import InMemoryPaymentRepository
@@ -37,12 +38,20 @@ def _app():
             )
         ]
     )
+    wallet_service = InjectiveWalletService(
+        "http://127.0.0.1:8545",
+        rpc_call=lambda method, params: {
+            "eth_chainId": "0x59f",
+            "eth_getBalance": "0x0",
+        }[method],
+    )
     app = FastAPI()
     app.include_router(connector.router)
     app.include_router(
         create_payment_account_router(
             auth=connector.auth,
             repository=payment_repository,
+            wallet_service=wallet_service,
         )
     )
     return (
@@ -105,6 +114,16 @@ def test_github_wallet_and_mandate_api() -> None:
     assert first.json() == second.json()
     assert first.json()["wallet"]["walletId"] == "wallet-1"
     assert "secret" not in str(first.json()).lower()
+
+    overview = client.get("/api/v1/me/wallet/overview")
+    assert overview.status_code == 200, overview.text
+    assert overview.json()["walletId"] == "wallet-1"
+    assert overview.json()["address"] == "0x" + "11" * 20
+    assert overview.json()["chainId"] == 1439
+    assert overview.json()["network"] == "injective-testnet"
+    assert overview.json()["native"] == {"symbol": "INJ", "balance": "0"}
+    assert overview.json()["tokens"] == []
+    assert "secret" not in str(overview.json()).lower()
 
     now = datetime.now(timezone.utc)
     created = client.post(

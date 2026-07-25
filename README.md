@@ -27,6 +27,13 @@ automatically opens each round, reveals its event, queues all Decide tasks,
 pairs four-good pools by database-clock FCFS, runs bounded negotiations,
 persists round portfolio snapshots, and freezes final prices and rankings.
 
+Production configuration now admits one Current Game with at most 100 Agents,
+runs four Hosted Worker replicas at 25 task slots each, and deterministically
+routes settlement intents across four independent Facilitator EOA shards.
+This is an implemented capacity foundation, not yet a live capacity claim:
+the verified local evidence remains 12 Agents, and 100-Agent Provider/testnet
+E2E plus four-shard failure recovery still require production acceptance.
+
 ```powershell
 docker compose -f docker-compose.local.yml up --build -d
 python scripts/run_full_pawnhouse_game_demo.py
@@ -173,6 +180,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | `docs/game-design.md` | 当前权威游戏机制与跨模块 I/O |
 | `docs/product.md` | 当前产品范围与验收边界 |
 | `docs/roadmap.md` | 跨模块实施状态和顺序 |
+| `docs/arena-scale-out-design.md` | Post-MVP 数百 Agent、多局与多 Facilitator 扩容设计 |
 | `docs/archive/` | 已过时文档，仅供历史参考 |
 
 ## 本地运行平台 Agent
@@ -272,6 +280,7 @@ Settlement 的环境、命令、链上部署信息和验证证据见：
 - 游戏机制：[`docs/game-design.md`](docs/game-design.md)
 - 产品范围：[`docs/product.md`](docs/product.md)
 - 实施路线：[`docs/roadmap.md`](docs/roadmap.md)
+- 扩容设计：[`docs/arena-scale-out-design.md`](docs/arena-scale-out-design.md)
 - Agent 入场：[`docs/agent-onboarding.md`](docs/agent-onboarding.md)
 - Hosted Agent 规格：[`docs/hosted-arena-agent-spec.md`](docs/hosted-arena-agent-spec.md)
 - Hosted Agent 实施计划：[`docs/hosted-arena-agent-implementation-plan.md`](docs/hosted-arena-agent-implementation-plan.md)

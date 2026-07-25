@@ -7,6 +7,7 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 
 require_command docker
 require_command stat
+require_command awk
 require_env_file
 
 tls_mode="$(env_value ADX_TLS_MODE)"
@@ -15,6 +16,8 @@ build_connector_artifacts="$(env_value ADX_BUILD_CONNECTOR_ARTIFACTS)"
 [ -n "${build_connector_artifacts}" ] || build_connector_artifacts=true
 enable_hosted_runtime="$(env_value ADX_ENABLE_HOSTED_RUNTIME)"
 [ -n "${enable_hosted_runtime}" ] || enable_hosted_runtime=false
+hosted_worker_replicas="$(env_value ADX_HOSTED_WORKER_REPLICAS)"
+[ -n "${hosted_worker_replicas}" ] || hosted_worker_replicas=4
 hosted_agents_enabled="$(env_value ADX_HOSTED_AGENTS_ENABLED)"
 [ -n "${hosted_agents_enabled}" ] || hosted_agents_enabled=false
 hosted_secret_backend="$(env_value ADX_HOSTED_SECRET_BACKEND)"
@@ -37,6 +40,17 @@ case "${enable_hosted_runtime}" in
     exit 1
     ;;
 esac
+case "${hosted_worker_replicas}" in
+  *[!0-9]*|"")
+    echo "ADX_HOSTED_WORKER_REPLICAS must be an integer." >&2
+    exit 1
+    ;;
+esac
+if [ "${hosted_worker_replicas}" -lt 1 ] || \
+   [ "${hosted_worker_replicas}" -gt 16 ]; then
+  echo "ADX_HOSTED_WORKER_REPLICAS must be between 1 and 16." >&2
+  exit 1
+fi
 case "${enable_arena_worker}" in
   true|false) ;;
   *)
@@ -125,6 +139,60 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
     echo "Facilitator CSV must have no group/world permissions." >&2
     exit 1
   fi
+  facilitator_tokens="|"
+  facilitator_wallet_indices="|"
+  facilitator_index=1
+  while [ "${facilitator_index}" -le 4 ]; do
+    facilitator_token="$(
+      env_value "ADX_X402_FACILITATOR_${facilitator_index}_BEARER_TOKEN"
+    )"
+    facilitator_authorization="$(
+      env_value "ADX_X402_FACILITATOR_${facilitator_index}_AUTHORIZATION"
+    )"
+    facilitator_wallet_index="$(
+      env_value "ADX_FACILITATOR_${facilitator_index}_WALLET_INDEX"
+    )"
+    if [ "${#facilitator_token}" -lt 32 ]; then
+      echo "Each Facilitator bearer token must have at least 32 characters." >&2
+      exit 1
+    fi
+    if [ "${facilitator_authorization}" != "Bearer ${facilitator_token}" ]; then
+      echo "Each Facilitator authorization must match its bearer token." >&2
+      exit 1
+    fi
+    case "${facilitator_tokens}" in
+      *"|${facilitator_token}|"*)
+        echo "Facilitator bearer tokens must be unique." >&2
+        exit 1
+        ;;
+    esac
+    facilitator_tokens="${facilitator_tokens}${facilitator_token}|"
+    case "${facilitator_wallet_index}" in
+      ""|*[!0-9]*)
+        echo "Facilitator wallet indices must be positive integers." >&2
+        exit 1
+        ;;
+    esac
+    if [ "${facilitator_wallet_index}" -lt 1 ]; then
+      echo "Facilitator wallet indices must be positive integers." >&2
+      exit 1
+    fi
+    case "${facilitator_wallet_indices}" in
+      *"|${facilitator_wallet_index}|"*)
+        echo "Facilitator wallet indices must be unique." >&2
+        exit 1
+        ;;
+    esac
+    facilitator_wallet_indices="${facilitator_wallet_indices}${facilitator_wallet_index}|"
+    if ! awk -F, -v target="${facilitator_wallet_index}" '
+      NR > 1 && $1 == target { count += 1 }
+      END { exit count == 1 ? 0 : 1 }
+    ' "${facilitator_csv}"; then
+      echo "Facilitator CSV must contain exactly one row for wallet index ${facilitator_wallet_index}." >&2
+      exit 1
+    fi
+    facilitator_index=$((facilitator_index + 1))
+  done
 fi
 
 if [ "${enable_hosted_runtime}" = "true" ]; then
@@ -219,13 +287,15 @@ if [ "${enable_testnet_signer}" = "true" ]; then
   compose --profile testnet-signer build --pull wallet-signer
 fi
 if [ "${enable_testnet_facilitator}" = "true" ]; then
-  compose --profile testnet-facilitator build --pull arena-facilitator
+  compose --profile testnet-facilitator build --pull \
+    arena-facilitator-1 arena-facilitator-2 \
+    arena-facilitator-3 arena-facilitator-4
 fi
 compose up -d postgres
 compose run --rm migrate
 compose up -d api caddy
 if [ "${enable_hosted_runtime}" = "true" ]; then
-  compose --profile hosted up -d hosted-worker credential-controller
+  compose --profile hosted up -d --scale hosted-worker="${hosted_worker_replicas}" hosted-worker credential-controller
 fi
 if [ "${enable_arena_worker}" = "true" ]; then
   compose --profile arena up -d arena-worker
@@ -234,7 +304,7 @@ if [ "${enable_testnet_signer}" = "true" ]; then
   compose --profile testnet-signer up -d wallet-signer
 fi
 if [ "${enable_testnet_facilitator}" = "true" ]; then
-  compose --profile testnet-facilitator up -d arena-facilitator
+  compose --profile testnet-facilitator up -d arena-facilitator-1 arena-facilitator-2 arena-facilitator-3 arena-facilitator-4
 fi
 if [ "${enable_settlement_worker}" = "true" ]; then
   compose --profile settlement up -d settlement-worker
