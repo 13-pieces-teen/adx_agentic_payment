@@ -14,6 +14,9 @@ HOSTED_SQL_PATH = (
 SETTLEMENT_SQL_PATH = (
     ROOT / "db" / "migrations" / "009_arena_settlement_commit.sql"
 )
+SETTLEMENT_APPROVAL_SQL_PATH = (
+    ROOT / "db" / "migrations" / "010_arena_settlement_approval.sql"
+)
 
 
 def test_world_migration_defines_clean_arena402_authorities() -> None:
@@ -105,3 +108,14 @@ def test_settlement_migration_separates_chain_confirmation_from_inventory() -> N
     assert "CHECK (buyer_holding_after = buyer_holding_before + 1)" in sql
     assert "CHECK (seller_holding_after = seller_holding_before - 1)" in sql
     assert "GRANT SELECT ON ALL TABLES IN SCHEMA arena402 TO adx_arena_api" in sql
+
+
+def test_settlement_approval_is_durable_and_precedes_submission() -> None:
+    sql = SETTLEMENT_APPROVAL_SQL_PATH.read_text(encoding="utf-8")
+    assert "CREATE TABLE arena402.settlement_approvals" in sql
+    assert "approved_intent_hash TEXT NOT NULL" in sql
+    assert "authorization_nonce_digest TEXT NOT NULL UNIQUE" in sql
+    assert "'operator_cli'" in sql
+    assert "'legacy_migration'" in sql
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE" in sql
+    assert "TO adx_arena_core" in sql

@@ -33,6 +33,10 @@ future integration.
 
 - loads the intent from Arena and checks chain, token, decimals, payer, payee,
   and amount against `deployments.json`;
+- requires the operator to pass the exact frozen `intentHash`, then persists
+  that approval and a nonce digest in Arena before any broadcast;
+- derives the EIP-3009 nonce deterministically from `intentHash`, so restarting
+  the bridge cannot create a second authorization for the same intent;
 - signs only inside the local settlement process;
 - verifies the authorization locally and through Facilitator `/verify`;
 - requires `--confirm-testnet-transfer` before calling Facilitator `/settle`;
@@ -48,13 +52,59 @@ Example, after an accepted Arena deal has frozen an intent:
 
 ```powershell
 $env:ARENA_API_URL="http://127.0.0.1:8000"
-$env:ARENA_SETTLEMENT_DEV_TOKEN="<local dev token>"
+$env:ARENA_DEV_TOKEN="<local dev token>"
 $env:FACILITATOR_URL="http://127.0.0.1:4021"
-npm run arena:settle -- --intent-id "<intent id>" --confirm-testnet-transfer
+npm run arena:settle -- `
+  --game-id "<game id>" `
+  --intent-id "<intent id>" `
+  --approved-intent-hash "sha256:<reviewed hash>" `
+  --confirm-testnet-transfer
 ```
 
 This command is state-changing on Injective testnet. Run it only after a human
-has checked the exact intent and explicitly approved that transfer.
+has checked every public field of the exact intent and copied its `intentHash`
+into `--approved-intent-hash`.
+
+If the bridge exits after Facilitator broadcast but before Arena records the
+transaction hash, do not create a new authorization. The deterministic nonce
+prevents a second payment. Recover the public hash from Facilitator output or
+Blockscout and resume the same approved intent without broadcasting:
+
+```powershell
+npm run arena:settle -- `
+  --game-id "<game id>" `
+  --intent-id "<intent id>" `
+  --approved-intent-hash "sha256:<same reviewed hash>" `
+  --record-existing-tx-hash "0x<public transaction hash>" `
+  --confirm-testnet-transfer
+```
+
+## Restart crash drill
+
+The local Compose file provides an opt-in, non-signing Arena Worker. Produce a
+submitted state and sanitized evidence, restart that Worker, and verify that
+the same transaction produces one stable inventory commit:
+
+```powershell
+docker compose -f docker-compose.local.yml --profile arena up -d arena-worker
+
+npm run arena:submit-only -- `
+  --game-id "<game id>" `
+  --intent-id "<intent id>" `
+  --approved-intent-hash "sha256:<reviewed hash>" `
+  --confirm-testnet-transfer `
+  --evidence-out ".\restart-submission.json"
+
+docker compose -f docker-compose.local.yml --profile arena restart arena-worker
+
+npm run arena:verify-restart -- `
+  --game-id "<game id>" `
+  --before-evidence ".\restart-submission.json"
+```
+
+The evidence file contains only the Intent/hash/status, public transaction
+hash, Blockscout URL, and timestamp. It never contains the raw nonce,
+authorization signature, or wallet private key.
 
 ## Produce an authorization
 

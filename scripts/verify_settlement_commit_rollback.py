@@ -67,10 +67,30 @@ async def _main(args: argparse.Namespace) -> int:
             pool=_SingleConnectionPool(connection),
         )
         tx_hash = "0x" + "ab" * 32
+        intent_hash = await connection.fetchval(
+            """
+            SELECT intent_hash
+            FROM arena402.settlement_intents
+            WHERE settlement_intent_id = $1
+            """,
+            args.intent_id,
+        )
+        if not isinstance(intent_hash, str):
+            raise RuntimeError("settlement intent not found")
+        authorization_nonce = (
+            "0x" + intent_hash.removeprefix("sha256:")
+        )
+        await repository.record_settlement_approval(
+            settlement_intent_id=args.intent_id,
+            approved_intent_hash=intent_hash,
+            authorization_nonce=authorization_nonce,
+            approval_source="operator_cli",
+        )
         await repository.record_settlement_submission(
             settlement_intent_id=args.intent_id,
             tx_hash=tx_hash,
-            authorization_nonce="0x" + "cd" * 32,
+            authorization_nonce=authorization_nonce,
+            approved_intent_hash=intent_hash,
             submission_source="wallet",
         )
         intent, _ = await repository.settlement_confirmation_target(

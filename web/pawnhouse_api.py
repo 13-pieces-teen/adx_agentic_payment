@@ -125,9 +125,38 @@ class SettlementAccountBody(_Body):
 class RecordSettlementSubmissionBody(_Body):
     tx_hash: str = Field(alias="txHash")
     authorization_nonce: str = Field(alias="authorizationNonce")
+    approved_intent_hash: Annotated[
+        str,
+        StringConstraints(
+            min_length=71,
+            max_length=71,
+            pattern=r"^sha256:[0-9a-f]{64}$",
+        ),
+    ] = Field(alias="approvedIntentHash")
     submission_source: Literal["wallet", "sandbox_guest"] = Field(
         alias="submissionSource",
     )
+    human_confirmed: bool = Field(alias="humanConfirmed")
+
+
+class RecordSettlementApprovalBody(_Body):
+    approved_intent_hash: Annotated[
+        str,
+        StringConstraints(
+            min_length=71,
+            max_length=71,
+            pattern=r"^sha256:[0-9a-f]{64}$",
+        ),
+    ] = Field(alias="approvedIntentHash")
+    authorization_nonce: Annotated[
+        str,
+        StringConstraints(
+            min_length=66,
+            max_length=66,
+            pattern=r"^0x[0-9a-fA-F]{64}$",
+        ),
+    ] = Field(alias="authorizationNonce")
+    approval_source: Literal["operator_cli"] = Field(alias="approvalSource")
     human_confirmed: bool = Field(alias="humanConfirmed")
 
 
@@ -137,7 +166,11 @@ AddHostedParticipantBody.model_rebuild()
 
 def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
     code = str(exc)
-    status = 404 if code in {"game_not_found"} else 409
+    status = (
+        404
+        if code in {"game_not_found", "inventory_commit_not_found"}
+        else 409
+    )
     return HTTPException(status_code=status, detail={"code": code})
 
 
@@ -399,6 +432,50 @@ def create_pawnhouse_router(
             "schemaVersion": "arena402.settlement-intent-list.v1",
         }
 
+    @router.get(
+        "/api/v1/pawnhouse/settlement-intents/"
+        "{settlement_intent_id}/inventory-commit"
+    )
+    async def inventory_commit(
+        settlement_intent_id: _OpaqueId,
+    ) -> dict[str, object]:
+        try:
+            return await repository.inventory_commit_for_intent(
+                settlement_intent_id=settlement_intent_id
+            )
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+
+    @router.post(
+        "/api/dev/pawnhouse/settlement-intents/"
+        "{settlement_intent_id}/approval"
+    )
+    async def record_settlement_approval(
+        settlement_intent_id: _OpaqueId,
+        body: RecordSettlementApprovalBody,
+        x_arena_dev_token: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        authorize(x_arena_dev_token)
+        if body.human_confirmed is not True:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "human_confirmation_required"},
+            )
+        try:
+            return await repository.record_settlement_approval(
+                settlement_intent_id=settlement_intent_id,
+                approved_intent_hash=body.approved_intent_hash,
+                authorization_nonce=body.authorization_nonce,
+                approval_source=body.approval_source,
+            )
+        except (SettlementError, PawnhouseRepositoryError) as exc:
+            if isinstance(exc, PawnhouseRepositoryError):
+                raise _repository_error(exc) from None
+            raise HTTPException(
+                status_code=422,
+                detail={"code": str(exc)},
+            ) from None
+
     @router.post(
         "/api/dev/pawnhouse/settlement-intents/"
         "{settlement_intent_id}/submission"
@@ -419,6 +496,7 @@ def create_pawnhouse_router(
                 settlement_intent_id=settlement_intent_id,
                 tx_hash=body.tx_hash,
                 authorization_nonce=body.authorization_nonce,
+                approved_intent_hash=body.approved_intent_hash,
                 submission_source=body.submission_source,
             )
         except (SettlementError, PawnhouseRepositoryError) as exc:

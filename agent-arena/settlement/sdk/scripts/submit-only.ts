@@ -7,14 +7,18 @@
  * settle-arena-intent.ts; it only omits the recovery loop.
  */
 import "dotenv/config";
+import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAddress, type Hex } from "viem";
+import { type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  authorizationNonceForIntent,
   loadDeployments,
   signTransferAuthorization,
+  validateArenaSettlementIntent,
   verifyAuthorizationLocally,
+  type ArenaSettlementIntent,
   type PaymentAuthorization,
 } from "../src/index.ts";
 
@@ -23,11 +27,27 @@ process.loadEnvFile(resolve(__dirname, "../../.env"));
 
 const arenaUrl = (process.env.ARENA_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const facilitatorUrl = (process.env.FACILITATOR_URL ?? "http://127.0.0.1:4021").replace(/\/+$/, "");
-const gameId = process.env.ARENA_GAME_ID;
-const requestedIntentId = process.env.ARENA_SETTLEMENT_INTENT_ID;
+const gameId = argumentValue("--game-id") ?? process.env.ARENA_GAME_ID;
+const requestedIntentId =
+  argumentValue("--intent-id") ??
+  process.env.ARENA_SETTLEMENT_INTENT_ID;
 const devToken = process.env.ARENA_DEV_TOKEN;
 const buyerPrivateKey = process.env.BUYER_PRIVATE_KEY as Hex | undefined;
 const confirmed = process.argv.includes("--confirm-testnet-transfer");
+const approvedIntentHash =
+  argumentValue("--approved-intent-hash") ??
+  process.env.ARENA_APPROVED_INTENT_HASH;
+const evidenceOut = argumentValue("--evidence-out");
+
+function argumentValue(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${name} requires a value`);
+  }
+  return value;
+}
 
 function required(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is required`);
@@ -52,17 +72,42 @@ async function main(): Promise<void> {
   const dep = loadDeployments(resolve(__dirname, "../../deployments.json"));
 
   const list = await jsonRequest(`${arenaUrl}/api/v1/pawnhouse/games/${encodeURIComponent(game)}/settlement-intents`);
-  const candidates = (list.settlementIntents ?? []).filter((v: any) => v && typeof v === "object");
+  const rawCandidates: unknown = list.settlementIntents;
+  const candidates = Array.isArray(rawCandidates)
+    ? rawCandidates.filter(
+        (value: unknown): value is ArenaSettlementIntent =>
+          typeof value === "object" && value !== null,
+      )
+    : [];
   const intent = requestedIntentId
-    ? candidates.find((v: any) => v.settlementIntentId === requestedIntentId)
+    ? candidates.find(
+        (value) => value.settlementIntentId === requestedIntentId,
+      )
     : candidates.length === 1 ? candidates[0] : undefined;
   if (!intent) throw new Error("select one intent with ARENA_SETTLEMENT_INTENT_ID");
-  if (intent.status !== "authorization_requested")
-    throw new Error(`intent not authorizable: ${intent.status}`);
-  if (getAddress(intent.buyerAccount) !== getAddress(buyer.address))
-    throw new Error("local buyer signer does not own the frozen payer");
+  const approvedHash = required(
+    approvedIntentHash,
+    "--approved-intent-hash or ARENA_APPROVED_INTENT_HASH",
+  );
+  validateArenaSettlementIntent({
+    intent,
+    buyerAddress: buyer.address,
+    deployments: dep,
+    approvedIntentHash: approvedHash,
+  });
+  const authorizationNonce = authorizationNonceForIntent(intent);
 
-  console.log(JSON.stringify({ step: "preflight", settlementIntentId: intent.settlementIntentId, amountAtomic: intent.amountAtomic, confirmed }, null, 2));
+  console.log(JSON.stringify({
+    step: "preflight",
+    settlementIntentId: intent.settlementIntentId,
+    intentHash: intent.intentHash,
+    chainId: intent.chainId,
+    tokenAddress: intent.tokenAddress,
+    buyerAccount: intent.buyerAccount,
+    sellerAccount: intent.sellerAccount,
+    amountAtomic: intent.amountAtomic,
+    confirmed,
+  }, null, 2));
   if (!confirmed) throw new Error("refusing chain submission without --confirm-testnet-transfer");
 
   const authorization = await signTransferAuthorization({
@@ -70,9 +115,24 @@ async function main(): Promise<void> {
     to: intent.sellerAccount,
     value: BigInt(intent.amountAtomic),
     dep,
+    nonce: authorizationNonce,
     nowSeconds: Math.floor(Date.now() / 1000),
   });
   if (!(await verifyAuthorizationLocally(authorization, dep))) throw new Error("local EIP-3009 verify failed");
+
+  await jsonRequest(
+    `${arenaUrl}/api/dev/pawnhouse/settlement-intents/${encodeURIComponent(intent.settlementIntentId)}/approval`,
+    {
+      method: "POST",
+      headers: arenaHeaders(),
+      body: JSON.stringify({
+        approvedIntentHash: approvedHash,
+        authorizationNonce: authorization.nonce,
+        approvalSource: "operator_cli",
+        humanConfirmed: true,
+      }),
+    },
+  );
 
   const verified = await jsonRequest(`${facilitatorUrl}/verify`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(authorization),
@@ -88,18 +148,38 @@ async function main(): Promise<void> {
 
   const submission = await jsonRequest(
     `${arenaUrl}/api/dev/pawnhouse/settlement-intents/${encodeURIComponent(intent.settlementIntentId)}/submission`,
-    { method: "POST", headers: arenaHeaders(), body: JSON.stringify({ txHash, authorizationNonce: authorization.nonce, submissionSource: "wallet", humanConfirmed: true }) },
+    {
+      method: "POST",
+      headers: arenaHeaders(),
+      body: JSON.stringify({
+        txHash,
+        authorizationNonce: authorization.nonce,
+        approvedIntentHash: approvedHash,
+        submissionSource: "wallet",
+        humanConfirmed: true,
+      }),
+    },
   );
 
-  console.log(JSON.stringify({
+  const publicEvidence = {
+    schemaVersion: "arena402.restart-drill-submission.v1",
     step: "submitted_and_stopped",
     settlementIntentId: intent.settlementIntentId,
+    intentHash: intent.intentHash,
     txHash,
     arenaStatusAfterSubmission: submission.status,
-    nonce: authorization.nonce,
     note: "recover-confirmation intentionally NOT called (simulating crash)",
     blockscout: `https://testnet.blockscout.injective.network/tx/${txHash}`,
-  }, null, 2));
+    recordedAt: new Date().toISOString(),
+  };
+  if (evidenceOut !== undefined) {
+    writeFileSync(
+      resolve(process.cwd(), evidenceOut),
+      `${JSON.stringify(publicEvidence, null, 2)}\n`,
+      { encoding: "utf8", flag: "wx" },
+    );
+  }
+  console.log(JSON.stringify(publicEvidence, null, 2));
 }
 
 main().catch((e) => { console.error(`submit-only failed: ${e instanceof Error ? e.message : e}`); process.exit(1); });

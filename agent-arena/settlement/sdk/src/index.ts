@@ -19,4 +19,19 @@ export {
   checkDomainMatchesChain,
   loadDeployments,
 } from "./x402.ts";
+export {
+  authorizationNonceForIntent,
+  validateArenaSettlementIntent,
+} from "./arena.ts";
+export type {
+  ArenaSettlementIntent,
+  ValidateArenaSettlementIntentParams,
+} from "./arena.ts";
+export { verifyRestartEvidence } from "./restart.ts";
+export type {
+  InventoryCommitReceipt,
+  RestartEvidence,
+  RestartVerificationSummary,
+  SettlementProjection,
+} from "./restart.ts";
 export type { PaymentAuthorization, Deployments, SettleResult } from "./types.ts";

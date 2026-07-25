@@ -122,6 +122,29 @@ services:
       timeout: 5s
       retries: 30
 
+  arena-worker:
+    <<: *api-image
+    profiles:
+      - arena
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "arena_game.production_worker"]
+    environment:
+      ADX_ARENA_CORE_DATABASE_URL: postgresql://adx_arena_core_login:arena402-local-core-password@postgres:5432/arena402
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:-https://k8s.testnet.json-rpc.injective.network/}
+      ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: ${ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL:-https://testnet.blockscout-api.injective.network/api/v2}
+      ADX_ARENA_WORKER_POLL_SECONDS: "0.25"
+      ADX_ARENA_FINALIZER_POLL_SECONDS: "1"
+      ADX_SETTLEMENT_RECOVERY_POLL_SECONDS: "3"
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
   web:
     build:
       context: .

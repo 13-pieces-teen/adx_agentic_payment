@@ -4,6 +4,10 @@ from dataclasses import replace
 
 import pytest
 
+from arena_game.postgres import (
+    PawnhouseRepositoryError,
+    PostgresPawnhouseRepository,
+)
 from arena_game.settlement import (
     ChainConfirmation,
     SettlementConfig,
@@ -117,3 +121,70 @@ def test_valid_confirmation_is_accepted_without_private_material() -> None:
     assert snapshot["confirmationCount"] == 2
     assert "signature" not in snapshot
     assert "privateKey" not in snapshot
+
+
+def _intent_row(
+    intent: SettlementIntent,
+    *,
+    snapshot: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "settlement_intent_id": intent.settlement_intent_id,
+        "game_id": intent.game_id,
+        "round_id": intent.round_id,
+        "pairing_id": intent.pairing_id,
+        "negotiation_id": intent.negotiation_id,
+        "buyer_participant_id": intent.buyer_participant_id,
+        "seller_participant_id": intent.seller_participant_id,
+        "buyer_agent_id": intent.buyer_agent_id,
+        "seller_agent_id": intent.seller_agent_id,
+        "buyer_account": intent.buyer_account,
+        "seller_account": intent.seller_account,
+        "good_id": intent.good,
+        "quantity": intent.quantity,
+        "unit_price_atomic": intent.unit_price_atomic,
+        "amount_atomic": intent.amount_atomic,
+        "chain_id": intent.chain_id,
+        "token_address": intent.token_address,
+        "token_symbol": intent.token_symbol,
+        "token_decimals": intent.token_decimals,
+        "required_confirmations": intent.required_confirmations,
+        "authorization_mode": intent.authorization_mode,
+        "idempotency_key": intent.idempotency_key,
+        "intent_hash": intent.intent_hash,
+        "intent_snapshot": snapshot or intent.to_snapshot(),
+        "approval_source": "operator_cli",
+        "status": "authorization_requested",
+        "safe_error_code": None,
+        "tx_hash": None,
+        "submission_source": None,
+        "block_number": None,
+        "block_hash": None,
+        "confirmation_count": None,
+        "created_at": "2026-07-25T00:00:00+00:00",
+    }
+
+
+def test_public_intent_projection_exposes_verified_hash_and_approval() -> None:
+    intent = _intent()
+    projection = PostgresPawnhouseRepository._settlement_public(
+        _intent_row(intent)
+    )
+
+    assert projection["intentHash"] == intent.intent_hash
+    assert projection["approvalRecorded"] is True
+    assert projection["approvalSource"] == "operator_cli"
+
+
+def test_public_intent_projection_rejects_tampered_snapshot() -> None:
+    intent = _intent()
+    tampered = intent.to_snapshot()
+    tampered["amountAtomic"] = "1"
+
+    with pytest.raises(
+        PawnhouseRepositoryError,
+        match="settlement_intent_snapshot_integrity_failure",
+    ):
+        PostgresPawnhouseRepository._settlement_public(
+            _intent_row(intent, snapshot=tampered)
+        )

@@ -37,10 +37,12 @@ python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
 
 This freezes one public `SettlementIntent` at
 `authorization_requested`. The local settlement bridge can sign and submit
-that exact intent, but refuses to broadcast unless the operator supplies the
-explicit `--confirm-testnet-transfer` flag. Wallet private keys remain in the
-local settlement process and never enter Arena, PostgreSQL, logs, or API
-responses.
+that exact intent, but refuses to broadcast unless the operator supplies its
+reviewed `intentHash` and the explicit `--confirm-testnet-transfer` flag.
+Arena records the approval before broadcast and the bridge derives one
+deterministic nonce per Intent, so a restart cannot create a replacement
+payment. Wallet private keys remain in the local settlement process and never
+enter Arena, PostgreSQL, logs, or API responses.
 
 **Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
 真实结算的回合制交易竞技游戏。**

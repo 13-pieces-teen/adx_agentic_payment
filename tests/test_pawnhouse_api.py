@@ -10,6 +10,7 @@ class _Repository:
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
         self.participants: list[dict[str, object]] = []
+        self.approvals: list[dict[str, object]] = []
         self.submissions: list[dict[str, object]] = []
 
     async def create_game(self, **values):
@@ -92,6 +93,26 @@ class _Repository:
             "settlementIntentId": values["settlement_intent_id"],
             "status": "submitted",
             "txHash": values["tx_hash"],
+        }
+
+    async def record_settlement_approval(self, **values):
+        self.approvals.append(values)
+        return {
+            "settlementIntentId": values["settlement_intent_id"],
+            "status": "authorization_requested",
+            "intentHash": values["approved_intent_hash"],
+            "approvalRecorded": True,
+        }
+
+    async def inventory_commit_for_intent(self, *, settlement_intent_id):
+        return {
+            "settlementIntentId": settlement_intent_id,
+            "status": "inventory_committed",
+            "inventoryCommitId": f"inventory-commit:{settlement_intent_id}",
+            "buyerHoldingBefore": 0,
+            "buyerHoldingAfter": 1,
+            "sellerHoldingBefore": 1,
+            "sellerHoldingAfter": 0,
         }
 
 
@@ -251,6 +272,7 @@ def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -
     body = {
         "txHash": "0x" + "44" * 32,
         "authorizationNonce": "0x" + "55" * 32,
+        "approvedIntentHash": "sha256:" + "66" * 32,
         "submissionSource": "wallet",
         "humanConfirmed": False,
     }
@@ -273,6 +295,51 @@ def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -
     assert accepted.json()["status"] == "submitted"
     assert body["authorizationNonce"] not in accepted.text
     assert len(repository.submissions) == 1
+    assert repository.submissions[0]["approved_intent_hash"] == (
+        "sha256:" + "66" * 32
+    )
+
+
+def test_settlement_approval_is_recorded_before_broadcast_and_bound_to_hash() -> None:
+    client, repository = _client()
+    intent_id = "settlement:neg:1"
+    intent_hash = "sha256:" + "44" * 32
+    path = (
+        f"/api/dev/pawnhouse/settlement-intents/{intent_id}/approval"
+    )
+    body = {
+        "approvedIntentHash": intent_hash,
+        "authorizationNonce": "0x" + "44" * 32,
+        "approvalSource": "operator_cli",
+        "humanConfirmed": False,
+    }
+
+    denied = client.post(
+        path,
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json=body,
+    )
+    assert denied.status_code == 422
+    assert denied.json()["detail"]["code"] == "human_confirmation_required"
+    assert repository.approvals == []
+
+    body["humanConfirmed"] = True
+    approved = client.post(
+        path,
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json=body,
+    )
+    assert approved.status_code == 200
+    assert approved.json()["approvalRecorded"] is True
+    assert body["authorizationNonce"] not in approved.text
+    assert repository.approvals == [
+        {
+            "settlement_intent_id": intent_id,
+            "approved_intent_hash": intent_hash,
+            "authorization_nonce": "0x" + "44" * 32,
+            "approval_source": "operator_cli",
+        }
+    ]
 
 
 def test_settlement_intent_projection_is_public_and_read_only() -> None:
@@ -285,4 +352,18 @@ def test_settlement_intent_projection_is_public_and_read_only() -> None:
     assert (
         response.json()["settlementIntents"][0]["status"]
         == "authorization_requested"
+    )
+
+
+def test_inventory_commit_receipt_is_public_and_stable() -> None:
+    client, _ = _client()
+    intent_id = "settlement:neg:1"
+    response = client.get(
+        f"/api/v1/pawnhouse/settlement-intents/{intent_id}/inventory-commit"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "inventory_committed"
+    assert response.json()["inventoryCommitId"] == (
+        f"inventory-commit:{intent_id}"
     )
