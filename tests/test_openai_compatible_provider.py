@@ -95,6 +95,9 @@ def test_deepseek_adapter_sends_fixed_endpoint_and_discards_reasoning() -> None:
     assert isinstance(body, dict)
     assert body["thinking"] == {"type": "enabled"}
     assert body["response_format"] == {"type": "json_object"}
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    assert '"type":"object"' in messages[0]["content"]
 
 
 @pytest.mark.parametrize(

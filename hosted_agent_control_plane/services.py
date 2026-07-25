@@ -42,6 +42,7 @@ from .models import (
     HostedAgentDetail,
     HostedAgentRecord,
     HostedAgentSummary,
+    HostedAgentUpdateRequest,
     HostedProvisioningStatus,
     HostedReadinessProjection,
     ReservationDisposition,
@@ -58,6 +59,7 @@ ControlPlaneErrorCode: TypeAlias = Literal[
     "credential_not_usable",
     "credential_write_recovery_required",
     "agent_not_found",
+    "agent_not_ready",
     "hosted_agents_disabled",
     "idempotency_conflict",
     "invalid_display_name",
@@ -89,6 +91,7 @@ _PERSISTED_IDENTIFIER_PATTERN: Final[re.Pattern[str]] = re.compile(
 _CONTROL_PLANE_ERROR_CODES: Final[frozenset[str]] = frozenset(
     {
         "agent_not_found",
+        "agent_not_ready",
         "credential_ingress_unavailable",
         "credential_not_found",
         "credential_not_usable",
@@ -219,6 +222,8 @@ def _agent_detail(record: HostedAgentRecord) -> HostedAgentDetail:
 
 def _map_repository_error(exc: ControlRepositoryError) -> HostedControlPlaneError:
     mapping: dict[str, ControlPlaneErrorCode] = {
+        "agent_not_found": "agent_not_found",
+        "agent_not_ready": "agent_not_ready",
         "credential_not_found": "credential_not_found",
         "credential_not_usable": "credential_not_usable",
         "idempotency_conflict": "idempotency_conflict",
@@ -797,6 +802,157 @@ class HostedAgentService:
             # Cross-owner access and absence intentionally share one error.
             raise HostedControlPlaneError("agent_not_found")
         return _agent_detail(record)
+
+    async def update_hosted_agent(
+        self,
+        *,
+        owner_user_id: str,
+        agent_id: str,
+        request: HostedAgentUpdateRequest,
+    ) -> HostedAgentDetail:
+        if not self._hosted_agents_enabled:
+            raise HostedControlPlaneError("hosted_agents_disabled")
+        owner = _safe_owner_id(owner_user_id)
+        safe_agent_id = _safe_persisted_identifier(
+            agent_id,
+            error_code="invalid_identifier",
+        )
+        if not isinstance(request, HostedAgentUpdateRequest):
+            raise TypeError("request must be HostedAgentUpdateRequest")
+        provider_id = _safe_persisted_identifier(
+            request.provider_id,
+            error_code="invalid_identifier",
+        )
+        model_id = _safe_persisted_identifier(
+            request.model_id,
+            error_code="invalid_identifier",
+        )
+        strategy = _safe_strategy(request.strategy_instructions)
+        idempotency_key = _safe_persisted_identifier(
+            request.idempotency_key,
+            error_code="invalid_idempotency_key",
+        )
+        idempotency_key_digest = sha256_text_identifier(idempotency_key)
+        request_hash = sha256_identifier(
+            request.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude={"idempotency_key"},
+            )
+        )
+        try:
+            replay = await self._repository.get_hosted_agent_update_replay(
+                owner_user_id=owner,
+                idempotency_key_digest=idempotency_key_digest,
+                request_hash=request_hash,
+            )
+        except ControlRepositoryError as exc:
+            raise _map_repository_error(exc) from None
+        except Exception:
+            raise _repository_unavailable() from None
+        if replay is not None:
+            return _agent_detail(replay)
+        try:
+            current = await self._repository.get_hosted_agent_for_owner(
+                owner_user_id=owner,
+                agent_id=safe_agent_id,
+            )
+        except Exception:
+            raise _repository_unavailable() from None
+        if current is None:
+            raise HostedControlPlaneError("agent_not_found")
+        if current.provider_id != provider_id:
+            raise HostedControlPlaneError("provider_mismatch")
+        try:
+            credential = await self._repository.get_credential_for_owner(
+                owner_user_id=owner,
+                credential_id=current.credential_id,
+            )
+        except Exception:
+            raise _repository_unavailable() from None
+        if credential is None:
+            raise HostedControlPlaneError("credential_not_found")
+        if credential.status is not CredentialStatus.VALID:
+            raise HostedControlPlaneError("credential_not_usable")
+
+        public_capability = next(
+            (
+                capability
+                for capability in self._capabilities.list_public()
+                if (
+                    capability.provider_id == provider_id
+                    and capability.model_id == model_id
+                )
+            ),
+            None,
+        )
+        if public_capability is None:
+            raise HostedControlPlaneError("model_not_available")
+        try:
+            capability = self._capabilities.resolve(
+                provider_id=provider_id,
+                model_id=model_id,
+                thinking_enabled=request.thinking_enabled,
+                remaining_timeout_ms=_CAPABILITY_RESOLUTION_BUDGET_MS,
+                requested_max_output_tokens=min(
+                    _MAX_HOSTED_OUTPUT_TOKENS,
+                    public_capability.max_output_tokens,
+                ),
+            )
+        except CapabilityError as exc:
+            raise _map_capability_error(exc) from None
+        now = self._clock()
+        config_source = {
+            "credential_id": current.credential_id,
+            "provider": capability.provider_id,
+            "model": capability.model_id,
+            "thinking_enabled": capability.thinking_enabled,
+            "strategy_instructions": strategy,
+            "prompt_version": PROMPT_VERSION_V1,
+            "task_schema_version": AGENT_TASK_SCHEMA_VERSION_V1,
+            "action_schema_version": OUTPUT_VERSION_V1,
+            "capability_version": self._capabilities.registry_version,
+            "adapter_version": capability.adapter_version,
+            "max_input_bytes": _MAX_INPUT_BYTES,
+            "max_context_items": _MAX_CONTEXT_ITEMS,
+            "max_output_tokens": capability.max_output_tokens,
+        }
+        candidate = current.model_copy(
+            update={
+                "provider_id": capability.provider_id,
+                "model_id": capability.model_id,
+                "thinking_enabled": capability.thinking_enabled,
+                "strategy_instructions": strategy,
+                "prompt_version": PROMPT_VERSION_V1,
+                "task_schema_version": AGENT_TASK_SCHEMA_VERSION_V1,
+                "action_schema_version": OUTPUT_VERSION_V1,
+                "capability_version": self._capabilities.registry_version,
+                "adapter_version": capability.adapter_version,
+                "max_input_bytes": _MAX_INPUT_BYTES,
+                "max_context_items": _MAX_CONTEXT_ITEMS,
+                "max_output_tokens": capability.max_output_tokens,
+                "config_hash": sha256_identifier(config_source),
+                "provisioning_status": HostedProvisioningStatus.PROVISIONING,
+                "route_status": HostedProvisioningStatus.PROVISIONING,
+                "validation_job_id": _safe_persisted_identifier(
+                    self._id_factory("cval"),
+                    error_code="invalid_identifier",
+                ),
+                "updated_at": now,
+            }
+        )
+        try:
+            updated = await self._repository.update_hosted_agent(
+                agent=candidate,
+                expected_config_hash=current.config_hash,
+                idempotency_key_digest=idempotency_key_digest,
+                request_hash=request_hash,
+            )
+        except ControlRepositoryError as exc:
+            raise _map_repository_error(exc) from None
+        except Exception:
+            raise _repository_unavailable() from None
+        return _agent_detail(updated)
 
     async def list_hosted_agents(
         self,
