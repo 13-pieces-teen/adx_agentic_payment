@@ -20,5 +20,5 @@ exec python -m uvicorn "${app_module}" \
   --proxy-headers \
   --forwarded-allow-ips "${forwarded_allow_ips}" \
   --timeout-keep-alive 10 \
-  --limit-concurrency "${ADX_API_MAX_CONCURRENCY:-256}" \
+  --limit-concurrency "${ADX_API_MAX_CONCURRENCY:-64}" \
   --no-access-log

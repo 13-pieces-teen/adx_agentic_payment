@@ -220,6 +220,9 @@ create game
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
 - [ ] PaymentMandate 的额度、期限、范围、撤销和
       `reserve / consume / release` 尚未实现。
+- [ ] Hosted 上线目标要求 platform-managed testnet guest wallet、入局一次授权和
+      每笔 accepted trade 自动结算；当前逐笔人工确认 bridge 只用于开发验证，
+      不能作为上线支付路径。
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
 - [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
@@ -332,29 +335,60 @@ create game
 
 ### Phase 7：PaymentMandate 与 Settlement
 
-1. 冻结 Mandate 的 Game/network/token/payee、单笔/累计额度、期限、撤销和签名域。
-2. 实现并发 Deal 的 `reserve / consume / release`。
+- [ ] 为每个 Hosted Game Participant 创建独立 `sandbox_guest` testnet wallet；
+      数据库只保存地址和不透明 signer key 引用。
+- [ ] 用户加入 Game 时一次性创建受限 Mandate，不做逐笔人工确认。
+- [ ] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
+      状态；payee 只能是同局 Arena 配对出的 seller。
+- [ ] 实现并发 Intent 的 `reserve / consume / release`；锁定 Mandate、buyer cash
+      与 reservation rows，并以 `(round_id, buyer_participant_id)` 唯一约束关闭
+      同一 buyer 的并发占款。
 - [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；Mandate
       模式仍待实现。
-- [x] 本地桥接现有 SettlementSDK/Facilitator，并由 Arena Worker 只读恢复
-      submitted/unknown。
+- [ ] 增加无公网端口 Settlement Worker，自动 reserve、签名、提交并持久化 tx hash；
+      第一版直接复用 settlement library，不新增独立 HTTP Facilitator 服务。
+- [ ] funding 与 Settlement 共用数据库化 relay EOA nonce allocator；2 笔 Intent
+      可同时在途，但 nonce 分配/广播短暂串行，重启只以同一 nonce 恢复。
+- [x] 本地 bridge 已验证现有 SettlementSDK/Facilitator；它保留为开发验证工具，
+      不作为 Hosted 上线执行路径。
+- [x] Arena Worker 可只读恢复 submitted/unknown。
 - [x] 链上确认后幂等提交现金和货物。
-6. Hosted Worker 与 guest signer 的 IAM、数据库和密钥域完全分离。
+- [ ] 自动路径按同一 EIP-3009 authorization 恢复 unknown；冻结两个确认，
+      复核 receipt block hash、calldata 与 Transfer event 后才提交库存。
+- [ ] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
+      取消或退款路径。
+- [ ] Hosted Worker、Arena Worker 与 Settlement Worker 的 IAM、数据库和密钥域
+      完全分离。
 
 详细契约见
-[`arena-settlement-integration.md`](arena-settlement-integration.md)。
+[`arena-settlement-integration.md`](arena-settlement-integration.md)，上线部署和实现
+顺序见
+[`hosted-arena-production-runbook.md`](hosted-arena-production-runbook.md)。
 
 ### Phase 8：前端、部署、E2E 与校准（M3）
 
 - [x] Compose 过渡壳已有 Game Lobby、Game View、Result 与公开投影。
 - [ ] 外部前端完成对应页面、Vercel 部署及 API/CORS 端到端切换。
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
-- [x] 在单机 Compose 中加入三个无公网端口 Worker 与独立权限。
-3. 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
-4. 跑 2、4、8、16 Agent，记录 P50/P95/P99、queue age、timeout、retry、Token、
-   每轮 wall time 和资源占用。
-5. 依据证据冻结统一 `action_timeout_ms`、单局 Agent 上限和并发 Game 上限。
-6. 保存脱敏发布证据，并继续准确标注 testnet direct settlement 与 x402 边界。
+- [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
+      及独立权限。
+- [ ] 增加 Settlement Worker；首发保持单个 PostgreSQL、单个 API 和每类 Worker
+      一个实例，不增加 Redis/Kafka/Kubernetes。
+- [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
+- [ ] 现有 2C4G/70GB 生产机以 10 Hosted Agent × 5 回合为 MVP 必须通过，
+      12 Agent 为非阻塞容量验证；记录 P50/P95/P99、queue age、timeout、retry、
+      Token、每轮 wall time 和资源占用，16 Agent 推迟到扩容后。
+- [ ] 依据 5 并发、10/12 Agent wave 证据冻结统一 `action_timeout_ms`；首发单局
+      默认 10、上限 12、同一时间一局 active Game。
+- [ ] 2C4G MVP 明确采用 `result_received_at` FCFS，并披露两个 Decide wave 的
+      平台排队偏差；不把该部署称为 Tournament 公平性验证。
+- [ ] 冻结 `settlement_timeout_ms=600000`，在 10 Agent 受控场景验证 5 笔
+      accepted trade 按 2 + 2 + 1 wave 终态，并观察到 2 笔同时在途。
+- [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；
+      `submitted_unknown` 不算终态，超时仍无安全证据时 Game 进入
+      `settlement_recovery_required`、停止排名并使 MVP 验收失败。
+- [ ] accepted trade 无人工操作自动完成 reserve、签名、提交、确认和库存提交。
+- [ ] 保存脱敏发布证据，并继续准确标注 testnet direct settlement 与 x402 边界。
 
 ### Phase 9：Post-MVP
 

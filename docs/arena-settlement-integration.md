@@ -55,6 +55,43 @@ The following remain outside the implemented foundation:
 > 为准。Hosted/Local Runtime 的上游 Task 契约见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。
 
+## Approved Hosted launch target
+
+The per-Intent human confirmation bridge remains a development verifier, not
+the Hosted production payment path. The approved testnet launch target is:
+
+- each Hosted Game Participant receives an isolated platform-managed
+  `sandbox_guest` wallet;
+- joining the Game once confirms a bounded Game-scoped PaymentMandate;
+- every accepted trade is reserved, signed, submitted, confirmed, and committed
+  automatically without a per-trade user action;
+- a dedicated non-public Settlement Worker owns Mandate mutation, guest signing,
+  and EIP-3009 submission;
+- the Hosted Worker has no signer, Mandate, settlement, or wallet access;
+- the Arena Worker remains non-signing and owns read-only confirmation plus the
+  idempotent inventory commit;
+- reservation is serialized by Mandate and buyer balance locks plus a unique
+  buyer-per-Round constraint; mandate usage is derived from reservation rows
+  rather than duplicated aggregate counters;
+- an unknown submission is recovered or resent only with the same deterministic
+  EIP-3009 authorization, and inventory waits for two confirmations plus exact
+  calldata and `Transfer` event verification;
+- the MVP freezes a 420-second authorization validity inside a 600-second
+  settlement deadline; unknown is not terminal, and unresolved safe recovery
+  moves the Game to `settlement_recovery_required` without ranking;
+- wallet funding and Settlement share one database-backed relay EOA nonce
+  allocator; preparation and confirmation may be concurrent while nonce
+  allocation and broadcast are briefly serialized;
+- the 2 vCPU / 4 GB / 70 GB MVP target is one active Game with 10 Hosted Agents,
+  a hard cap of 12, bounded Worker waves, and platform testnet wallets only.
+
+This target deliberately does not add a user-wallet unattended-signing path,
+standard HTTP x402, escrow, Redis, Kafka, or multi-Game scheduling. The
+implementation and deployment sequence is maintained in
+[`hosted-arena-production-runbook.md`](hosted-arena-production-runbook.md).
+Until that plan passes its live acceptance, the implementation status below
+remains authoritative.
+
 ## 当前能力与目标能力
 
 当前已实现：

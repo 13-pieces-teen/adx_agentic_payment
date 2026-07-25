@@ -194,8 +194,9 @@ docker compose -f docker-compose.local.yml down -v
 
 这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
 持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
-可继续冻结 SettlementIntent。新鲜 Injective testnet 支付仍需要单独的人类确认；
-通用 PaymentMandate 尚未完成。
+可继续冻结 SettlementIntent。当前开发 bridge 的新鲜 Injective testnet 支付仍需要
+逐笔人类确认；上线目标改为用户 Join 时一次确认 PaymentMandate，此后 accepted trade
+由隔离的 guest signer 自动完成。该自动路径尚未实现。
 
 ## 快速检查现有模块
 
@@ -235,7 +236,9 @@ Settlement 的环境、命令、链上部署信息和验证证据见：
 - [`agent-arena/README.md`](agent-arena/README.md)
 - [`agent-arena/settlement/README.md`](agent-arena/settlement/README.md)
 
-涉及 testnet 状态变更前仍需人工确认，禁止提交私钥、助记词或真实支付凭据。
+直接使用 CLI、脚本或开发 bridge 发起 testnet 状态变更前仍需人工确认。Hosted
+上线自动路径以用户 Join 时确认的受限 PaymentMandate 作为授权，不能增加逐笔确认。
+禁止提交私钥、助记词或真实支付凭据。
 
 ## 当前文档
 

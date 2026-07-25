@@ -74,6 +74,9 @@ standard x402 HTTP flow or a complete unattended payment authority.
 
 - Use testnet only.
 - Never commit `.env`, private keys, seed phrases, API keys, or real credentials.
-- Require human confirmation before any state-changing transaction.
+- Require human confirmation before direct CLI/script/development-bridge
+  transactions. The Hosted launch path instead requires one explicit
+  Game-scoped PaymentMandate at Join and then performs accepted testnet trades
+  automatically within that mandate.
 - Treat `deployments.json` as public metadata and keep signing material outside
   the repository.

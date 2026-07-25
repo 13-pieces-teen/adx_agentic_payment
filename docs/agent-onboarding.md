@@ -104,7 +104,7 @@ view、Game Agent 配置、绝对 `deadlineAt` 和 hash。两种 Task kind 为�
   `action="propose" | "accept" | "reject"`。
 
 所有 Runtime 使用同一 Game 的 `action_timeout_ms`；具体默认值由真实
-Provider/Model/thinking 与 2/4/8/16 Agent 负载的 P95/P99 加缓冲校准，而不是在
+Provider/Model/thinking 与 2/5/10/12 Agent 负载的 P95/P99 加缓冲校准，而不是在
 Adapter 中写死。每个 AgentTask 最多两个 Provider/Runtime Attempt，只在错误可重试
 且剩余时间足够时重试，不自动切换 Provider、Model 或 Runtime。
 
@@ -146,6 +146,8 @@ Payment finality                -> Injective EVM
 - 一名 User 每局只有一个 Game Agent，同一 Agent 可参加后续 Game；
 - 入局配置自动快照，活动 Game 不发生 Runtime/config 切换；
 - Hosted 在浏览器和用户电脑离线后继续；Local 离线按统一 Finalizer 规则收敛；
+- Hosted 用户 Join 时一次确认受限 PaymentMandate，之后 accepted testnet trade
+  自动完成，不要求用户逐笔在线确认；
 - Hosted、Local 和 rule Agent 接收同版本 AgentTask/Result payload；
 - Decide/Negotiate 都使用统一 `action` schema；
 - 同局 Runtime 使用同一、经测试校准的行动时间窗；

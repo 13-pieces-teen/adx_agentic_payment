@@ -175,11 +175,12 @@ umask 077
   printf 'ADX_CONNECTOR_RATE_LIMIT_WINDOW_SECONDS=60\n'
   printf 'ADX_CONNECTOR_MAX_PENDING_PAIRINGS=500\n'
   printf 'ADX_ENV=%s\n' "${adx_environment}"
-  printf 'ADX_API_MAX_CONCURRENCY=256\n'
+  printf 'ADX_API_MAX_CONCURRENCY=64\n'
   printf '\n'
   printf 'ADX_HOSTED_AGENTS_ENABLED=false\n'
   printf 'ADX_ARENA_CORE_ENABLED=true\n'
   printf 'ADX_ENABLE_HOSTED_RUNTIME=false\n'
+  printf 'ADX_HOSTED_WORKER_TASK_CONCURRENCY=5\n'
   printf 'ADX_HOSTED_FINGERPRINT_PEPPER_B64=%s\n' "${hosted_fingerprint_pepper_b64}"
   printf 'ADX_HOSTED_FINGERPRINT_PEPPER_VERSION=1\n'
   printf 'ADX_TENCENT_SSM_REGION=ap-guangzhou\n'

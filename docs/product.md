@@ -40,8 +40,8 @@ Injective EVM testnet 是 MVP 的真实链上支付层，使用测试用 mock US
 4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多协商
    2–3 轮。
 5. `accept` 后冻结价格、双方、货物和结算参数。
-6. Settlement 校验该局受限 PaymentMandate 或单笔授权，再由 Facilitator 提交
-   testnet 交易。
+6. Settlement 校验用户 Join 时一次确认的该局受限 PaymentMandate，再由隔离的
+   guest signer 自动签名并提交 testnet 交易；单笔人工授权只作为开发验证路径。
 7. 链上确认后，Arena 才更新现金与货物。
 8. 未配对者不受惩罚；配对后谈崩或超时，双方
    `failedNegotiations + 1`。
@@ -51,7 +51,7 @@ Negotiate AgentTask。每个 AgentTask 最多两个 Provider/Runtime Attempt，�
 重试一次；“逻辑行动数”和“底层模型调用数”必须分别统计。
 
 同一 Game 的所有 Runtime 使用相同的 `action_timeout_ms`。默认值由启用的
-Provider/Model/thinking 组合与 2/4/8/16 Agent 负载的 P95/P99 加缓冲校准，不为
+Provider/Model/thinking 组合与 2/5/10/12 Agent 负载的 P95/P99 加缓冲校准，不为
 某个慢模型单独延长。Runtime 不可用时，独立 Arena Finalizer 将 Decide 收敛为
 唯一 `pass`、将 Negotiate 收敛为唯一 timeout，不允许一个 Agent 卡住整轮。
 
@@ -183,5 +183,7 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - [ ] 单笔交易数量固定为 1，还是允许有界数量？
 - [ ] 逐笔链上结算无法满足现场吞吐时，采用哪种能保留逐笔 transfer
       证据的批量交易方案？
-- [ ] PaymentMandate 的签名域、`reserve / consume / release`、revoke 竞态与
-      unknown/reorg 恢复机制？
+- [x] 上线签名模式冻结为 `sandbox_guest + single_eip3009`，用户 Join 时一次确认
+      Game-scoped PaymentMandate，此后不逐笔确认；
+- [ ] PaymentMandate 的 `reserve / consume / release`、revoke 竞态与
+      unknown/reorg 恢复机制按上线方案实现并验证；

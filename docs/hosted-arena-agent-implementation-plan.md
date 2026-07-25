@@ -1131,40 +1131,67 @@ Owner-only：
 
 ## 14. Phase 7：PaymentMandate 与 Settlement 依赖
 
-这不是 Hosted Provider Worker 的内部功能，但决定“用户完全离线后是否能完成交易”。
+这不是 Hosted Provider Worker 的内部功能，但决定“用户完全离线后是否能完成
+交易”。上线目标不是逐笔人工确认，而是用户加入 Game 时一次性同意受限 Mandate，
+随后由隔离的 Settlement Worker 使用平台 testnet guest wallet 自动完成每笔
+accepted trade。
+
+首发只支持 `sandbox_guest + single_eip3009`。用户自带钱包的无人值守授权、
+标准 HTTP x402 和主网不与该阶段并行实现。详细部署和容量目标见
+[`hosted-arena-production-runbook.md`](hosted-arena-production-runbook.md)。
 
 ### 14.1 需要先冻结
 
-- Wallet-backed 用户签名方式；
-- Sandbox guest signer 的授权主体；
-- game/token/network/payee 范围；
-- 单笔与累计额度；
-- 并发 Deal 的 `reserve / consume / release` 额度状态机；
-- expiry 与 revoke；
-- chain id、token、settlement contract、game、payee、nonce 的签名域；
-- 失败恢复与重复 nonce；
-- revoke 与 reserved/submitted 的竞态；
-- chain unknown、reorg 与数据库失败恢复；
-- Sandbox Signer 独立于 Hosted Worker，后者没有 signer IAM/密钥/调用权限；
-- 当前 EIP-3009 单笔授权如何承载或不承载 Mandate。
+- 每个 Game Participant 一个独立 testnet guest wallet 地址；
+- 数据库只保存不透明 `signer_key_id`，签名材料只进入外部 Secret Manager；
+- Settlement Worker 使用 guest-signer Secret Creator + exact-key Reader 权限；
+- Mandate 只绑定 Game、Participant、chain、token、单笔/累计额度、期限和状态；
+- 合法 payee 只能是同一 Game 中 Arena 配对出的 seller；
+- Game 冻结 `max_trade_price_atomic`、`game_expires_at` 和
+  `required_confirmations = 2`；单笔额度等于最大交易价，累计额度等于
+  `round_count * max_trade_price_atomic`，Mandate 与 Game 同时到期；
+- `reserve / consume / release` 锁定 Mandate、buyer cash 与 reservation rows，
+  额度从 reservation rows 求和，不维护可漂移的聚合计数；
+- `(round_id, buyer_participant_id)` 唯一，避免同一 buyer 在同一 Round 并发占款；
+- EIP-3009 nonce 由冻结 Intent hash 确定性派生；
+- funding 与 Settlement 共用一个数据库化 relay EOA nonce allocator；授权准备和
+  链上等待可并发，nonce 分配/广播短暂串行；
+- Settlement Worker 独立于 Hosted Worker；后者没有 signer IAM、Mandate 或提交权限；
+- Arena Worker 只读查链并提交确认后的库存，不获得 signer 权限；
+- Intent 冻结 EIP-712 domain、validAfter、validBefore 和 authorization nonce
+  digest，保证重启后可重建同一 authorization；
+- 提交前确定失败可以 release；提交后 unknown 只能通过 RPC 恢复或以相同 EIP-3009
+  authorization、相同 relay EOA nonce 重发，
+  到 `validBefore` 仍未使用才 release；
+- revoke 阻止新 reserve，已 reserve/submitted 的 Intent 继续完成，不做链上取消。
 
 ### 14.2 接线顺序
 
-1. 入局前创建/确认 Mandate；
-2. Agent 报价前做非权威预算提示；
-3. Arena accept 后冻结 SettlementIntent；
-4. Settlement 在提交前重新验证 Mandate；
-5. 链上提交并恢复 unknown；
-6. 链上确认后幂等提交库存；
-7. 额度消费与撤销状态可审计。
+1. Hosted Agent 加入 Game 时创建 provisioning account、一次性确认 Mandate；
+2. Settlement Worker 以 Participant 为幂等键创建 signer Secret、记录地址，通过
+   共用 relay nonce allocator 分发并在两个确认后确认初始 mUSDC；
+3. Game 启动前检查全部 wallet/Mandate ready；
+4. Arena accept 后冻结 SettlementIntent；
+5. Settlement Worker 原子 reserve Mandate；
+6. Settlement Worker 自动签名、提交并持久化 tx hash；
+7. Arena Worker 只读恢复链上结果；
+8. 链上确认后在一个事务中 consume reservation 并幂等提交库存；
+9. known failure release reservation、关闭 pairing 并继续当前 Round。
 
 ### 14.3 退出门槛
 
 - [ ] Agent 无钱包私钥；
+- [ ] accepted trade 不需要逐笔人工确认；
+- [ ] 浏览器关闭后自动完成 Mandate reserve、签名、提交、确认和库存提交；
 - [ ] 超单笔/总额/期限/范围的 Deal 无法提交；
 - [ ] revoke 后不能创建新支付；
+- [ ] 同一 buyer/round 的并发 reserve 最多成功一次；
+- [ ] submitted unknown 按同一 nonce 恢复，不产生第二份 authorization；
+- [ ] 2 笔并发 Intent 的 relay EOA nonce 连续，无碰撞、gap 或重复付款；
+- [ ] receipt 经 2 个确认、block hash 与 calldata/event 复核后才提交库存；
 - [x] 单笔 Intent 的重复请求不能双花或双记库存；
 - [ ] 链上确认前 UI 不显示 completed trade；
+- [ ] 10 Hosted Agent 的五回合 MVP Game 包含多笔自动支付并完成排名；
 - [x] 当前实现仍准确标注 testnet direct settlement，而非完整 x402。
 
 ## 15. Phase 8：部署、E2E 与延迟校准
@@ -1176,23 +1203,36 @@ Owner-only：
 - Arena Core Worker service；
 - Hosted Worker service；
 - Credential Controller service；
+- Settlement Worker service；
 - Arena migration scope；
 - feature flag；
 - Worker queue/concurrency；
 - Tencent SSM region/endpoint/credential injection；
+- guest signer 与 relay account 的独立 Secret read 配置；
 - Provider allowlist config；
 - health/readiness；
 - log rotation；
 - CPU/memory limits。
 
 不增加公网 Worker/Controller port。PostgreSQL 保持 internal network only。API、
-Arena Core、Hosted Worker、Credential Controller 和 migration 使用独立数据库
-role；三个运行进程使用独立 CAM policy。Worker/Controller 分别配置 health、restart
-和资源上限。
+Arena Core、Hosted Worker、Credential Controller、Settlement Worker 和 migration
+使用独立数据库 role。首发保持单个 PostgreSQL、单个 API 和每类 Worker 一个实例，
+不增加 Redis、Kafka、Kubernetes 或多副本协调。
 
 Provider 出站只允许固定 HTTPS Host，关闭 redirect/env proxy，并在主机层增加 egress
 firewall/proxy。容量测试冻结单局最大 Agent 与同时 Game 数；超过容量时拒绝开局，
-不能让不可控排队延迟决定 FCFS。
+不能用无限排队伪装容量。2C4G MVP 的两个 Decide wave 会把平台排队计入
+`result_received_at` FCFS，因此只作为展示，不宣称 Tournament 公平性。
+
+首发部署基线改为现有 2 vCPU / 4 GB RAM / 70 GB 单机：展示局默认 10 Agent、
+硬上限 12、固定 5 回合、同一时间一局 active Game、Hosted Task 并发 5、
+Negotiation pairing 并发 5、Settlement 在途并发 2。单一 relay EOA 的 nonce 分配/广播
+由数据库锁短暂串行。具体 `action_timeout_ms` 由真实 Provider 的 5 并发、
+10/12 Agent wave 延迟测试冻结，并覆盖 Decide 排队以及最多三轮 Negotiation；
+`settlement_timeout_ms` 首发冻结为 600000，authorization 有效期 420 秒，剩余
+180 秒用于过期区块的两个确认和最终恢复；unknown 不能算终态，超时仍无法安全判定时
+Game 进入 `settlement_recovery_required` 并判定本次 MVP 失败。12 Agent 只做非阻塞容量验证，
+16 Agent 推迟到扩容后。
 
 ### 15.2 依赖与供应链
 
@@ -1225,7 +1265,7 @@ Provider x Model x thinking mode
 - retry rate；
 - timeout/default rate；
 - input/output/reasoning tokens；
-- 2/4/8/16 Agent 整轮 wall time；
+- 2/5/10/12 Agent 整轮 wall time；
 - Worker queue age、CPU、内存。
 
 Arena Task queue 与 credential validation queue 使用不同 claim 路径。比赛 Task 有高
@@ -1266,7 +1306,10 @@ Arena Task queue 与 credential validation queue 使用不同 claim 路径。比
 | Provider usage absent | 显示 incomplete，不伪造 |
 | reasoning text returned | persistence/API 中不存在 |
 | message 含 secret/PII/strategy 片段 | 使用中性模板，原文不在 DB/log/Trace/API |
-| accepted negotiation | 仍为 pending settlement |
+| accepted negotiation | 自动 reserve、签名和提交，不等待逐笔人工确认 |
+| Settlement Worker restart before submit | 同一 Intent 可安全重领 |
+| Settlement Worker restart after submit | 按同一 tx hash/nonce 恢复，不生成第二笔支付 |
+| Mandate over limit/expired | 不广播交易，reservation 可释放 |
 | chain confirmed | 幂等提交库存一次 |
 
 ### 15.5 退出门槛
@@ -1275,8 +1318,15 @@ Arena Task queue 与 credential validation queue 使用不同 claim 路径。比
 - [ ] 真实 PostgreSQL migration/restart 通过；
 - [ ] 真实 Tencent SSM 生命周期通过；
 - [ ] 至少一个真实 Provider 的 structured invocation 通过；
+- [ ] guest signer/relay Secret 权限与 Hosted/Arena Worker 隔离；
+- [ ] accepted trade 自动完成当前链路的新鲜 testnet 支付；
+- [ ] 10 Agent 受控场景产生 5 笔 accepted trade，按 2 + 2 + 1 wave 终态，
+      且监控至少观察到 2 笔 Settlement 同时在途；
+- [ ] 600 秒内无残留 `submitted_unknown`；进入 `settlement_recovery_required`
+      必须停止排名并使本次验收失败；
 - [ ] 外部网络 E2E 保存证据；
-- [ ] 2/4/8/16 Agent 压测完成；
+- [ ] 2C4G 生产机上 10 Agent × 5 回合必须通过；
+- [ ] 12 Agent × 5 回合作为非阻塞容量验证；
 - [ ] 默认 timeout 有数据依据；
 - [ ] 安全扫描无真实 secret。
 
@@ -1379,7 +1429,7 @@ tests/e2e/test_hosted_agent_browser_offline.py
 
 - Secret 权限与审计验证；
 - 真实负载校准；
-- PaymentMandate 或清晰的手动结算限制；
+- 自动 PaymentMandate、guest signer 与 accepted trade 无人值守结算已通过；
 - 备份、恢复、告警和事故处理；
 - 安全/依赖扫描；
 - 完整 E2E 证据。
@@ -1454,7 +1504,7 @@ Agent Studio 不进入本次 MVP 的代码范围。
 | 默认 action timeout 数值 | 真实 P95/P99 + buffer 后冻结 |
 | Tencent Secret region/name policy | 部署前确定，不影响 SecretStore port |
 | 私有 strategy instructions 保留期 | 先设为部署配置，外部 beta 前形成产品政策 |
-| PaymentMandate 签名机制 | 独立 Settlement 设计，不伪装成已解决 |
+| Guest signer Secret 命名与 region | 部署前确定；签名机制已冻结为 `sandbox_guest + single_eip3009` |
 | Native A2A auth/binding | Post-MVP |
 | 多 Runtime failover | Post-MVP，需重新评估公平性 |
 | 跨局长期记忆 | 不在 MVP |

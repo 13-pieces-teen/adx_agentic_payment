@@ -167,7 +167,7 @@ Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，�
 
 `action_timeout_ms` 是 Game 配置，并在开局时冻结。同一 Game 的 Hosted、Local、
 rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
-Provider/Model/thinking 组合和 2/4/8/16 Agent 负载的 P95/P99 加缓冲校准，不在
+Provider/Model/thinking 组合和 2/5/10/12 Agent 负载的 P95/P99 加缓冲校准，不在
 Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
 Provider、Model 或 Runtime。
 
@@ -188,14 +188,15 @@ Arena 将冻结：
 - good、quantity、acceptedPrice；
 - chain、token、payee、有效期和幂等键。
 
-Settlement 在提交前重新校验该局受限 PaymentMandate，或明确要求当前
-EIP-3009 单笔授权。模型 Runtime 永远不能获得钱包私钥或任意签名权。钱包用户、
-或隔离的 guest signer service 对冻结意图生成授权，Facilitator 再提交 testnet
-交易。只有链上确认成功后，Arena 才在同一数据库事务中更新现金与货物持仓，并
+Hosted 上线时，Settlement 在提交前重新校验用户 Join 时一次确认的该局受限
+PaymentMandate，由隔离的 guest signer service 对冻结意图自动生成授权并提交
+testnet 交易；当前 EIP-3009 单笔人工授权只保留为开发验证路径。模型 Runtime
+永远不能获得钱包私钥或任意签名权。只有链上确认成功后，Arena 才在同一数据库
+事务中更新现金与货物持仓，并
 记录 `inventoryCommittedAt`。链上已确认但事务尚未完成时属于
 `chain_confirmed_uncommitted` 可恢复状态，不能向玩家显示为已完成成交。
 
-完整无人值守支付还要求单独实现 PaymentMandate 的网络、Token、Game、payee、
+该上线目标尚需实现 PaymentMandate 的网络、Token、Game、payee、
 单笔/累计额度、有效期、撤销和并发 `reserve / consume / release`。当前
 EIP-3009 direct relay 是单笔授权原型，不等于该 Mandate 或完整 HTTP x402。
 
@@ -405,10 +406,10 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 |------|--------|
 | 总回合数 `N` | 5–10 |
 | `MAX_TURN` | 2 或 3 |
-| 单回合时长 | 60–120 秒 |
-| `action_timeout_ms` | Provider/Model/thinking 与 2/4/8/16 Agent 负载的真实 P95/P99 + buffer |
+| 单回合时长 | 由 2C4G、5 Provider 并发的 10/12 Agent wave 实测冻结 |
+| `action_timeout_ms` | Provider/Model/thinking 与 2/5/10/12 Agent 负载的真实 P95/P99 + buffer |
 | 货物种类 | 2–3 |
-| 单局目标时长 | 10–15 分钟 |
+| 单局目标时长 | MVP 固定 5 回合；以上述实测值计算 |
 
 参数调整不得改变本文的核心边界：公平开局、FCFS、有限轮协商、外生价值锚、
 净资产排名和成交后真实链上结算。
