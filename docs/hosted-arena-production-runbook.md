@@ -76,12 +76,9 @@ Caddy -> FastAPI API
          PostgreSQL
           /   |   \
          /    |    \
-Hosted Worker |  Arena automatic-payment loop
-              |       |
-              |       v
-              |  internal wallet-signer
-               |
-          Arena Worker
+Hosted Worker   Settlement Worker -> internal wallet-signer/facilitator
+                         |
+                    Arena Worker
 ```
 
 只新增一个长期运行进程：`settlement-worker`。
@@ -92,9 +89,13 @@ Hosted Worker |  Arena automatic-payment loop
 | Hosted Worker | 读取单个模型 Secret、执行 AgentTask、提交候选 Result | 修改 pool、negotiation、inventory、mandate、settlement |
 | Credential Controller | 撤销 Hosted 模型 Secret | 读取模型 Key、访问钱包 Key |
 | Arena Worker | 回合编排、Result apply、Finalizer、只读查链、库存提交 | 读取钱包 Key、签名、广播交易 |
-| Arena Worker 自动支付循环 | claim Intent、Mandate reserve、调用 signer/facilitator、记录 tx hash | 读取钱包 Key、修改冻结价格、在确认前提交库存 |
+| Settlement Worker | claim Intent、Mandate reserve、调用 signer/facilitator、记录 tx hash | 修改冻结价格、在确认前提交库存 |
 | Wallet signer | 按 wallet id 与冻结 x402 requirement 签署 EIP-3009 | 访问数据库、Provider 或直接广播交易 |
 | PostgreSQL | 唯一持久化队列和业务状态权威 | 保存原始模型 Key、钱包私钥、助记词或签名 |
+
+API 的公开 x402 paid retry 只把签名 payload 转发到 bearer-authenticated 的内网
+Settlement ingress；API 不持有 signer token、Facilitator authorization，也不直接
+修改 reservation 或提交链上交易。
 
 第一版通过 x402 V2 `/verify` 与 `/settle` 调用显式配置的 Facilitator；可使用
 外部 HTTPS 服务，或 Compose `testnet-facilitator` profile 中不发布宿主机端口的
@@ -232,7 +233,7 @@ release(settlement_intent_id)
 ```text
 Arena validates accept
   -> freeze immutable SettlementIntent
-  -> Arena automatic-payment loop claims Intent
+  -> Settlement Worker claims Intent
   -> validate Game/participant/token/payee/amount/expiry
   -> reserve Mandate amount
   -> build x402 V2 PaymentRequired from frozen EIP-712 domain
@@ -242,7 +243,8 @@ Arena validates accept
   -> persist tx hash and authorization nonce digest
   -> Arena Worker reads receipt and exact Transfer event
   -> mark chain_confirmed_uncommitted
-  -> atomically consume reservation and commit cash/holding
+  -> Arena confirms the chain payment and commits cash/holding
+  -> Settlement Worker reconciles the reservation as consumed
   -> mark inventory_committed
   -> Round may close
 ```
@@ -329,9 +331,9 @@ lock 中完成。自动循环使用 `x402_settlement_attempts` 的 `FOR UPDATE S
 
 Arena 仍不签名、不读取 signer Secret、不提交交易。
 
-### 5.3 自动支付循环与 signer
+### 5.3 Settlement Worker 与 signer
 
-Arena Worker 中的可选自动支付循环：
+独立 Settlement Worker 的自动支付循环：
 
 ```text
 claim Intent
@@ -353,7 +355,8 @@ claim Intent
 - 在日志和异常中禁止输出 private key、signature、raw nonce；
 - `submitting` 后结果不明时保持 reservation，不释放、不生成第二笔支付。
 
-同一 Arena Worker 进程负责调度与只读确认，但私钥权限仍隔离在 signer 容器。
+Arena Worker 只负责调度与只读确认；Settlement Worker 使用独立
+`adx_settlement` 数据库角色，私钥仍只存在 signer 容器。
 
 ### 5.4 API 与前端
 
@@ -390,8 +393,8 @@ revoke command 只能由 Participant 所属用户发出，必须使用现有 Ses
 
 ### 5.5 Production Compose
 
-`docker-compose.production.yml` 已接入 payment migration、API、Arena Worker 自动
-支付循环，以及可选 `wallet-signer` 和 `arena-facilitator`。两者分别使用
+`docker-compose.production.yml` 已接入 payment migration、API、独立 Settlement
+Worker，以及可选 `wallet-signer` 和 `arena-facilitator`。后两者分别使用
 `testnet-signer` / `testnet-facilitator` profile，只加入 data network、无宿主机
 端口、只读文件系统与只读 CSV mount；自动支付默认关闭。Hosted profile 同时支持
 单机 AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 Provider
@@ -435,11 +438,13 @@ PostgreSQL max_connections: 40
 | API | 512 MB |
 | Hosted Worker | 512 MB |
 | Arena Worker | 320 MB |
+| Settlement Worker | 256 MB |
 | Wallet signer | 256 MB |
 | Credential Controller | 192 MB |
 | Caddy | 128 MB |
 
-常驻容器合计约 2.7 GB，给宿主机、Docker、页缓存和短时 migration 留约 1.3 GB。
+启用全部可选 Worker 后按 Compose 上限控制，实际常驻内存需要在 2C4G 验收中
+测量；若接近上限应先降低 Worker 并发，不能通过交换或关闭安全边界硬撑。
 Vercel 前端不占用这台服务器；`legacy-web` profile 不得在 MVP 生产机启动。
 
 40 个数据库连接按当前连接池上界预留：API 最多 20、Hosted Worker 5、Arena
@@ -521,6 +526,7 @@ PostgreSQL
   -> API
   -> Hosted Worker / Credential Controller
   -> Arena Worker
+  -> Settlement Worker
   -> Wallet signer 与 facilitator（两个显式 testnet profile）
   -> enable Game creation
 ```
@@ -550,11 +556,12 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 - 自动交易的 token、payer、payee、amount 与冻结 Intent 完全一致；
 - 链上确认后现金和库存只更新一次；
 - 至少一局包含多笔自动交易并完成最终排名；
-- Arena Worker 或 signer 重启不会生成第二笔支付；
+- Settlement Worker 或 signer 重启不会生成第二笔支付；
 - 超额或过期 Mandate 不广播交易；
 - Provider Key、wallet key、signature 和 reasoning 不进入数据库、日志或 API；
 - Hosted Worker 数据库 role 无法修改 Mandate、Settlement 和 Inventory；
 - Arena Worker 无法读取 signer Secret；
+- Arena Worker 数据库 role 不拥有 Mandate mutation 或 Facilitator 提交凭据；
 - wallet-signer 无法访问或修改报价、配对和 Task Result。
 
 ### 8.2 容量通过标准

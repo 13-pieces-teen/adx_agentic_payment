@@ -34,6 +34,10 @@ from arena_game import (
 from arena_payments.api import create_payment_account_router
 from arena_payments.admin_api import create_payment_admin_router
 from arena_payments.coordinator import X402SettlementCoordinator
+from arena_payments.executor import (
+    HttpX402SettlementExecutor,
+    X402SettlementExecutor,
+)
 from arena_payments.facilitator import (
     DisabledFacilitatorClient,
     HttpX402FacilitatorClient,
@@ -306,7 +310,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             )
         pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
 
-    x402_coordinator: X402SettlementCoordinator | None = None
+    x402_coordinator: X402SettlementExecutor | None = None
     x402_public_api_url = ""
     if payment_repository is not None:
         if pawnhouse_repository is None:
@@ -327,29 +331,37 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             raise RuntimeError(
                 "ADX_PUBLIC_API_URL must use HTTPS in production"
             )
-        facilitator_url = os.getenv(
-            "ADX_X402_FACILITATOR_URL", ""
-        ).strip()
-        if facilitator_url:
-            facilitator = HttpX402FacilitatorClient(
-                facilitator_url,
-                facilitator_id=os.getenv(
-                    "ADX_X402_FACILITATOR_ID", "configured"
+        if environment == "production":
+            x402_coordinator = HttpX402SettlementExecutor(
+                os.getenv("ADX_SETTLEMENT_SERVICE_URL", "").strip(),
+                bearer_token=os.getenv(
+                    "ADX_SETTLEMENT_SERVICE_TOKEN", ""
                 ).strip(),
-                authorization=(
-                    os.getenv(
-                        "ADX_X402_FACILITATOR_AUTHORIZATION", ""
-                    ).strip()
-                    or None
-                ),
             )
         else:
-            facilitator = DisabledFacilitatorClient()
-        x402_coordinator = X402SettlementCoordinator(
-            payments=payment_repository,
-            arena=pawnhouse_repository,
-            facilitator=facilitator,
-        )
+            facilitator_url = os.getenv(
+                "ADX_X402_FACILITATOR_URL", ""
+            ).strip()
+            if facilitator_url:
+                facilitator = HttpX402FacilitatorClient(
+                    facilitator_url,
+                    facilitator_id=os.getenv(
+                        "ADX_X402_FACILITATOR_ID", "configured"
+                    ).strip(),
+                    authorization=(
+                        os.getenv(
+                            "ADX_X402_FACILITATOR_AUTHORIZATION", ""
+                        ).strip()
+                        or None
+                    ),
+                )
+            else:
+                facilitator = DisabledFacilitatorClient()
+            x402_coordinator = X402SettlementCoordinator(
+                payments=payment_repository,
+                arena=pawnhouse_repository,
+                facilitator=facilitator,
+            )
 
     if pawnhouse_dev_enabled:
         pawnhouse_dev_token = os.getenv(
@@ -542,8 +554,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                     or None
                 ),
                 signer_mode=(
-                    "external"
-                    if os.getenv("ADX_WALLET_SIGNER_URL", "").strip()
+                    "isolated_settlement_service"
+                    if os.getenv("ADX_SETTLEMENT_SERVICE_URL", "").strip()
                     else "disabled"
                 ),
             )

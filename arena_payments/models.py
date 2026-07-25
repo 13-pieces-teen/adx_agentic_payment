@@ -98,6 +98,11 @@ class PaymentMandate:
         object.__setattr__(self, "allowed_payees", normalized_payees)
         if self.expires_at <= self.valid_from:
             raise ValueError("invalid_mandate_window")
+        if (
+            self.valid_from.utcoffset() is None
+            or self.expires_at.utcoffset() is None
+        ):
+            raise ValueError("mandate_timezone_required")
         if self.reserved_atomic < 0 or self.consumed_atomic < 0:
             raise ValueError("invalid_mandate_accounting")
         if (
@@ -157,7 +162,7 @@ class SettlementTerms:
             raise ValueError("invalid_resource_url")
 
 
-ReservationStatus = Literal["reserved", "consumed", "released"]
+ReservationStatus = Literal["reserved", "submitted", "consumed", "released"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,3 +183,30 @@ class PaymentReservation:
         object.__setattr__(self, "payee", _address(self.payee))
         if self.tx_hash is not None and not _TX_HASH.fullmatch(self.tx_hash):
             raise ValueError("invalid_transaction_hash")
+        if self.status == "reserved":
+            if any(
+                value is not None
+                for value in (self.finalized_at, self.tx_hash, self.release_reason)
+            ):
+                raise ValueError("invalid_reserved_payment")
+        elif self.status == "submitted":
+            if (
+                self.finalized_at is not None
+                or self.tx_hash is None
+                or self.release_reason is not None
+            ):
+                raise ValueError("invalid_submitted_payment")
+        elif self.status == "consumed":
+            if (
+                self.finalized_at is None
+                or self.tx_hash is None
+                or self.release_reason is not None
+            ):
+                raise ValueError("invalid_consumed_payment")
+        elif self.status == "released":
+            if (
+                self.finalized_at is None
+                or self.tx_hash is not None
+                or not self.release_reason
+            ):
+                raise ValueError("invalid_released_payment")

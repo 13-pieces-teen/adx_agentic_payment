@@ -9,15 +9,6 @@ import signal
 from datetime import datetime, timezone
 
 from arena_core.postgres_repository import PostgresArenaCoreRepository
-from arena_payments.automatic_worker import AutomaticSettlementWorker
-from arena_payments.coordinator import X402SettlementCoordinator
-from arena_payments.facilitator import HttpX402FacilitatorClient
-from arena_payments.postgres import PostgresPaymentRepository
-from arena_payments.postgres_worker import (
-    PostgresAutomaticSettlementSource,
-)
-from arena_payments.signer import HttpWalletSignerClient
-
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseHostedCoordinator
 from .orchestrator import PawnhouseGameOrchestrator
@@ -47,7 +38,7 @@ def _https_url(name: str, *, required: bool) -> str | None:
 
 
 class ArenaProductionWorker:
-    """Run four independent, non-signing durable loops."""
+    """Run the four Arena-owned, non-signing durable loops."""
 
     def __init__(
         self,
@@ -56,31 +47,26 @@ class ArenaProductionWorker:
         coordinator: PawnhouseHostedCoordinator,
         arena_core: PostgresArenaCoreRepository,
         settlement_recovery: SettlementRecoveryWorker,
-        automatic_settlement: AutomaticSettlementWorker | None = None,
         coordinator_poll_seconds: float = 0.25,
         finalizer_poll_seconds: float = 1.0,
         settlement_poll_seconds: float = 3.0,
         orchestration_poll_seconds: float = 0.25,
-        automatic_payment_poll_seconds: float = 0.5,
     ) -> None:
         if min(
             orchestration_poll_seconds,
             coordinator_poll_seconds,
             finalizer_poll_seconds,
             settlement_poll_seconds,
-            automatic_payment_poll_seconds,
         ) <= 0:
             raise ValueError("worker poll intervals must be positive")
         self._game_orchestrator = game_orchestrator
         self._coordinator = coordinator
         self._arena_core = arena_core
         self._settlement_recovery = settlement_recovery
-        self._automatic_settlement = automatic_settlement
         self._coordinator_poll_seconds = coordinator_poll_seconds
         self._finalizer_poll_seconds = finalizer_poll_seconds
         self._settlement_poll_seconds = settlement_poll_seconds
         self._orchestration_poll_seconds = orchestration_poll_seconds
-        self._automatic_payment_poll_seconds = automatic_payment_poll_seconds
         self._stopping = asyncio.Event()
 
     def stop(self) -> None:
@@ -111,13 +97,6 @@ class ArenaProductionWorker:
                 name="arena-settlement-recovery",
             ),
         ]
-        if self._automatic_settlement is not None:
-            tasks.append(
-                asyncio.create_task(
-                    self._automatic_payment_loop(),
-                    name="arena-automatic-x402-settlement",
-                )
-            )
         await self._stopping.wait()
         await asyncio.gather(*tasks)
 
@@ -143,17 +122,6 @@ class ArenaProductionWorker:
             except Exception:
                 _LOGGER.error("arena_settlement_recovery_cycle_failed")
             await self._wait(self._settlement_poll_seconds)
-
-    async def _automatic_payment_loop(self) -> None:
-        assert self._automatic_settlement is not None
-        while not self._stopping.is_set():
-            try:
-                await self._automatic_settlement.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _LOGGER.error("arena_automatic_payment_cycle_failed")
-            await self._wait(self._automatic_payment_poll_seconds)
 
     async def _wait(self, seconds: float) -> None:
         try:
@@ -190,62 +158,11 @@ async def main() -> None:
             blockscout_base_url=blockscout_url,
         ),
     )
-    automatic_payments_enabled = os.getenv(
-        "ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED", "false"
-    ).strip().lower() in {"1", "true", "yes"}
-    payment_repository: PostgresPaymentRepository | None = None
-    automatic_settlement: AutomaticSettlementWorker | None = None
-    if automatic_payments_enabled:
-        public_api_url = _https_url("ADX_PUBLIC_API_URL", required=True)
-        facilitator_url = _required("ADX_X402_FACILITATOR_URL")
-        signer_url = _required("ADX_WALLET_SIGNER_URL")
-        signer_token = _required("ADX_WALLET_SIGNER_TOKEN")
-        payment_repository = PostgresPaymentRepository(database_url)
-        automatic_worker_id = (
-            os.getenv("ADX_ARENA_AUTOMATIC_PAYMENT_WORKER_ID")
-            or os.getenv("ADX_ARENA_WORKER_ID")
-            or "arena-automatic-payment-worker"
-        )
-        automatic_coordinator = X402SettlementCoordinator(
-            payments=payment_repository,
-            arena=pawnhouse,
-            facilitator=HttpX402FacilitatorClient(
-                facilitator_url,
-                facilitator_id=_required("ADX_X402_FACILITATOR_ID"),
-                authorization=(
-                    os.getenv(
-                        "ADX_X402_FACILITATOR_AUTHORIZATION", ""
-                    ).strip()
-                    or None
-                ),
-            ),
-        )
-        automatic_settlement = AutomaticSettlementWorker(
-            source=PostgresAutomaticSettlementSource(
-                payments=payment_repository,
-                arena=pawnhouse,
-                public_api_url=public_api_url or "",
-                lease_seconds=int(
-                    os.getenv(
-                        "ADX_ARENA_AUTOMATIC_PAYMENT_LEASE_SECONDS",
-                        "60",
-                    )
-                ),
-            ),
-            payments=payment_repository,
-            signer=HttpWalletSignerClient(
-                signer_url,
-                bearer_token=signer_token,
-            ),
-            coordinator=automatic_coordinator,
-            worker_id=automatic_worker_id,
-        )
     worker = ArenaProductionWorker(
         game_orchestrator=game_orchestrator,
         coordinator=coordinator,
         arena_core=arena_core,
         settlement_recovery=settlement_recovery,
-        automatic_settlement=automatic_settlement,
         coordinator_poll_seconds=float(
             os.getenv("ADX_ARENA_WORKER_POLL_SECONDS", "0.25")
         ),
@@ -258,17 +175,9 @@ async def main() -> None:
         orchestration_poll_seconds=float(
             os.getenv("ADX_ARENA_ORCHESTRATION_POLL_SECONDS", "0.25")
         ),
-        automatic_payment_poll_seconds=float(
-            os.getenv(
-                "ADX_ARENA_AUTOMATIC_PAYMENT_POLL_SECONDS",
-                "0.5",
-            )
-        ),
     )
     await pawnhouse.initialize()
     await coordinator.initialize()
-    if payment_repository is not None:
-        await payment_repository.initialize()
     loop = asyncio.get_running_loop()
     for signal_name in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -279,8 +188,6 @@ async def main() -> None:
         await worker.run_forever()
     finally:
         await coordinator.close()
-        if payment_repository is not None:
-            await payment_repository.close()
         await pawnhouse.close()
 
 

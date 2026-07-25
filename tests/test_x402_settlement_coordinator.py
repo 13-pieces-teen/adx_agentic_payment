@@ -93,7 +93,7 @@ def _coordinator(facilitator: _Facilitator, *, arena: _Arena | None = None):
     )
 
 
-def test_success_records_mandate_approval_submission_and_consumes_once() -> None:
+def test_success_records_submission_but_waits_for_chain_confirmation() -> None:
     coordinator, payments, arena = _coordinator(_Facilitator())
     result = asyncio.run(
         coordinator.execute(
@@ -107,8 +107,10 @@ def test_success_records_mandate_approval_submission_and_consumes_once() -> None
     assert result.status == "submitted"
     assert len(arena.approvals) == len(arena.submissions) == 1
     mandate = payments.mandates["mandate-1"]
-    assert mandate.reserved_atomic == 0
-    assert mandate.consumed_atomic == 40
+    assert mandate.reserved_atomic == 40
+    assert mandate.consumed_atomic == 0
+    reservation = next(iter(payments.reservations.values()))
+    assert reservation.status == "submitted"
 
     repeated = asyncio.run(
         coordinator.execute(
@@ -119,7 +121,8 @@ def test_success_records_mandate_approval_submission_and_consumes_once() -> None
         )
     )
     assert repeated.success is True
-    assert payments.mandates["mandate-1"].consumed_atomic == 40
+    assert payments.mandates["mandate-1"].reserved_atomic == 40
+    assert len(arena.submissions) == 1
 
 
 def test_definite_facilitator_rejection_releases_budget() -> None:

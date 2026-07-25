@@ -61,6 +61,15 @@ def _mandate(**changes: object) -> PaymentMandate:
     return replace(value, **changes)
 
 
+def test_mandate_requires_timezone_aware_window() -> None:
+    with pytest.raises(ValueError, match="mandate_timezone_required"):
+        replace(
+            _mandate(),
+            valid_from=datetime(2026, 7, 25, 8, 0),
+            expires_at=datetime(2026, 7, 25, 9, 0),
+        )
+
+
 def _terms(intent_id: str = "intent-1", amount: int = 40) -> SettlementTerms:
     return SettlementTerms(
         settlement_intent_id=intent_id,
@@ -281,6 +290,16 @@ def test_release_and_consume_are_idempotent_and_preserve_accounting() -> None:
             now=NOW,
         )
     )
+    submitted = asyncio.run(
+        repository.submit_reservation(
+            second.reservation_id,
+            tx_hash="0x" + "55" * 32,
+            now=NOW,
+        )
+    )
+    assert submitted.status == "submitted"
+    assert repository.mandates["mandate-1"].reserved_atomic == 40
+    assert repository.mandates["mandate-1"].consumed_atomic == 0
     consumed = asyncio.run(
         repository.consume_reservation(
             second.reservation_id,

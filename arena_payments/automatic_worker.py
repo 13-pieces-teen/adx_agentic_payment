@@ -39,6 +39,13 @@ class AutomaticSettlementSource(Protocol):
         safe_error_code: str | None = None,
     ) -> None: ...
 
+    async def fail_settlement(
+        self,
+        *,
+        settlement_intent_id: str,
+        safe_error_code: str,
+    ) -> None: ...
+
 
 class AutomaticSettlementWorker:
     def __init__(
@@ -87,6 +94,7 @@ class AutomaticSettlementWorker:
         )
         if not claimed:
             return
+        submission_may_have_started = False
         try:
             payload = await self._signer.create_payment_payload(
                 payment_required=payment_required,
@@ -104,12 +112,20 @@ class AutomaticSettlementWorker:
                 status="submitting",
                 worker_id=self._worker_id,
             )
+            submission_may_have_started = True
             result = await self._coordinator.execute(
                 terms=terms,
                 mandate_id=mandate.mandate_id,
                 payment_payload=payload,
                 now=now,
             )
+            if result.status == "failed":
+                await self._source.fail_settlement(
+                    settlement_intent_id=settlement_intent_id,
+                    safe_error_code=(
+                        result.error_reason or "automatic_settlement_failed"
+                    ),
+                )
             await self._source.mark_attempt(
                 settlement_intent_id=settlement_intent_id,
                 status=result.status,
@@ -117,15 +133,20 @@ class AutomaticSettlementWorker:
                 safe_error_code=result.error_reason,
             )
         except Exception:
-            await self._payments.release_reservation(
-                reservation.reservation_id,
-                reason="automatic_settlement_pre_submission_failed",
-                now=now,
-            )
-            await self._source.mark_attempt(
-                settlement_intent_id=settlement_intent_id,
-                status="failed",
-                worker_id=self._worker_id,
-                safe_error_code="automatic_settlement_failed",
-            )
+            if not submission_may_have_started:
+                await self._payments.release_reservation(
+                    reservation.reservation_id,
+                    reason="automatic_settlement_pre_submission_failed",
+                    now=now,
+                )
+                await self._source.mark_attempt(
+                    settlement_intent_id=settlement_intent_id,
+                    status="failed",
+                    worker_id=self._worker_id,
+                    safe_error_code="automatic_settlement_failed",
+                )
+                await self._source.fail_settlement(
+                    settlement_intent_id=settlement_intent_id,
+                    safe_error_code="automatic_settlement_failed",
+                )
             raise

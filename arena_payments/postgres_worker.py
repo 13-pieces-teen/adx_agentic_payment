@@ -160,3 +160,14 @@ class PostgresAutomaticSettlementSource:
         )
         if updated != "UPDATE 1":
             raise RuntimeError("automatic_payment_lease_lost")
+
+    async def fail_settlement(
+        self,
+        *,
+        settlement_intent_id: str,
+        safe_error_code: str,
+    ) -> None:
+        await self._arena.record_automatic_failure(
+            settlement_intent_id=settlement_intent_id,
+            safe_error_code=safe_error_code,
+        )

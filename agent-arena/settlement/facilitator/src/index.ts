@@ -102,6 +102,19 @@ app.post("/settle", async (request, response) => {
       return;
     }
     const result = await facilitator.settle(value.authorization);
+    if (result.status === "pending" && result.txHash) {
+      // The relay has a concrete chain transaction hash. Hand it to Arena's
+      // confirmation/recovery worker instead of degrading to an unresolvable
+      // HTTP timeout with no submission evidence.
+      response.json({
+        success: true,
+        transaction: result.txHash,
+        network: value.request.paymentRequirements.network,
+        payer: value.authorization.from,
+        pending: true,
+      });
+      return;
+    }
     if (result.status === "pending") {
       response.status(503).json({
         success: false,

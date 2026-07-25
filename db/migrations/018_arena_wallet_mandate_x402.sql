@@ -1,5 +1,13 @@
 BEGIN;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adx_settlement') THEN
+        CREATE ROLE adx_settlement NOLOGIN;
+    END IF;
+END
+$$;
+
 -- This forward migration creates Arena-owned references to the Connector User
 -- authority. The DDL role needs only REFERENCES; runtime access remains
 -- governed by the existing API/Core role grants.
@@ -142,13 +150,16 @@ CREATE TABLE arena402.payment_reservations (
     settlement_intent_id TEXT NOT NULL UNIQUE
         REFERENCES arena402.settlement_intents(settlement_intent_id)
         ON DELETE RESTRICT,
+    game_id TEXT NOT NULL,
+    round_id TEXT NOT NULL,
+    buyer_participant_id TEXT NOT NULL,
     intent_hash TEXT NOT NULL CHECK (
         intent_hash ~ '^sha256:[0-9a-f]{64}$'
     ),
     amount_atomic NUMERIC(78, 0) NOT NULL CHECK (amount_atomic > 0),
     payee TEXT NOT NULL CHECK (payee ~ '^0x[0-9a-f]{40}$'),
     status TEXT NOT NULL DEFAULT 'reserved' CHECK (
-        status IN ('reserved', 'consumed', 'released')
+        status IN ('reserved', 'submitted', 'consumed', 'released')
     ),
     tx_hash TEXT CHECK (
         tx_hash IS NULL OR tx_hash ~ '^0x[0-9a-f]{64}$'
@@ -165,11 +176,17 @@ CREATE TABLE arena402.payment_reservations (
     CHECK (
         (status = 'reserved' AND finalized_at IS NULL
             AND tx_hash IS NULL AND release_reason IS NULL)
+        OR (status = 'submitted' AND finalized_at IS NULL
+            AND tx_hash IS NOT NULL AND release_reason IS NULL)
         OR (status = 'consumed' AND finalized_at IS NOT NULL
             AND tx_hash IS NOT NULL AND release_reason IS NULL)
         OR (status = 'released' AND finalized_at IS NOT NULL
             AND tx_hash IS NULL AND release_reason IS NOT NULL)
-    )
+    ),
+    FOREIGN KEY (buyer_participant_id, game_id)
+        REFERENCES arena402.game_participants(game_participant_id, game_id)
+        ON DELETE RESTRICT,
+    UNIQUE (game_id, round_id, buyer_participant_id)
 );
 
 CREATE INDEX payment_reservations_recovery_idx
@@ -276,6 +293,33 @@ GRANT SELECT ON
     arena402.payment_reservations,
     arena402.x402_settlement_attempts
 TO adx_arena_api;
+
+GRANT USAGE ON SCHEMA arena402 TO adx_settlement;
+
+GRANT SELECT ON
+    arena402.games,
+    arena402.game_participants,
+    arena402.participant_settlement_accounts,
+    arena402.user_wallets,
+    arena402.wallet_inventory,
+    arena402.balances
+TO adx_settlement;
+
+GRANT SELECT, INSERT, UPDATE ON
+    arena402.payment_mandates,
+    arena402.payment_reservations,
+    arena402.x402_settlement_attempts,
+    arena402.settlement_approvals,
+    arena402.settlement_submissions,
+    arena402.settlement_intents
+TO adx_settlement;
+
+GRANT SELECT, UPDATE ON
+    arena402.pairings,
+    arena402.game_participants
+TO adx_settlement;
+
+GRANT SELECT, INSERT ON arena402.game_events TO adx_settlement;
 
 RESET ROLE;
 

@@ -21,6 +21,8 @@ hosted_secret_backend="$(env_value ADX_HOSTED_SECRET_BACKEND)"
 [ -n "${hosted_secret_backend}" ] || hosted_secret_backend=tencent_ssm
 enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"
 [ -n "${enable_arena_worker}" ] || enable_arena_worker=false
+enable_settlement_worker="$(env_value ADX_ENABLE_SETTLEMENT_WORKER)"
+[ -n "${enable_settlement_worker}" ] || enable_settlement_worker=false
 automatic_payments_enabled="$(env_value ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED)"
 [ -n "${automatic_payments_enabled}" ] || automatic_payments_enabled=false
 enable_testnet_signer="$(env_value ADX_ENABLE_TESTNET_SIGNER)"
@@ -39,6 +41,13 @@ case "${enable_arena_worker}" in
   true|false) ;;
   *)
     echo "ADX_ENABLE_ARENA_WORKER must be true or false." >&2
+    exit 1
+    ;;
+esac
+case "${enable_settlement_worker}" in
+  true|false) ;;
+  *)
+    echo "ADX_ENABLE_SETTLEMENT_WORKER must be true or false." >&2
     exit 1
     ;;
 esac
@@ -68,10 +77,20 @@ if [ "${automatic_payments_enabled}" = "true" ]; then
     echo "Automatic payments require ADX_ENABLE_ARENA_WORKER=true." >&2
     exit 1
   fi
+  if [ "${enable_settlement_worker}" != "true" ]; then
+    echo "Automatic payments require ADX_ENABLE_SETTLEMENT_WORKER=true." >&2
+    exit 1
+  fi
   if [ "${enable_testnet_signer}" != "true" ]; then
     echo "Automatic payments require ADX_ENABLE_TESTNET_SIGNER=true." >&2
     exit 1
   fi
+fi
+
+if [ "${enable_settlement_worker}" = "true" ] && \
+   [ "${automatic_payments_enabled}" != "true" ]; then
+  echo "Settlement Worker requires ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=true." >&2
+  exit 1
 fi
 
 if [ "${enable_testnet_signer}" = "true" ]; then
@@ -183,6 +202,9 @@ fi
 if [ "${enable_arena_worker}" = "true" ]; then
   compose --profile arena build --pull arena-worker
 fi
+if [ "${enable_settlement_worker}" = "true" ]; then
+  compose --profile settlement build --pull settlement-worker
+fi
 if [ "${enable_testnet_signer}" = "true" ]; then
   compose --profile testnet-signer build --pull wallet-signer
 fi
@@ -203,6 +225,9 @@ if [ "${enable_testnet_signer}" = "true" ]; then
 fi
 if [ "${enable_testnet_facilitator}" = "true" ]; then
   compose --profile testnet-facilitator up -d arena-facilitator
+fi
+if [ "${enable_settlement_worker}" = "true" ]; then
+  compose --profile settlement up -d settlement-worker
 fi
 
 if [ "${tls_mode}" = "ip" ]; then

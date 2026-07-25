@@ -32,12 +32,16 @@ def test_mandate_and_reservation_have_database_enforced_bounds() -> None:
     assert "CREATE UNIQUE INDEX payment_mandates_active_game_uidx" in SQL
     assert "CREATE TABLE arena402.payment_reservations" in SQL
     assert "settlement_intent_id TEXT NOT NULL UNIQUE" in SQL
+    assert "UNIQUE (game_id, round_id, buyer_participant_id)" in SQL
+    assert "status IN ('reserved', 'submitted', 'consumed', 'released')" in SQL
 
 
 def test_mandate_is_an_explicit_approval_source() -> None:
     assert "'payment_mandate'" in SQL
     assert "x402_version SMALLINT NOT NULL CHECK (x402_version = 2)" in SQL
     assert "network ~ '^eip155:[1-9][0-9]*$'" in SQL
+    assert "CREATE ROLE adx_settlement NOLOGIN" in SQL
+    assert "TO adx_settlement" in SQL
 
 
 def test_settlement_intent_freezes_token_eip712_domain() -> None:

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from arena_payments.automatic_worker import AutomaticSettlementWorker
 from arena_payments.coordinator import X402SettlementCoordinator
 from arena_payments.facilitator import FacilitatorSettlement
+from arena_payments.facilitator import FacilitatorError
 from arena_payments.repository import InMemoryPaymentRepository
 from tests.test_arena_payments import _mandate, _terms
 
@@ -61,10 +62,16 @@ class _FailingSigner:
         raise RuntimeError("signer unavailable")
 
 
+class _AmbiguousFacilitator(_Facilitator):
+    async def settle(self, **_: object) -> FacilitatorSettlement:
+        raise FacilitatorError("facilitator_unreachable", ambiguous=True)
+
+
 class _Source:
     def __init__(self, mandate) -> None:
         self.mandate = mandate
         self.statuses: list[str] = []
+        self.failures: list[str] = []
         self.claims = 0
 
     async def authorization_targets(self, *, limit: int):
@@ -84,6 +91,16 @@ class _Source:
 
     async def mark_attempt(self, *, status: str, **_: object):
         self.statuses.append(status)
+
+    async def fail_settlement(self, *, safe_error_code: str, **_: object):
+        self.failures.append(safe_error_code)
+
+
+class _UnknownPersistenceFailureSource(_Source):
+    async def mark_attempt(self, *, status: str, **_: object):
+        self.statuses.append(status)
+        if status == "unknown":
+            raise RuntimeError("attempt persistence unavailable")
 
 
 def test_worker_runs_wallet_to_x402_to_submission_without_human_gate() -> None:
@@ -111,7 +128,10 @@ def test_worker_runs_wallet_to_x402_to_submission_without_human_gate() -> None:
 
     assert asyncio.run(worker.run_once()) == 1
     assert source.statuses == ["signed", "submitting", "submitted"]
-    assert payments.mandates["mandate-1"].consumed_atomic == 40
+    assert payments.mandates["mandate-1"].reserved_atomic == 40
+    assert payments.mandates["mandate-1"].consumed_atomic == 0
+    reservation = next(iter(payments.reservations.values()))
+    assert reservation.status == "submitted"
 
 
 def test_signer_failure_releases_reserved_mandate_budget() -> None:
@@ -144,4 +164,39 @@ def test_signer_failure_releases_reserved_mandate_budget() -> None:
         raise AssertionError("expected signer failure")
 
     assert source.statuses == ["failed"]
+    assert source.failures == ["automatic_settlement_failed"]
     assert payments.mandates["mandate-1"].reserved_atomic == 0
+
+
+def test_unknown_submission_never_releases_budget_on_persistence_failure() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _UnknownPersistenceFailureSource(mandate)
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_Signer(),
+        coordinator=X402SettlementCoordinator(
+            payments=payments,
+            arena=_Arena(),
+            facilitator=_AmbiguousFacilitator(),
+        ),
+        worker_id="worker-1",
+    )
+
+    try:
+        asyncio.run(worker.run_once())
+    except RuntimeError as exc:
+        assert str(exc) == "attempt persistence unavailable"
+    else:
+        raise AssertionError("expected persistence failure")
+
+    assert source.statuses == ["signed", "submitting", "unknown"]
+    assert payments.mandates["mandate-1"].reserved_atomic == 40
+    assert next(iter(payments.reservations.values())).status == "reserved"

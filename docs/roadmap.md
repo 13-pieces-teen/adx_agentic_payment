@@ -219,11 +219,11 @@ create game
       腾讯 CAM/SSM 三身份保留为可选高安全验收。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
-- [ ] PaymentMandate 的额度、期限、范围、撤销和
-      `reserve / consume / release` 尚未实现。
-- [ ] Hosted 上线目标要求 platform-managed testnet guest wallet、入局一次授权和
-      每笔 accepted trade 自动结算；当前逐笔人工确认 bridge 只用于开发验证，
-      不能作为上线支付路径。
+- [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
+      `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
+- [x] GitHub User 永久绑定 platform-managed testnet guest wallet，一局一次
+      Mandate 授权后，每笔 accepted trade 自动结算；逐笔人工确认 bridge 仅保留
+      为开发验证工具。
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
 - [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
@@ -349,8 +349,8 @@ create game
 - [x] 实现并发 Intent 的幂等 `reserve / consume / release`；PostgreSQL 锁定
       Mandate row，`settlement_intent_id` 唯一约束关闭重复占款，累计金额由数据库
       CHECK 和事务更新双重限制。
-- [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；Mandate
-      模式仍待实现。
+- [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；同一
+      Game-scoped Mandate 可自动授权多笔互相独立的 Intent。
 - [x] 增加无公网端口的可选 testnet signer service 与 Settlement Worker，自动
       reserve、签名、x402 `/verify`/`/settle`、持久化 tx hash；`submitting` 之前
       写入 lease/ambiguity boundary，未知结果不会盲目重付。
@@ -358,7 +358,8 @@ create game
       可同时在途，但 nonce 分配/广播短暂串行，重启只以同一 nonce 恢复。
 - [x] 本地 bridge 已验证现有 SettlementSDK/Facilitator；它保留为开发验证工具，
       不作为 Hosted 上线执行路径。
-- [x] Arena Worker 可只读恢复 submitted/unknown。
+- [x] Arena Worker 只读恢复 submitted；unknown 保持额度锁定，自动按同一
+      authorization 恢复仍是上线前缺口。
 - [x] 链上确认后幂等提交现金和货物。
 - [ ] 自动路径按同一 EIP-3009 authorization 恢复 unknown；冻结两个确认，
       复核 receipt block hash、calldata 与 Transfer event 后才提交库存。
@@ -379,7 +380,8 @@ create game
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
       及独立权限。
-- [ ] 增加 Settlement Worker；首发保持单个 PostgreSQL、单个 API 和每类 Worker
+- [x] 增加独立数据库角色、无公网端口的 Settlement Worker；首发保持单个
+      PostgreSQL、单个 API 和每类 Worker
       一个实例，不增加 Redis/Kafka/Kubernetes。
 - [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
 - [ ] 现有 2C4G/70GB 生产机以 10 Hosted Agent × 5 回合为 MVP 必须通过，
@@ -419,7 +421,7 @@ create game
 
 ## 后续而非 MVP 阻塞项
 
-- 标准 HTTP x402 challenge/retry/header 和公共 Facilitator 兼容；
+- 公共第三方 Facilitator 的真实 testnet x402 V2 兼容验收；
 - TEE key custody 与 remote attestation；
 - 链上身份或 ERC-8004 reputation；
 - escrow、退款、争议、仲裁和生产手续费；

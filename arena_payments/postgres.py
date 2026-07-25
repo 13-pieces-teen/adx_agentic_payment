@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any
 
@@ -201,21 +202,50 @@ class PostgresPaymentRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                participant = await connection.fetchval(
+                context = await connection.fetchrow(
                     """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM arena402.game_participants
-                        WHERE game_id = $1
-                          AND user_id = $2
-                          AND status IN ('joined', 'active', 'settling')
-                    )
+                    SELECT
+                        wallet.chain_id AS wallet_chain_id,
+                        game.config_snapshot -> 'settlement'
+                            AS settlement_config
+                    FROM arena402.game_participants AS participant
+                    JOIN arena402.games AS game
+                      ON game.game_id = participant.game_id
+                    JOIN arena402.user_wallets AS wallet
+                      ON wallet.user_id = participant.user_id
+                     AND wallet.wallet_id = $3
+                    WHERE participant.game_id = $1
+                      AND participant.user_id = $2
+                      AND participant.status IN (
+                          'joined', 'active', 'settling'
+                      )
                     """,
                     mandate.game_id,
                     mandate.user_id,
+                    mandate.wallet_id,
                 )
-                if not participant:
+                if context is None:
                     raise MandateRejected("game_participation_required")
+                if int(context["wallet_chain_id"]) != mandate.chain_id:
+                    raise MandateRejected("mandate_wallet_chain_mismatch")
+                raw_config = context["settlement_config"]
+                settlement_config = (
+                    json.loads(raw_config)
+                    if isinstance(raw_config, str)
+                    else dict(raw_config or {})
+                )
+                if settlement_config.get("authorizationMode") == "none":
+                    raise MandateRejected("game_settlement_disabled")
+                if (
+                    int(settlement_config.get("chainId", 0))
+                    != mandate.chain_id
+                ):
+                    raise MandateRejected("mandate_game_chain_mismatch")
+                if (
+                    str(settlement_config.get("tokenAddress", "")).lower()
+                    != mandate.token_address
+                ):
+                    raise MandateRejected("mandate_game_token_mismatch")
                 invalid_payee = await connection.fetchval(
                     """
                     SELECT EXISTS (
@@ -322,10 +352,19 @@ class PostgresPaymentRepository:
               ON wallet.user_id = mandate.user_id
              AND wallet.wallet_id = mandate.wallet_id
              AND wallet.account_address = intent.buyer_account
+            LEFT JOIN arena402.payment_reservations AS reservation
+              ON reservation.settlement_intent_id =
+                 intent.settlement_intent_id
+             AND reservation.mandate_id = mandate.mandate_id
             WHERE intent.settlement_intent_id = $1
-              AND mandate.revoked_at IS NULL
-              AND mandate.valid_from <= $2
-              AND mandate.expires_at > $2
+              AND (
+                    reservation.status IN ('reserved', 'submitted')
+                    OR (
+                        mandate.revoked_at IS NULL
+                        AND mandate.valid_from <= $2
+                        AND mandate.expires_at > $2
+                    )
+              )
             """,
             settlement_intent_id,
             now,
@@ -376,7 +415,8 @@ class PostgresPaymentRepository:
                     raise MandateRejected("mandate_not_found")
                 intent = await connection.fetchrow(
                     """
-                    SELECT intent_hash, game_id, buyer_account, seller_account,
+                    SELECT intent_hash, game_id, round_id,
+                           buyer_participant_id, buyer_account, seller_account,
                            chain_id, token_address, amount_atomic
                     FROM arena402.settlement_intents
                     WHERE settlement_intent_id = $1
@@ -387,6 +427,28 @@ class PostgresPaymentRepository:
                     raise MandateRejected("frozen_intent_mismatch")
                 if mandate_row["account_address"] != terms.payer:
                     raise MandateRejected("mandate_payer_mismatch")
+                buyer_cash = await connection.fetchval(
+                    """
+                    SELECT cash_atomic
+                    FROM arena402.balances
+                    WHERE game_participant_id = $1
+                    FOR UPDATE
+                    """,
+                    intent["buyer_participant_id"],
+                )
+                if buyer_cash is None:
+                    raise MandateRejected("buyer_balance_not_found")
+                outstanding = await connection.fetchval(
+                    """
+                    SELECT COALESCE(sum(amount_atomic), 0)
+                    FROM arena402.payment_reservations
+                    WHERE buyer_participant_id = $1
+                      AND status IN ('reserved', 'submitted')
+                    """,
+                    intent["buyer_participant_id"],
+                )
+                if int(outstanding) + terms.amount_atomic > int(buyer_cash):
+                    raise MandateRejected("buyer_cash_reservation_limit")
                 self._validate_mandate_row(mandate_row, terms, now)
                 reservation_id = _identifier(
                     {
@@ -400,14 +462,18 @@ class PostgresPaymentRepository:
                     """
                     INSERT INTO arena402.payment_reservations (
                         reservation_id, mandate_id, settlement_intent_id,
+                        game_id, round_id, buyer_participant_id,
                         intent_hash, amount_atomic, payee, reserved_at
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING *
                     """,
                     reservation_id,
                     mandate_id,
                     terms.settlement_intent_id,
+                    intent["game_id"],
+                    intent["round_id"],
+                    intent["buyer_participant_id"],
                     terms.intent_hash,
                     terms.amount_atomic,
                     terms.payee,
@@ -437,6 +503,128 @@ class PostgresPaymentRepository:
             value=tx_hash.lower(),
             now=now,
         )
+
+    async def submit_reservation(
+        self,
+        reservation_id: str,
+        *,
+        tx_hash: str,
+        now: datetime,
+    ) -> PaymentReservation:
+        del now
+        normalized_tx = tx_hash.lower()
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.payment_reservations
+                    WHERE reservation_id = $1
+                    FOR UPDATE
+                    """,
+                    reservation_id,
+                )
+                if row is None:
+                    raise MandateRejected("reservation_not_found")
+                current = _reservation(row)
+                if current.status in {"submitted", "consumed"}:
+                    if current.tx_hash != normalized_tx:
+                        raise MandateRejected("reservation_tx_conflict")
+                    return current
+                if current.status != "reserved":
+                    raise MandateRejected("reservation_not_submittable")
+                updated = await connection.fetchrow(
+                    """
+                    UPDATE arena402.payment_reservations
+                    SET status = 'submitted', tx_hash = $2
+                    WHERE reservation_id = $1
+                    RETURNING *
+                    """,
+                    reservation_id,
+                    normalized_tx,
+                )
+                return _reservation(updated)
+
+    async def reconcile_finalized_reservations(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> int:
+        """Finalize submitted accounting only after Arena has chain evidence."""
+        if not 1 <= limit <= 500:
+            raise ValueError("reservation_reconcile_limit_out_of_range")
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    """
+                    SELECT reservation.reservation_id,
+                           reservation.mandate_id,
+                           reservation.amount_atomic,
+                           intent.status
+                    FROM arena402.payment_reservations AS reservation
+                    JOIN arena402.settlement_intents AS intent
+                      ON intent.settlement_intent_id =
+                         reservation.settlement_intent_id
+                    WHERE reservation.status = 'submitted'
+                      AND intent.status IN (
+                          'chain_confirmed_uncommitted',
+                          'inventory_committed',
+                          'reverted'
+                      )
+                    ORDER BY reservation.reserved_at,
+                             reservation.reservation_id
+                    FOR UPDATE OF reservation SKIP LOCKED
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+                for row in rows:
+                    if row["status"] == "reverted":
+                        await connection.execute(
+                            """
+                            UPDATE arena402.payment_reservations
+                            SET status = 'released',
+                                tx_hash = NULL,
+                                release_reason = 'chain_transaction_reverted',
+                                finalized_at = $2
+                            WHERE reservation_id = $1
+                            """,
+                            row["reservation_id"],
+                            now,
+                        )
+                        await connection.execute(
+                            """
+                            UPDATE arena402.payment_mandates
+                            SET reserved_atomic = reserved_atomic - $2
+                            WHERE mandate_id = $1
+                            """,
+                            row["mandate_id"],
+                            row["amount_atomic"],
+                        )
+                    else:
+                        await connection.execute(
+                            """
+                            UPDATE arena402.payment_reservations
+                            SET status = 'consumed', finalized_at = $2
+                            WHERE reservation_id = $1
+                            """,
+                            row["reservation_id"],
+                            now,
+                        )
+                        await connection.execute(
+                            """
+                            UPDATE arena402.payment_mandates
+                            SET reserved_atomic = reserved_atomic - $2,
+                                consumed_atomic = consumed_atomic + $2
+                            WHERE mandate_id = $1
+                            """,
+                            row["mandate_id"],
+                            row["amount_atomic"],
+                        )
+                return len(rows)
 
     async def release_reservation(
         self,
@@ -531,7 +719,8 @@ class PostgresPaymentRepository:
                     WHERE revoked_at IS NULL
                       AND expires_at > clock_timestamp()) AS active_mandates,
                 (SELECT count(*) FROM arena402.payment_reservations
-                    WHERE status = 'reserved') AS reserved_payments,
+                    WHERE status IN ('reserved', 'submitted'))
+                    AS reserved_payments,
                 (SELECT count(*) FROM arena402.settlement_intents
                     WHERE status = 'submitted') AS submitted_payments
             """
@@ -629,7 +818,12 @@ class PostgresPaymentRepository:
                             else "reservation_release_conflict"
                         )
                     return current
-                if current.status != "reserved":
+                allowed = (
+                    {"reserved", "submitted"}
+                    if action == "consume"
+                    else {"reserved"}
+                )
+                if current.status not in allowed:
                     raise MandateRejected(
                         "reservation_not_consumable"
                         if action == "consume"

@@ -2,7 +2,7 @@
 
 ## 2026-07-25 implementation update
 
-The following single-payment foundation is now implemented:
+The following payment foundation is implemented:
 
 - an accepted negotiation can freeze exactly one immutable
   `arena402.settlement-intent.v1` when the Game explicitly selects
@@ -36,18 +36,14 @@ the confirmation and inventory-commit transaction, and a historical Injective
 testnet transfer has been matched through the read-only recovery path. No new
 state-changing transaction was broadcast as part of this milestone.
 
-The following remain outside the implemented foundation:
+The second-stage backend now also implements permanent GitHub User-to-wallet
+binding, bounded and revocable Game-scoped PaymentMandates, x402 V2
+challenge/response headers, an isolated unattended CSV testnet signer, and a
+dedicated non-public Settlement Worker. A newly approved live testnet
+transaction against the currently deployed services remains outstanding.
 
-- a bounded, revocable multi-payment `PaymentMandate` with
-  `reserve / consume / release`;
-- an unattended isolated guest signer and its production IAM boundary;
-- standard HTTP x402 challenge, headers, paid retry, or public Facilitator
-  compatibility;
-- a newly approved live testnet transaction proving the complete path against
-  the current deployed services.
-
-> 状态：单笔 EIP-3009 游戏接线已实现；PaymentMandate、无人值守 signer 与新鲜
-> live testnet 端到端验收尚未完成。
+> 状态：钱包、PaymentMandate、x402 V2 与无人值守 Settlement Worker 已实现并
+> 默认关闭真实广播；新鲜 live testnet 端到端验收尚未完成。
 >
 > 本文取代已归档的 RFQ/数字交付结算方案，只定义“协商被接受”到“链上确认后
 > 转移游戏货物”的边界。Settlement 模块当前能力和验证证据仍以
@@ -60,8 +56,8 @@ The following remain outside the implemented foundation:
 The per-Intent human confirmation bridge remains a development verifier, not
 the Hosted production payment path. The approved testnet launch target is:
 
-- each Hosted Game Participant receives an isolated platform-managed
-  `sandbox_guest` wallet;
+- each GitHub User is permanently bound to one platform-managed
+  `sandbox_guest` testnet wallet; later logins and Games reuse that wallet;
 - joining the Game once confirms a bounded Game-scoped PaymentMandate;
 - every accepted trade is reserved, signed, submitted, confirmed, and committed
   automatically without a per-trade user action;
@@ -71,8 +67,8 @@ the Hosted production payment path. The approved testnet launch target is:
 - the Arena Worker remains non-signing and owns read-only confirmation plus the
   idempotent inventory commit;
 - reservation is serialized by Mandate and buyer balance locks plus a unique
-  buyer-per-Round constraint; mandate usage is derived from reservation rows
-  rather than duplicated aggregate counters;
+  buyer-per-Round constraint; reservation rows are the idempotency record and
+  transaction-maintained Mandate counters provide bounded allocation;
 - an unknown submission is recovered or resent only with the same deterministic
   EIP-3009 authorization, and inventory waits for two confirmations plus exact
   calldata and `Transfer` event verification;
@@ -85,8 +81,8 @@ the Hosted production payment path. The approved testnet launch target is:
 - the 2 vCPU / 4 GB / 70 GB MVP target is one active Game with 10 Hosted Agents,
   a hard cap of 12, bounded Worker waves, and platform testnet wallets only.
 
-This target deliberately does not add a user-wallet unattended-signing path,
-standard HTTP x402, escrow, Redis, Kafka, or multi-Game scheduling. The
+This target deliberately does not add externally supplied user wallets,
+escrow, Redis, Kafka, or multi-Game scheduling. The
 implementation and deployment sequence is maintained in
 [`hosted-arena-production-runbook.md`](hosted-arena-production-runbook.md).
 Until that plan passes its live acceptance, the implementation status below

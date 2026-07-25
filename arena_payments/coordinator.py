@@ -88,7 +88,7 @@ class X402SettlementCoordinator:
             now=clock,
         )
         requirement = self._protocol.payment_required(terms)["accepts"][0]
-        if reservation.status == "consumed":
+        if reservation.status in {"submitted", "consumed"}:
             return X402ExecutionResult(
                 success=True,
                 status="submitted",
@@ -159,7 +159,7 @@ class X402SettlementCoordinator:
                 authorization_nonce=nonce,
                 approved_intent_hash=terms.intent_hash,
             )
-            await self._payments.consume_reservation(
+            await self._payments.submit_reservation(
                 reservation.reservation_id,
                 tx_hash=settled.transaction,
                 now=clock,

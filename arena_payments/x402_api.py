@@ -13,9 +13,10 @@ from arena_game.postgres import (
     PostgresPawnhouseRepository,
 )
 
-from .coordinator import X402SettlementCoordinator
+from .executor import X402SettlementExecutor
 from .models import PaymentMandate, SettlementTerms
 from .repository import MandateRejected
+from .service import ArenaPaymentService
 from .x402 import (
     X402ProtocolError,
     decode_x402_header,
@@ -61,7 +62,7 @@ def create_x402_settlement_router(
     *,
     arena: PostgresPawnhouseRepository,
     mandates: SettlementMandateResolver,
-    coordinator: X402SettlementCoordinator,
+    coordinator: X402SettlementExecutor,
     public_api_url: str,
 ) -> APIRouter:
     router = APIRouter()
@@ -86,7 +87,7 @@ def create_x402_settlement_router(
             terms = _terms(intent, base_url)
         except X402ProtocolError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        required = coordinator.payment_required(terms)
+        required = ArenaPaymentService.payment_required(terms)
         if payment_signature is None:
             return JSONResponse(
                 status_code=402,

@@ -68,6 +68,14 @@ class PaymentRepository(Protocol):
         now: datetime,
     ) -> PaymentReservation: ...
 
+    async def submit_reservation(
+        self,
+        reservation_id: str,
+        *,
+        tx_hash: str,
+        now: datetime,
+    ) -> PaymentReservation: ...
+
     async def release_reservation(
         self,
         reservation_id: str,
@@ -242,7 +250,7 @@ class InMemoryPaymentRepository:
                 if reservation.tx_hash != tx_hash.lower():
                     raise MandateRejected("reservation_tx_conflict")
                 return copy.deepcopy(reservation)
-            if reservation.status != "reserved":
+            if reservation.status not in {"reserved", "submitted"}:
                 raise MandateRejected("reservation_not_consumable")
             consumed = replace(
                 reservation,
@@ -257,6 +265,31 @@ class InMemoryPaymentRepository:
             )
             self.reservations[reservation_id] = consumed
             return copy.deepcopy(consumed)
+
+    async def submit_reservation(
+        self,
+        reservation_id: str,
+        *,
+        tx_hash: str,
+        now: datetime,
+    ) -> PaymentReservation:
+        del now
+        async with self._lock:
+            reservation = self._reservation(reservation_id)
+            normalized_tx = tx_hash.lower()
+            if reservation.status in {"submitted", "consumed"}:
+                if reservation.tx_hash != normalized_tx:
+                    raise MandateRejected("reservation_tx_conflict")
+                return copy.deepcopy(reservation)
+            if reservation.status != "reserved":
+                raise MandateRejected("reservation_not_submittable")
+            submitted = replace(
+                reservation,
+                status="submitted",
+                tx_hash=normalized_tx,
+            )
+            self.reservations[reservation_id] = submitted
+            return copy.deepcopy(submitted)
 
     async def release_reservation(
         self,

@@ -2218,6 +2218,81 @@ class PostgresPawnhouseRepository:
             submission_source="sandbox_guest",
         )
 
+    async def record_automatic_failure(
+        self,
+        *,
+        settlement_intent_id: str,
+        safe_error_code: str,
+    ) -> None:
+        if not safe_error_code or len(safe_error_code) > 100:
+            raise PawnhouseRepositoryError("invalid_safe_error_code")
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                intent = await connection.fetchrow(
+                    """
+                    SELECT *
+                    FROM arena402.settlement_intents
+                    WHERE settlement_intent_id = $1
+                    FOR UPDATE
+                    """,
+                    settlement_intent_id,
+                )
+                if intent is None:
+                    raise PawnhouseRepositoryError(
+                        "settlement_intent_not_found"
+                    )
+                if intent["status"] == "authorization_failed":
+                    return
+                if intent["status"] != "authorization_requested":
+                    raise PawnhouseRepositoryError(
+                        "settlement_not_awaiting_authorization"
+                    )
+                await connection.execute(
+                    """
+                    UPDATE arena402.settlement_intents
+                    SET status = 'authorization_failed',
+                        safe_error_code = $2,
+                        completed_at = clock_timestamp()
+                    WHERE settlement_intent_id = $1
+                    """,
+                    settlement_intent_id,
+                    safe_error_code,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.pairings
+                    SET status = 'settlement_failed',
+                        completed_at = clock_timestamp()
+                    WHERE pairing_id = $1
+                    """,
+                    intent["pairing_id"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.game_participants
+                    SET status = 'active'
+                    WHERE game_participant_id = ANY($1::text[])
+                      AND status = 'settling'
+                    """,
+                    [
+                        intent["buyer_participant_id"],
+                        intent["seller_participant_id"],
+                    ],
+                )
+                await self._event(
+                    connection,
+                    game_id=intent["game_id"],
+                    round_id=intent["round_id"],
+                    event_type="settlement.authorization_failed",
+                    source_key=f"{settlement_intent_id}:authorization_failed",
+                    public_payload={
+                        "settlementIntentId": settlement_intent_id,
+                        "status": "authorization_failed",
+                        "safeErrorCode": safe_error_code,
+                    },
+                )
+
     async def record_chain_confirmation(
         self,
         *,

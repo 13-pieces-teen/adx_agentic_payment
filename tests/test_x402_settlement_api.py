@@ -148,4 +148,6 @@ def test_retry_with_payment_signature_returns_payment_response() -> None:
     assert settled["success"] is True
     assert settled["transaction"] == "0x" + "55" * 32
     assert arena.approvals == arena.submissions == 1
-    assert payments.mandates["mandate-1"].consumed_atomic == 40
+    assert payments.mandates["mandate-1"].reserved_atomic == 40
+    assert payments.mandates["mandate-1"].consumed_atomic == 0
+    assert next(iter(payments.reservations.values())).status == "submitted"
