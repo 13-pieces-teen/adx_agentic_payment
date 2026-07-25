@@ -70,6 +70,32 @@ def test_mandate_requires_timezone_aware_window() -> None:
         )
 
 
+def test_dynamic_same_game_payee_rule_requires_join_authorization() -> None:
+    mandate = PaymentMandate(
+        mandate_id="mandate-dynamic",
+        user_id="user-1",
+        wallet_id="agent-wallet-0001",
+        game_id="game-1",
+        chain_id=1439,
+        token_address=TOKEN,
+        limits=MandateLimits(
+            max_per_payment_atomic=50,
+            max_cumulative_atomic=100,
+        ),
+        allowed_payees=(),
+        valid_from=NOW - timedelta(minutes=1),
+        expires_at=NOW + timedelta(hours=1),
+        allowed_payee_rule="same_game_settlement_account",
+        join_authorization_id="join-auth-1",
+    )
+
+    assert mandate.allowed_payees == ()
+    with pytest.raises(ValueError, match="invalid_dynamic_payee_rule"):
+        replace(mandate, join_authorization_id=None)
+    with pytest.raises(ValueError, match="invalid_dynamic_payee_rule"):
+        replace(mandate, allowed_payees=(SELLER,))
+
+
 def _terms(intent_id: str = "intent-1", amount: int = 40) -> SettlementTerms:
     return SettlementTerms(
         settlement_intent_id=intent_id,

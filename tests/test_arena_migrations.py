@@ -27,6 +27,12 @@ CURRENT_GAME_SQL_PATH = (
     / "migrations"
     / "024_arena_current_game_projection.sql"
 )
+CURRENT_GAME_JOIN_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "027_current_game_join_readiness.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -350,3 +356,17 @@ def test_current_game_migration_has_single_pointer_and_product_limits():
     assert "max_participants BETWEEN start_threshold AND 12" in sql
     assert "REFERENCES arena402.games(game_id)" in sql
     assert "GRANT SELECT ON arena402.current_game TO adx_arena_api" in sql
+
+
+def test_current_game_join_migration_freezes_readiness_and_dynamic_payees():
+    sql = CURRENT_GAME_JOIN_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE arena402.join_authorizations" in sql
+    assert "join_authorizations_active_user_game_uidx" in sql
+    assert "same_game_settlement_account" in sql
+    assert "cardinality(allowed_payees) = 0" in sql
+    assert "ADD COLUMN payment_mandate_id" in sql
+    assert "readiness IN ('pending', 'ready', 'withdrawn')" in sql
+    assert "payment_mandate_id IS NOT NULL" in sql
+    assert "portfolio_locked_at IS NOT NULL" in sql
+    assert "GRANT SELECT, INSERT, UPDATE ON" in sql

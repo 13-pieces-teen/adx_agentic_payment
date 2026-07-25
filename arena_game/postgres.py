@@ -3624,12 +3624,14 @@ class PostgresPawnhouseRepository:
                 participant.agent_id,
                 coalesce(agent.name, participant.agent_id) AS display_name,
                 participant.runtime_kind,
+                participant.readiness,
                 participant.joined_at
             FROM arena402.game_participants AS participant
             LEFT JOIN public.arena_agents AS agent
               ON agent.agent_id = participant.agent_id
             WHERE participant.game_id = $1
               AND participant.status <> 'cancelled'
+              AND participant.readiness <> 'withdrawn'
             ORDER BY participant.joined_at, participant.game_participant_id
             """,
             game["game_id"],
@@ -3645,6 +3647,7 @@ class PostgresPawnhouseRepository:
                         WHERE game_id = $1
                           AND user_id = $2
                           AND status <> 'cancelled'
+                          AND readiness <> 'withdrawn'
                     )
                     """,
                     game["game_id"],
@@ -3662,16 +3665,13 @@ class PostgresPawnhouseRepository:
         else:
             raise PawnhouseRepositoryError("current_game_not_found")
 
-        # Existing participation rows predate the v2 Join authorization and
-        # mandate checks. Keep them visible but fail closed until that workflow
-        # records an explicit Ready projection.
         public_participants = [
             {
                 "participantId": str(row["game_participant_id"]),
                 "agentId": str(row["agent_id"]),
                 "displayName": str(row["display_name"]),
                 "runtimeKind": str(row["runtime_kind"]),
-                "readiness": "PENDING",
+                "readiness": str(row["readiness"]).upper(),
                 "joinedAt": row["joined_at"].isoformat(),
             }
             for row in participants
@@ -3680,7 +3680,11 @@ class PostgresPawnhouseRepository:
             "game": {
                 "gameId": str(game["game_id"]),
                 "status": status,
-                "readyCount": 0,
+                "readyCount": sum(
+                    1
+                    for participant in public_participants
+                    if participant["readiness"] == "READY"
+                ),
                 "startThreshold": int(game["start_threshold"]),
                 "maxParticipants": int(game["max_participants"]),
                 "roundCount": int(game["round_count"]),

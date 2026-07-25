@@ -68,6 +68,9 @@ class MandateLimits:
             raise ValueError("invalid_cumulative_limit")
 
 
+AllowedPayeeRule = Literal["same_game_settlement_account"]
+
+
 @dataclass(frozen=True, slots=True)
 class PaymentMandate:
     mandate_id: str
@@ -83,6 +86,8 @@ class PaymentMandate:
     reserved_atomic: int = 0
     consumed_atomic: int = 0
     revoked_at: datetime | None = None
+    allowed_payee_rule: AllowedPayeeRule | None = None
+    join_authorization_id: str | None = None
 
     def __post_init__(self) -> None:
         if not all((self.mandate_id, self.user_id, self.wallet_id, self.game_id)):
@@ -91,10 +96,18 @@ class PaymentMandate:
             raise ValueError("invalid_chain_id")
         object.__setattr__(self, "token_address", _address(self.token_address))
         normalized_payees = tuple(_address(item) for item in self.allowed_payees)
-        if not normalized_payees or len(set(normalized_payees)) != len(
-            normalized_payees
-        ):
-            raise ValueError("invalid_allowed_payees")
+        if self.allowed_payee_rule is None:
+            if (
+                not normalized_payees
+                or len(set(normalized_payees)) != len(normalized_payees)
+                or self.join_authorization_id is not None
+            ):
+                raise ValueError("invalid_allowed_payees")
+        elif self.allowed_payee_rule == "same_game_settlement_account":
+            if normalized_payees or not self.join_authorization_id:
+                raise ValueError("invalid_dynamic_payee_rule")
+        else:  # pragma: no cover - Literal protects static callers.
+            raise ValueError("invalid_dynamic_payee_rule")
         object.__setattr__(self, "allowed_payees", normalized_payees)
         if self.expires_at <= self.valid_from:
             raise ValueError("invalid_mandate_window")

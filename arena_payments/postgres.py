@@ -46,6 +46,8 @@ def _mandate(row: Any) -> PaymentMandate:
         reserved_atomic=int(row["reserved_atomic"]),
         consumed_atomic=int(row["consumed_atomic"]),
         revoked_at=row["revoked_at"],
+        allowed_payee_rule=row.get("allowed_payee_rule"),
+        join_authorization_id=row.get("join_authorization_id"),
     )
 
 
@@ -449,7 +451,38 @@ class PostgresPaymentRepository:
                 )
                 if int(outstanding) + terms.amount_atomic > int(buyer_cash):
                     raise MandateRejected("buyer_cash_reservation_limit")
-                self._validate_mandate_row(mandate_row, terms, now)
+                payee_allowed = terms.payee in mandate_row["allowed_payees"]
+                if (
+                    mandate_row.get("allowed_payee_rule")
+                    == "same_game_settlement_account"
+                ):
+                    payee_allowed = bool(
+                        await connection.fetchval(
+                            """
+                            SELECT EXISTS (
+                                SELECT 1
+                                FROM arena402.participant_settlement_accounts
+                                    AS account
+                                JOIN arena402.game_participants AS participant
+                                  ON participant.game_participant_id =
+                                     account.game_participant_id
+                                 AND participant.game_id = account.game_id
+                                WHERE account.game_id = $1
+                                  AND account.account_address = $2
+                                  AND participant.readiness = 'ready'
+                                  AND participant.status IN ('active', 'settling')
+                            )
+                            """,
+                            terms.game_id,
+                            terms.payee,
+                        )
+                    )
+                self._validate_mandate_row(
+                    mandate_row,
+                    terms,
+                    now,
+                    payee_allowed=payee_allowed,
+                )
                 reservation_id = _identifier(
                     {
                         "kind": "arena402.payment-reservation.v1",
@@ -897,7 +930,13 @@ class PostgresPaymentRepository:
         )
 
     @staticmethod
-    def _validate_mandate_row(row: Any, terms: SettlementTerms, now: datetime) -> None:
+    def _validate_mandate_row(
+        row: Any,
+        terms: SettlementTerms,
+        now: datetime,
+        *,
+        payee_allowed: bool,
+    ) -> None:
         if row["revoked_at"] is not None:
             raise MandateRejected("mandate_revoked")
         if now < row["valid_from"]:
@@ -910,7 +949,7 @@ class PostgresPaymentRepository:
             raise MandateRejected("mandate_chain_mismatch")
         if row["token_address"] != terms.token_address:
             raise MandateRejected("mandate_token_mismatch")
-        if terms.payee not in row["allowed_payees"]:
+        if not payee_allowed:
             raise MandateRejected("mandate_payee_not_allowed")
         if terms.amount_atomic > int(row["max_per_payment_atomic"]):
             raise MandateRejected("mandate_per_payment_limit")

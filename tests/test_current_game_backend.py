@@ -34,6 +34,7 @@ class _Pool:
                 "agent_id": "agent-1",
                 "display_name": "Merchant Fox",
                 "runtime_kind": "hosted",
+                "readiness": "ready",
                 "joined_at": datetime(
                     2026,
                     7,
@@ -118,7 +119,7 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
         "game": {
             "gameId": "game-current",
             "status": "WAITING",
-            "readyCount": 0,
+            "readyCount": 1,
             "startThreshold": 10,
             "maxParticipants": 12,
             "roundCount": 5,
@@ -131,7 +132,7 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
                     "agentId": "agent-1",
                     "displayName": "Merchant Fox",
                     "runtimeKind": "hosted",
-                    "readiness": "PENDING",
+                    "readiness": "READY",
                     "joinedAt": "2026-07-25T10:00:00+00:00",
                 }
             ],
