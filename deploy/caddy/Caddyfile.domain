@@ -12,12 +12,8 @@
 		output stdout
 		format filter {
 			request>uri replace REDACTED
-			request>headers>Authorization replace REDACTED
-			request>headers>Cookie replace REDACTED
-			request>headers>X-Vercel-Proxy-Signature replace REDACTED
-			request>headers>X-Vercel-Proxy-Signature-Ts replace REDACTED
-			resp_headers>Location replace REDACTED
-			resp_headers>Set-Cookie replace REDACTED
+			request>headers delete
+			resp_headers delete
 			wrap json
 		}
 	}
