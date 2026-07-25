@@ -1,7 +1,8 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
 > 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与 1–10 回合游戏编排已完成，
-> 生产 Tencent SSM/CAM、Connector 游戏 Adapter 和完整生产 E2E 待验收；
+> Connector typed Task/Result 与 Result Sink 基础接线已完成；Local identity/session/
+> task dispatcher、mixed-Runtime 编排、生产 Tencent SSM/CAM 和完整生产 E2E 待验收；
 > DeepSeek/OpenAI-compatible Provider 已在本地真实链路验证
 > 最后更新：2026-07-25
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
@@ -351,7 +352,7 @@ Hosted Runtime 最终需要真实 Game/Participant/Round 外键。当前 Phase 1
 | Phase 3 | Fake/真实 Provider Adapter 与结构化输出 | Fake、DeepSeek/OpenAI-compatible Adapter、PromptBuilder、DirectModelDriver 和 Worker 接线已实现；真实 Key 验收待生产部署 |
 | Phase 4 | Hosted Agent API、创建 UI 与 readiness | 控制面、幂等迁移、受门控 API、生产 PostgreSQL 组合与最小 UI 壳已实现 |
 | Phase 5 | Durable Worker、deadline、retry 与恢复 | PostgreSQL queue/lease、Attempt、Finalizer 与独立 Worker 已实现；真实服务器重启验收待完成 |
-| Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | Hosted/rule 已完成，并可自动执行 1–10 回合；Connector Adapter 待实现 |
+| Phase 6 | Arena Runtime Adapter、Game Agent 与公开/私有投影 | Hosted/rule 已完成，并可自动执行 1–10 回合；Connector typed adapter、durable Result 与 Sink 基础接线已完成，identity/session/task dispatcher 和 mixed-Runtime 编排待实现 |
 | Phase 7 | PaymentMandate/Settlement 接线 | 单笔 EIP-3009 意图/恢复/确认后库存提交已实现；通用 Mandate 与新鲜交易待完成 |
 | Phase 8 | 单机部署、真实 E2E 与负载校准 | Compose/资源限制已实现；真实 SSM/Provider/支付和负载校准待完成 |
 | Phase 9 | Native A2A、Agent Studio、多 Runtime | Post-MVP |
@@ -1085,8 +1086,9 @@ Arena negotiation turn
   -> writes public negotiation message
 ```
 
-Connector 必须新增唯一 terminal structured result；不能从任意 `runtime.message` 或 stdout
-推断动作。
+Connector 已新增唯一 terminal structured result；只有 Runtime driver 明确识别的
+Claude/Codex terminal frame 会进入严格 action parser，不能从普通 `runtime.message`
+或 stdout 推断动作。
 
 ### 13.4 PublicOutputPolicy
 
@@ -1127,10 +1129,10 @@ Owner-only：
 ### 13.6 退出门槛
 
 - [x] Hosted 与 Rule Agent 接收同一版本 payload；
-- [ ] Local Connector adapter 使用同一业务 payload；
+- [x] Local Connector adapter 使用同一业务 payload；
 - [x] 一个用户每局只有一个参与 Agent；
 - [x] Runtime success 不直接写 pool/inventory/payment；
-- [ ] dispatch ACK、Result submit、Arena apply ACK 三个状态可独立恢复；
+- [x] dispatch ACK、Result submit、Arena apply ACK 三个状态可独立恢复；
 - [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`；
 - [x] `accept` 只进入 pending settlement；
 - [x] secret/PII/strategy 明显片段触发中性模板，原 message 不进入任何持久化或日志；

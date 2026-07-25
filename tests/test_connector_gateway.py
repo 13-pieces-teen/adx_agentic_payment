@@ -44,6 +44,46 @@ def _enroll(client: TestClient):
     return pairing, credential
 
 
+def _arena_decide_task() -> dict:
+    return {
+        "taskId": "task-arena-decide-1",
+        "kind": "arena.decide",
+        "schemaVersion": "arena.agent-task.v1",
+        "gameId": "game-1",
+        "roundId": "round-1",
+        "gameAgentId": "game-agent-1",
+        "negotiationId": None,
+        "deadlineAt": "2030-07-25T12:00:30Z",
+        "idempotencyKey": "game-1:round-1:game-agent-1:decide",
+        "inputHash": "sha256:" + ("0" * 64),
+        "input": {
+            "phase": "decide",
+            "gameId": "game-1",
+            "roundId": "round-1",
+            "roundIndex": 1,
+            "cash": "20.000000",
+            "holdings": {"grain": 1},
+            "market": {"grain": "2.000000"},
+            "events": [],
+            "reputation": {"failedNegotiations": 0},
+            "limits": {
+                "allowedActions": ["buy", "sell", "pass"],
+                "allowedGoods": ["grain"],
+            },
+            "completedActions": [],
+            "completedTrades": [],
+            "goods": [
+                {
+                    "good": "grain",
+                    "fixedQuantity": 1,
+                    "priceDecimalPlaces": 6,
+                }
+            ],
+            "deadlineAt": "2030-07-25T12:00:30Z",
+        },
+    }
+
+
 def test_unauthenticated_connector_control_plane_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("ADX_CONNECTOR_UNSAFE_DEMO", raising=False)
     client = TestClient(create_app())
@@ -490,6 +530,186 @@ async def _enrolled_service():
         credential["device_id"], "codex-default", None, None
     )
     return service, credential, binding
+
+
+def test_typed_arena_task_dispatch_is_accepted_without_free_prompt():
+    async def scenario():
+        service, credential, binding = await _enrolled_service()
+        device_id = credential["device_id"]
+        binding_id = binding["binding_id"]
+        start = await service.queue_command(
+            binding_id,
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "start-arena-session",
+            300,
+        )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": start["command_id"],
+                "status": "running",
+                "result": {"session_id": "arena-session-1"},
+            },
+        )
+
+        task = _arena_decide_task()
+        dispatch = await service.queue_command(
+            binding_id,
+            CommandAction.TASK_DISPATCH,
+            {"session_id": "arena-session-1", "task": task},
+            task["idempotencyKey"],
+            300,
+        )
+
+        assert dispatch["status"] == "queued"
+        assert dispatch["payload"] == {
+            "session_id": "arena-session-1",
+            "task": task,
+        }
+        assert "prompt" not in dispatch["payload"]
+
+    asyncio.run(scenario())
+
+
+def test_terminal_agent_task_result_is_received_separately_from_command_ack():
+    async def scenario():
+        service, credential, binding = await _enrolled_service()
+        device_id = credential["device_id"]
+        binding_id = binding["binding_id"]
+        start = await service.queue_command(
+            binding_id,
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "start-arena-result-session",
+            300,
+        )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": start["command_id"],
+                "status": "running",
+                "result": {"session_id": "arena-result-session"},
+            },
+        )
+        task = _arena_decide_task()
+        dispatch = await service.queue_command(
+            binding_id,
+            CommandAction.TASK_DISPATCH,
+            {"session_id": "arena-result-session", "task": task},
+            task["idempotencyKey"],
+            300,
+        )
+
+        receipt = await service.submit_agent_task_result(
+            device_id,
+            {
+                "binding_id": binding_id,
+                "binding_epoch": binding["binding_epoch"],
+                "result": {
+                    "schemaVersion": "arena.agent-result.v1",
+                    "resultId": "result-arena-decide-1",
+                    "taskId": task["taskId"],
+                    "status": "succeeded",
+                    "action": {"action": "buy", "good": "grain"},
+                },
+            },
+        )
+
+        assert receipt["disposition"] == "accepted"
+        assert receipt["task_id"] == task["taskId"]
+        commands = await service.list_commands(binding_id)
+        current = next(
+            item for item in commands if item["command_id"] == dispatch["command_id"]
+        )
+        assert current["status"] == "queued"
+        assert current["result"] is None
+
+    asyncio.run(scenario())
+
+
+def test_websocket_accepts_agent_task_result_as_its_own_message_type():
+    client = TestClient(create_app(connector_demo_enabled=True))
+    _, credential = _enroll(client)
+    service = client.app.state.connector_gateway
+
+    async def setup():
+        await service.update_inventory(
+            credential["device_id"],
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex CLI",
+                    executable_path="codex",
+                    capabilities=[action.value for action in CommandAction],
+                )
+            ],
+        )
+        binding = await service.create_binding(
+            credential["device_id"],
+            "codex-default",
+            None,
+            None,
+        )
+        start = await service.queue_command(
+            binding["binding_id"],
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "start-arena-websocket-session",
+            300,
+        )
+        await service.acknowledge_command(
+            credential["device_id"],
+            {
+                "command_id": start["command_id"],
+                "status": "running",
+                "result": {"session_id": "arena-websocket-session"},
+            },
+        )
+        task = _arena_decide_task()
+        await service.queue_command(
+            binding["binding_id"],
+            CommandAction.TASK_DISPATCH,
+            {"session_id": "arena-websocket-session", "task": task},
+            task["idempotencyKey"],
+            300,
+        )
+        return binding, task
+
+    binding, task = asyncio.run(setup())
+    with client.websocket_connect(
+        f"/api/connectors/ws?device_id={credential['device_id']}",
+        headers={"Authorization": f"Device {credential['device_token']}"},
+    ) as socket:
+        assert socket.receive_json()["type"] == "welcome"
+        delivered = socket.receive_json()
+        assert delivered["type"] == "command"
+        assert delivered["payload"]["payload"]["task"]["taskId"] == task["taskId"]
+
+        socket.send_json(
+            {
+                "type": "agent_task.result",
+                "protocol_version": "1.0",
+                "message_id": "agent-task-result-1",
+                "payload": {
+                    "binding_id": binding["binding_id"],
+                    "binding_epoch": binding["binding_epoch"],
+                    "result": {
+                        "schemaVersion": "arena.agent-result.v1",
+                        "resultId": "result-arena-decide-1",
+                        "taskId": task["taskId"],
+                        "status": "succeeded",
+                        "action": {"action": "buy", "good": "grain"},
+                    },
+                },
+            }
+        )
+        acknowledged = socket.receive_json()
+
+        assert acknowledged["type"] == "agent_task.result.ack"
+        assert acknowledged["payload"]["disposition"] == "accepted"
+        assert acknowledged["payload"]["task_id"] == task["taskId"]
 
 
 def test_single_sender_and_revocation_cover_every_authenticated_socket():

@@ -34,6 +34,7 @@ type Scanner interface {
 type ReceiptStore interface {
 	LookupReceipt(string) (protocol.CommandAck, bool, error)
 	SaveReceipt(string, protocol.CommandAck) error
+	SaveAgentTaskResult(protocol.AgentTaskResultEnvelope) error
 }
 
 type session struct {
@@ -59,6 +60,8 @@ type task struct {
 	cancel      context.CancelFunc
 	context     context.Context
 	cancelled   atomic.Bool
+	arenaTask   *arenaTaskEnvelope
+	arenaAction *arenaActionCapture
 }
 
 type CommandUpdate struct {
@@ -79,6 +82,7 @@ type Supervisor struct {
 	sessions           map[string]*session
 	events             chan protocol.RuntimeEvent
 	acks               chan CommandUpdate
+	results            chan protocol.AgentTaskResultEnvelope
 }
 
 type HandleResult struct {
@@ -94,10 +98,11 @@ type startSessionPayload struct {
 }
 
 type dispatchTaskPayload struct {
-	TaskID         string `json:"task_id"`
-	RequestID      string `json:"request_id,omitempty"`
-	Prompt         string `json:"prompt"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	TaskID         string          `json:"task_id"`
+	RequestID      string          `json:"request_id,omitempty"`
+	Prompt         string          `json:"prompt"`
+	TimeoutSeconds int             `json:"timeout_seconds,omitempty"`
+	Task           json.RawMessage `json:"task,omitempty"`
 }
 
 type cancelTaskPayload struct {
@@ -137,6 +142,7 @@ func New(
 		sessions:           make(map[string]*session),
 		events:             make(chan protocol.RuntimeEvent, 8192),
 		acks:               make(chan CommandUpdate, 1024),
+		results:            make(chan protocol.AgentTaskResultEnvelope, 1024),
 	}
 	s.replaceInventory(inventory)
 	return s, nil
@@ -148,6 +154,10 @@ func (s *Supervisor) Events() <-chan protocol.RuntimeEvent {
 
 func (s *Supervisor) Acks() <-chan CommandUpdate {
 	return s.acks
+}
+
+func (s *Supervisor) Results() <-chan protocol.AgentTaskResultEnvelope {
+	return s.results
 }
 
 func (s *Supervisor) RequeueAck(update CommandUpdate) {
@@ -355,18 +365,53 @@ func (s *Supervisor) dispatchTask(command protocol.Command, trackAck bool) proto
 	if err := json.Unmarshal(command.Payload, &payload); err != nil {
 		return protocol.NewAck(command, "rejected", "invalid_payload", err.Error(), nil)
 	}
-	if payload.TaskID == "" {
-		payload.TaskID = payload.RequestID
-	}
-	if payload.TaskID == "" || strings.TrimSpace(payload.Prompt) == "" {
-		return protocol.NewAck(command, "rejected", "invalid_payload", "task_id and prompt are required", nil)
-	}
+	typedArenaTask := len(payload.Task) != 0
+	var arenaTask *arenaTaskEnvelope
 	timeout := defaultTimeout
-	if payload.TimeoutSeconds != 0 {
-		timeout = time.Duration(payload.TimeoutSeconds) * time.Second
-	}
-	if timeout <= 0 || timeout > maxTaskTimeout {
-		return protocol.NewAck(command, "rejected", "invalid_timeout", "timeout_seconds must be between 1 and 3600", nil)
+	if typedArenaTask {
+		if payload.TaskID != "" || payload.RequestID != "" ||
+			strings.TrimSpace(payload.Prompt) != "" || payload.TimeoutSeconds != 0 {
+			return protocol.NewAck(
+				command,
+				"rejected",
+				"invalid_payload",
+				"typed Arena task cannot include prompt, request_id, task_id, or timeout_seconds",
+				nil,
+			)
+		}
+		task, prompt, err := decodeArenaTask(payload.Task, time.Now().UTC())
+		if err != nil {
+			return protocol.NewAck(command, "rejected", "invalid_arena_task", err.Error(), nil)
+		}
+		if task.IdempotencyKey != command.IdempotencyKey {
+			return protocol.NewAck(
+				command,
+				"rejected",
+				"idempotency_mismatch",
+				"Arena task idempotencyKey does not match the Connector command",
+				nil,
+			)
+		}
+		arenaTask = &task
+		payload.TaskID = task.TaskID
+		payload.Prompt = prompt
+		remaining := time.Until(task.DeadlineAt)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	} else {
+		if payload.TaskID == "" {
+			payload.TaskID = payload.RequestID
+		}
+		if payload.TaskID == "" || strings.TrimSpace(payload.Prompt) == "" {
+			return protocol.NewAck(command, "rejected", "invalid_payload", "task_id and prompt are required", nil)
+		}
+		if payload.TimeoutSeconds != 0 {
+			timeout = time.Duration(payload.TimeoutSeconds) * time.Second
+		}
+		if timeout <= 0 || timeout > maxTaskTimeout {
+			return protocol.NewAck(command, "rejected", "invalid_timeout", "timeout_seconds must be between 1 and 3600", nil)
+		}
 	}
 
 	s.mu.RLock()
@@ -393,6 +438,11 @@ func (s *Supervisor) dispatchTask(command protocol.Command, trackAck bool) proto
 		WorkingDir:  current.WorkingDir,
 		ResumeToken: current.ResumeToken,
 		Environment: append([]string(nil), current.Environment...),
+	}
+	if typedArenaTask {
+		// Arena reconstructs all game context in the immutable task snapshot.
+		// A provider session is not a business recovery authority.
+		sessionSpec.ResumeToken = ""
 	}
 	s.mu.RUnlock()
 	if !runtimeFound {
@@ -435,6 +485,10 @@ func (s *Supervisor) dispatchTask(command protocol.Command, trackAck bool) proto
 		trackAck:    trackAck,
 		cancel:      cancel,
 		context:     taskContext,
+		arenaTask:   arenaTask,
+	}
+	if arenaTask != nil {
+		running.arenaAction = &arenaActionCapture{}
 	}
 
 	s.mu.Lock()
@@ -570,11 +624,11 @@ func (s *Supervisor) observeTask(
 	streams.Add(2)
 	go func() {
 		defer streams.Done()
-		s.streamOutput(runtimeID, sessionID, running.ID, "stdout", stdout)
+		s.streamOutput(runtimeID, sessionID, running, "stdout", stdout)
 	}()
 	go func() {
 		defer streams.Done()
-		s.streamOutput(runtimeID, sessionID, running.ID, "stderr", stderr)
+		s.streamOutput(runtimeID, sessionID, running, "stderr", stderr)
 	}()
 	waitErr := running.command.Wait()
 	releaseProcess(running.containment)
@@ -605,6 +659,54 @@ func (s *Supervisor) observeTask(
 		data["timed_out"] = true
 	}
 	s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, running.ID, "process.exited", data))
+
+	var taskResult *protocol.AgentTaskResultEnvelope
+	if running.arenaTask != nil {
+		status := "succeeded"
+		var action json.RawMessage
+		if running.cancelled.Load() {
+			status = "cancelled"
+		} else if errors.Is(contextErr, context.DeadlineExceeded) {
+			status = "timed_out"
+		} else if waitErr != nil {
+			status = "failed"
+		} else {
+			action, _ = running.arenaAction.terminal()
+			if len(action) == 0 {
+				status = "failed"
+			}
+		}
+		taskResult = &protocol.AgentTaskResultEnvelope{
+			BindingID:    running.origin.BindingID,
+			BindingEpoch: running.origin.BindingEpoch,
+			Result: protocol.AgentTaskResult{
+				SchemaVersion: "arena.agent-result.v1",
+				ResultID: protocol.NewAgentTaskResultID(
+					running.origin.BindingID,
+					running.ID,
+					running.origin.IdempotencyKey,
+				),
+				TaskID: running.ID,
+				Status: status,
+				Action: action,
+			},
+		}
+		if err := s.receipts.SaveAgentTaskResult(*taskResult); err != nil {
+			finalAck := protocol.NewAck(
+				running.origin,
+				"failed",
+				"result_store_error",
+				"task exited but its Arena result could not be persisted",
+				map[string]any{"task_id": running.ID, "exit_code": exitCode},
+			)
+			s.acks <- CommandUpdate{
+				Command:          running.origin,
+				Ack:              finalAck,
+				PersistenceError: fmt.Errorf("persist terminal Arena task result: %w", err),
+			}
+			return
+		}
+	}
 
 	if running.trackAck {
 		status := "completed"
@@ -648,12 +750,15 @@ func (s *Supervisor) observeTask(
 		}
 		s.acks <- CommandUpdate{Command: running.origin, Ack: finalAck}
 	}
+	if taskResult != nil {
+		s.results <- *taskResult
+	}
 }
 
 func (s *Supervisor) streamOutput(
 	runtimeID string,
 	sessionID string,
-	taskID string,
+	running *task,
 	stream string,
 	reader io.Reader,
 ) {
@@ -664,19 +769,22 @@ func (s *Supervisor) streamOutput(
 		var structured map[string]any
 		if json.Unmarshal([]byte(line), &structured) == nil {
 			s.captureResumeToken(sessionID, structured)
+			if running.arenaTask != nil && stream == "stdout" {
+				running.arenaAction.observe(running.arenaTask.Kind, structured)
+			}
 			redacted, _ := redact.Value(structured).(map[string]any)
-			s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, taskID, "runtime.message", map[string]any{
+			s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, running.ID, "runtime.message", map[string]any{
 				"stream":  stream,
 				"message": redacted,
 			}))
 			continue
 		}
-		s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, taskID, "runtime."+stream, map[string]any{
+		s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, running.ID, "runtime."+stream, map[string]any{
 			"text": redact.Text(line),
 		}))
 	}
 	if err := scanner.Err(); err != nil {
-		s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, taskID, "runtime.stream_error", map[string]any{
+		s.emit(protocol.NewRuntimeEvent(runtimeID, sessionID, running.ID, "runtime.stream_error", map[string]any{
 			"stream": stream,
 			"error":  redact.Text(err.Error()),
 		}))

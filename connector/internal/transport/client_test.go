@@ -58,6 +58,10 @@ func (s *faultReceiptStore) SaveReceipt(key string, ack protocol.CommandAck) err
 	return s.delegate.SaveReceipt(key, ack)
 }
 
+func (s *faultReceiptStore) SaveAgentTaskResult(result protocol.AgentTaskResultEnvelope) error {
+	return s.delegate.SaveAgentTaskResult(result)
+}
+
 func (o *faultOutbox) Append(event protocol.RuntimeEvent) error {
 	if o.fail {
 		return errors.New("injected append failure")
@@ -85,6 +89,178 @@ func TestHandleIncomingAcceptsGatewayWelcomeAndGenericAck(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s should be accepted: %v", messageType, err)
 		}
+	}
+}
+
+func TestHandleIncomingAcknowledgesDurableAgentTaskResult(t *testing.T) {
+	fileStore := store.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	result := protocol.AgentTaskResultEnvelope{
+		BindingID:    "binding-1",
+		BindingEpoch: 2,
+		Result: protocol.AgentTaskResult{
+			SchemaVersion: "arena.agent-result.v1",
+			ResultID:      "result-1",
+			TaskID:        "task-1",
+			Status:        "succeeded",
+			Action:        json.RawMessage(`{"action":"pass"}`),
+		},
+	}
+	if err := fileStore.SaveAgentTaskResult(result); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{
+		config: Config{Credentials: store.Credentials{DeviceID: "device-1"}},
+		state:  fileStore,
+	}
+	payload, _ := json.Marshal(
+		map[string]any{"task_id": "task-1", "result_id": "result-1"},
+	)
+	err := client.handleIncoming(context.Background(), nil, protocol.Envelope{
+		ProtocolVersion: protocol.Version,
+		Type:            protocol.MessageAgentTaskResultAck,
+		DeviceID:        "device-1",
+		Payload:         payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := fileStore.AgentTaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("acknowledged AgentTask result remains durable: %#v", pending)
+	}
+}
+
+func TestConnectionReplaysDurableAgentTaskResultAndClearsItAfterAck(t *testing.T) {
+	serverErrors := make(chan error, 1)
+	received := make(chan protocol.AgentTaskResultEnvelope, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer connection.Close(websocket.StatusNormalClosure, "test complete")
+		for {
+			var envelope protocol.Envelope
+			if err := wsjson.Read(request.Context(), connection, &envelope); err != nil {
+				serverErrors <- err
+				return
+			}
+			if envelope.Type != protocol.MessageAgentTaskResult {
+				continue
+			}
+			var result protocol.AgentTaskResultEnvelope
+			if err := json.Unmarshal(envelope.Payload, &result); err != nil {
+				serverErrors <- err
+				return
+			}
+			received <- result
+			ack, err := protocol.NewEnvelope(
+				protocol.MessageAgentTaskResultAck,
+				"device-1",
+				0,
+				map[string]any{
+					"task_id":   result.Result.TaskID,
+					"result_id": result.Result.ResultID,
+				},
+			)
+			if err != nil {
+				serverErrors <- err
+				return
+			}
+			if err := wsjson.Write(request.Context(), connection, ack); err != nil {
+				serverErrors <- err
+				return
+			}
+			stop, err := protocol.NewEnvelope(
+				messageError,
+				"device-1",
+				0,
+				map[string]any{"detail": "test complete"},
+			)
+			if err != nil {
+				serverErrors <- err
+				return
+			}
+			if err := wsjson.Write(request.Context(), connection, stop); err != nil {
+				serverErrors <- err
+			}
+			return
+		}
+	}))
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	fileStore := store.NewFileStore(statePath)
+	expected := protocol.AgentTaskResultEnvelope{
+		BindingID:    "binding-1",
+		BindingEpoch: 4,
+		Result: protocol.AgentTaskResult{
+			SchemaVersion: "arena.agent-result.v1",
+			ResultID:      "result-1",
+			TaskID:        "task-1",
+			Status:        "succeeded",
+			Action:        json.RawMessage(`{"action":"sell","good":"energy"}`),
+		},
+	}
+	if err := fileStore.SaveAgentTaskResult(expected); err != nil {
+		t.Fatal(err)
+	}
+	processSupervisor := newTransportSupervisor(t, fileStore)
+	defer processSupervisor.Shutdown()
+	client, err := NewClient(
+		Config{
+			Credentials: store.Credentials{
+				DeviceID:   "device-1",
+				Token:      "device-token",
+				GatewayURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+			},
+			HeartbeatInterval: time.Hour,
+			InventoryInterval: time.Hour,
+		},
+		fileStore,
+		store.NewFileOutbox(statePath),
+		processSupervisor,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connectionResult := make(chan error, 1)
+	go func() {
+		connectionResult <- client.runConnection(ctx)
+	}()
+
+	select {
+	case result := <-received:
+		if result.Result.ResultID != expected.Result.ResultID ||
+			result.BindingEpoch != expected.BindingEpoch {
+			t.Fatalf("unexpected replayed AgentTask result: %#v", result)
+		}
+	case err := <-serverErrors:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for durable AgentTask result replay")
+	}
+	select {
+	case <-connectionResult:
+	case err := <-serverErrors:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal("connector did not process the AgentTask result acknowledgement")
+	}
+	pending, err := fileStore.AgentTaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("acknowledged AgentTask result remains durable: %#v", pending)
 	}
 }
 

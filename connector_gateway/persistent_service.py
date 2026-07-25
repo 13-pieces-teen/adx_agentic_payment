@@ -5,11 +5,17 @@ from __future__ import annotations
 import asyncio
 import copy
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
+
+from arena_agent_contracts import AgentTaskResultV1
 
 from .models import CommandAction, RuntimeInventoryItem
 from .repository import ConnectorRepository
-from .service import ConnectorGateway
+from .service import ConnectorError, ConnectorGateway
+
+
+class AgentTaskResultSink(Protocol):
+    async def submit(self, result: AgentTaskResultV1) -> Any: ...
 
 
 class PersistentConnectorGateway(ConnectorGateway):
@@ -24,17 +30,24 @@ class PersistentConnectorGateway(ConnectorGateway):
         repository: ConnectorRepository,
         verification_uri: Optional[str] = None,
         max_pending_pairings: int = 500,
+        agent_task_result_sink: AgentTaskResultSink | None = None,
     ) -> None:
         super().__init__(
             verification_uri=verification_uri,
             max_pending_pairings=max_pending_pairings,
         )
         self.repository = repository
+        self._agent_task_result_sink = agent_task_result_sink
         self._initialization_lock = asyncio.Lock()
         self._persistence_lock = asyncio.Lock()
         self._persisted_event_ids: set[str] = set()
         self._persisted_audit_ids: set[str] = set()
         self._initialized = False
+
+    def bind_agent_task_result_sink(self, sink: AgentTaskResultSink) -> None:
+        if self._initialized:
+            raise RuntimeError("AgentTask Result Sink must be bound before initialization")
+        self._agent_task_result_sink = sink
 
     async def initialize(self) -> None:
         if self._initialized:
@@ -66,6 +79,10 @@ class PersistentConnectorGateway(ConnectorGateway):
                 self.commands = {
                     str(record["command_id"]): record
                     for record in state.get("commands", [])
+                }
+                self.agent_task_results = {
+                    str(record["task_id"]): record
+                    for record in state.get("agent_task_results", [])
                 }
                 self.events = list(state.get("events", []))
                 self.audit = list(state.get("audit", []))
@@ -115,6 +132,9 @@ class PersistentConnectorGateway(ConnectorGateway):
                     "devices": copy.deepcopy(list(self.devices.values())),
                     "bindings": copy.deepcopy(list(self.bindings.values())),
                     "commands": copy.deepcopy(list(self.commands.values())),
+                    "agent_task_results": copy.deepcopy(
+                        list(self.agent_task_results.values())
+                    ),
                     # Append-only streams are sent as deltas. Replaying every
                     # historical event on each 15-second heartbeat becomes
                     # quadratic and can exhaust the small beta host.
@@ -334,6 +354,38 @@ class PersistentConnectorGateway(ConnectorGateway):
             device_id, payload, expected_generation
         )
         await self._persist_current()
+        return result
+
+    async def submit_agent_task_result(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        await self.initialize()
+        result = await super().submit_agent_task_result(
+            device_id,
+            payload,
+            expected_generation,
+        )
+        # Persist the immutable Gateway inbox before calling Arena. If the
+        # Sink is unavailable, a process restart can still replay the exact
+        # result while the Connector retains its own unacknowledged copy.
+        await self._persist_current()
+        if self._agent_task_result_sink is not None:
+            # Re-submit exact Gateway replays to the Arena-owned idempotent
+            # sink. This closes a crash window where Arena committed but the
+            # Connector did not receive its transport acknowledgement.
+            try:
+                await self._agent_task_result_sink.submit(
+                    AgentTaskResultV1.model_validate(payload.get("result"))
+                )
+            except Exception as exc:
+                # The Connector must retry, but internal Arena or database
+                # details must not cross the public WebSocket boundary.
+                raise ConnectorError(503, "Arena Result Sink unavailable") from exc
+        # The Connector receives its result acknowledgement only after both
+        # the Gateway durable inbox and the configured Arena Sink succeed.
         return result
 
     async def list_events(

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,8 @@ func (f fakeScanner) Scan(context.Context) protocol.InventorySnapshot {
 }
 
 type memoryReceipts struct {
-	values map[string]protocol.CommandAck
+	values  map[string]protocol.CommandAck
+	results map[string]protocol.AgentTaskResultEnvelope
 }
 
 type failSaveReceipts struct {
@@ -53,7 +55,7 @@ func TestSupervisorHelperProcess(t *testing.T) {
 	if os.Getenv("ADX_CONNECTOR_HELPER_PROCESS") != "1" {
 		return
 	}
-	fmt.Println(`{"session_id":"runtime-session-1","type":"result"}`)
+	fmt.Println(`{"session_id":"runtime-session-1","type":"result","result":"{\"action\":\"buy\",\"good\":\"grain\"}"}`)
 	os.Exit(0)
 }
 
@@ -64,6 +66,14 @@ func (m *memoryReceipts) LookupReceipt(key string) (protocol.CommandAck, bool, e
 
 func (m *memoryReceipts) SaveReceipt(key string, value protocol.CommandAck) error {
 	m.values[key] = value
+	return nil
+}
+
+func (m *memoryReceipts) SaveAgentTaskResult(result protocol.AgentTaskResultEnvelope) error {
+	if m.results == nil {
+		m.results = make(map[string]protocol.AgentTaskResultEnvelope)
+	}
+	m.results[result.Result.TaskID] = result
 	return nil
 }
 
@@ -79,6 +89,10 @@ func (f *failSaveReceipts) SaveReceipt(key string, value protocol.CommandAck) er
 	return f.delegate.SaveReceipt(key, value)
 }
 
+func (f *failSaveReceipts) SaveAgentTaskResult(result protocol.AgentTaskResultEnvelope) error {
+	return f.delegate.SaveAgentTaskResult(result)
+}
+
 func command(kind string, payload any) protocol.Command {
 	raw, _ := json.Marshal(payload)
 	return protocol.Command{
@@ -92,6 +106,143 @@ func command(kind string, payload any) protocol.Command {
 		BindingEpoch:   1,
 		ExpiresAt:      time.Now().Add(time.Minute),
 		Payload:        raw,
+	}
+}
+
+func arenaDecideTask() map[string]any {
+	return map[string]any{
+		"taskId":         "task-arena-decide-1",
+		"kind":           "arena.decide",
+		"schemaVersion":  "arena.agent-task.v1",
+		"gameId":         "game-1",
+		"roundId":        "round-1",
+		"gameAgentId":    "game-agent-1",
+		"negotiationId":  nil,
+		"deadlineAt":     "2030-07-25T12:00:30Z",
+		"idempotencyKey": "game-1:round-1:game-agent-1:decide",
+		"inputHash":      "sha256:" + strings.Repeat("0", 64),
+		"input": map[string]any{
+			"phase":      "decide",
+			"gameId":     "game-1",
+			"roundId":    "round-1",
+			"roundIndex": 1,
+			"cash":       "20.000000",
+			"holdings":   map[string]any{"grain": 1},
+			"market":     map[string]any{"grain": "2.000000"},
+			"events":     []any{},
+			"reputation": map[string]any{"failedNegotiations": 0},
+			"limits": map[string]any{
+				"allowedActions": []any{"buy", "sell", "pass"},
+				"allowedGoods":   []any{"grain"},
+			},
+			"completedActions": []any{},
+			"completedTrades":  []any{},
+			"goods": []any{
+				map[string]any{
+					"good":               "grain",
+					"fixedQuantity":      1,
+					"priceDecimalPlaces": 6,
+				},
+			},
+			"deadlineAt": "2030-07-25T12:00:30Z",
+		},
+	}
+}
+
+func TestArenaNegotiationActionRequiresStrictlyPositiveFixedPointPrice(t *testing.T) {
+	for _, raw := range []string{
+		`{"action":"propose","price":"0","message":"offer"}`,
+		`{"action":"propose","price":"0.000","message":"offer"}`,
+	} {
+		if _, err := validateArenaAction("arena.negotiate", []byte(raw)); err == nil {
+			t.Fatalf("zero price must be rejected: %s", raw)
+		}
+	}
+	if _, err := validateArenaAction(
+		"arena.negotiate",
+		[]byte(`{"action":"propose","price":"0.001","message":"offer"}`),
+	); err != nil {
+		t.Fatalf("positive fixed-point price was rejected: %v", err)
+	}
+}
+
+func TestArenaActionMatchesSharedWireBounds(t *testing.T) {
+	invalid := []struct {
+		kind string
+		raw  string
+	}{
+		{
+			kind: "arena.decide",
+			raw:  `{"action":"buy","good":"bad good"}`,
+		},
+		{
+			kind: "arena.decide",
+			raw: fmt.Sprintf(
+				`{"action":"sell","good":"%s"}`,
+				strings.Repeat("g", 129),
+			),
+		},
+		{
+			kind: "arena.negotiate",
+			raw:  `{"action":"propose","price":"123456789012345678901234567890123456789","message":"offer"}`,
+		},
+		{
+			kind: "arena.negotiate",
+			raw:  `{"action":"propose","price":"1.1234567890123456789","message":"offer"}`,
+		},
+	}
+	for _, testCase := range invalid {
+		if _, err := validateArenaAction(
+			testCase.kind,
+			[]byte(testCase.raw),
+		); err == nil {
+			t.Fatalf("out-of-contract action must be rejected: %s", testCase.raw)
+		}
+	}
+}
+
+func TestArenaActionCaptureAcceptsCodexTerminalAgentMessage(t *testing.T) {
+	capture := &arenaActionCapture{}
+	capture.observe(
+		"arena.decide",
+		map[string]any{
+			"type": "item.completed",
+			"item": map[string]any{
+				"type": "agent_message",
+				"text": `{"action":"pass"}`,
+			},
+		},
+	)
+	action, err := capture.terminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) != `{"action":"pass"}` {
+		t.Fatalf("unexpected Codex Arena action: %s", action)
+	}
+
+	toolOutput := &arenaActionCapture{}
+	toolOutput.observe(
+		"arena.decide",
+		map[string]any{
+			"type": "item.completed",
+			"item": map[string]any{
+				"type": "command_execution",
+				"text": `{"action":"buy","good":"grain"}`,
+			},
+		},
+	)
+	if _, err := toolOutput.terminal(); err == nil {
+		t.Fatal("Codex tool output must not be treated as a terminal Arena action")
+	}
+}
+
+func TestArenaActionRejectsTrailingJSONValues(t *testing.T) {
+	if _, err := validateArenaAction(
+		"arena.decide",
+		[]byte(`{"action":"pass"}{"action":"buy","good":"grain"}`),
+	); err == nil {
+		t.Fatal("multiple JSON values must not be accepted as one Arena action")
 	}
 }
 
@@ -433,6 +584,121 @@ func TestTaskDispatchEmitsTerminalCommandAck(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for terminal command ack")
+	}
+}
+
+func TestTypedArenaTaskDispatchDoesNotRequireCloudPrompt(t *testing.T) {
+	root := t.TempDir()
+	inventory := protocol.InventorySnapshot{
+		ObservedAt: time.Now().UTC(),
+		Runtimes: []protocol.Runtime{{
+			ID:             "runtime-1",
+			Kind:           "test_runtime",
+			ExecutablePath: os.Args[0],
+			Status:         "ready",
+			Available:      true,
+		}},
+	}
+	s, err := New(
+		fakeScanner{inventory: inventory},
+		&memoryReceipts{values: make(map[string]protocol.CommandAck)},
+		driver.NewRegistry(helperDriver{}),
+		[]string{root},
+		nil,
+		inventory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := command(
+		protocol.CommandSessionStart,
+		map[string]any{"working_directory": root},
+	)
+	if result := s.Handle(context.Background(), start); result.Ack.Status != "completed" {
+		t.Fatalf("start failed: %#v", result.Ack)
+	}
+
+	task := arenaDecideTask()
+	dispatch := command(protocol.CommandTaskDispatch, map[string]any{"task": task})
+	dispatch.IdempotencyKey = task["idempotencyKey"].(string)
+	result := s.Handle(context.Background(), dispatch)
+
+	if result.Ack.Status != "accepted" {
+		t.Fatalf("typed Arena task should start without a cloud prompt: %#v", result.Ack)
+	}
+	select {
+	case <-s.Acks():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for typed Arena task process")
+	}
+}
+
+func TestTypedArenaTaskEmitsIndependentTerminalResult(t *testing.T) {
+	root := t.TempDir()
+	inventory := protocol.InventorySnapshot{
+		ObservedAt: time.Now().UTC(),
+		Runtimes: []protocol.Runtime{{
+			ID:             "runtime-1",
+			Kind:           "test_runtime",
+			ExecutablePath: os.Args[0],
+			Status:         "ready",
+			Available:      true,
+		}},
+	}
+	durable := &memoryReceipts{
+		values:  make(map[string]protocol.CommandAck),
+		results: make(map[string]protocol.AgentTaskResultEnvelope),
+	}
+	s, err := New(
+		fakeScanner{inventory: inventory},
+		durable,
+		driver.NewRegistry(helperDriver{}),
+		[]string{root},
+		nil,
+		inventory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := command(
+		protocol.CommandSessionStart,
+		map[string]any{"working_directory": root},
+	)
+	if result := s.Handle(context.Background(), start); result.Ack.Status != "completed" {
+		t.Fatalf("start failed: %#v", result.Ack)
+	}
+
+	task := arenaDecideTask()
+	dispatch := command(protocol.CommandTaskDispatch, map[string]any{"task": task})
+	dispatch.IdempotencyKey = task["idempotencyKey"].(string)
+	if result := s.Handle(context.Background(), dispatch); result.Ack.Status != "accepted" {
+		t.Fatalf("typed Arena task was not accepted: %#v", result.Ack)
+	}
+
+	select {
+	case terminal := <-s.Results():
+		persisted, found := durable.results[terminal.Result.TaskID]
+		if !found || persisted.Result.ResultID != terminal.Result.ResultID {
+			t.Fatalf("terminal result was emitted before durable persistence: %#v", durable.results)
+		}
+		if terminal.BindingID != dispatch.BindingID ||
+			terminal.BindingEpoch != dispatch.BindingEpoch {
+			t.Fatalf("terminal result lost its frozen binding: %#v", terminal)
+		}
+		if terminal.Result.TaskID != task["taskId"] ||
+			terminal.Result.SchemaVersion != "arena.agent-result.v1" ||
+			terminal.Result.Status != "succeeded" {
+			t.Fatalf("unexpected terminal result: %#v", terminal)
+		}
+		var action map[string]any
+		if err := json.Unmarshal(terminal.Result.Action, &action); err != nil {
+			t.Fatal(err)
+		}
+		if action["action"] != "buy" || action["good"] != "grain" {
+			t.Fatalf("unexpected Arena action: %#v", action)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for independent terminal Arena result")
 	}
 }
 

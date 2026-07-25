@@ -85,6 +85,7 @@ class MemoryConnectorRepository:
             "devices": [],
             "bindings": [],
             "commands": [],
+            "agent_task_results": [],
             "events": [],
             "audit": [],
         }
@@ -258,6 +259,9 @@ class MemoryConnectorRepository:
                 "devices": copy.deepcopy(state.get("devices", [])),
                 "bindings": copy.deepcopy(state.get("bindings", [])),
                 "commands": copy.deepcopy(state.get("commands", [])),
+                "agent_task_results": copy.deepcopy(
+                    state.get("agent_task_results", [])
+                ),
                 "events": list(current_events.values())[-10_000:],
                 "audit": list(current_audit.values())[-10_000:],
             }

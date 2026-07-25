@@ -296,9 +296,10 @@ def create_connector_router(
                         connection_generation,
                     )
                     if envelope.message_id:
-                        ack_type = (
-                            "event.ack" if envelope.type == "runtime.event" else "ack"
-                        )
+                        ack_type = {
+                            "runtime.event": "event.ack",
+                            "agent_task.result": "agent_task.result.ack",
+                        }.get(envelope.type, "ack")
                         ack_payload = response or {"accepted": True}
                         if envelope.type == "runtime.event":
                             ack_payload = {
@@ -637,6 +638,12 @@ async def _handle_envelope(
         )
     if envelope.type == "runtime.event":
         return await service.append_runtime_event(
+            device_id,
+            envelope.payload,
+            expected_generation=connection_generation,
+        )
+    if envelope.type == "agent_task.result":
+        return await service.submit_agent_task_result(
             device_id,
             envelope.payload,
             expected_generation=connection_generation,

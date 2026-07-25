@@ -95,6 +95,25 @@ def test_gateway_iso_timestamps_are_bound_as_datetimes_for_asyncpg():
                 "expires_at": timestamp,
             }
         ],
+        "agent_task_results": [
+            {
+                "task_id": "task_1",
+                "result_id": "result_1",
+                "binding_id": "binding_1",
+                "device_id": "device_1",
+                "command_id": "command_1",
+                "binding_epoch": 1,
+                "result_hash": "c" * 64,
+                "received_at": timestamp,
+                "result": {
+                    "schemaVersion": "arena.agent-result.v1",
+                    "resultId": "result_1",
+                    "taskId": "task_1",
+                    "status": "succeeded",
+                    "action": {"action": "pass"},
+                },
+            }
+        ],
         "events": [
             {
                 "event_id": "event_1",
@@ -126,6 +145,7 @@ def test_gateway_iso_timestamps_are_bound_as_datetimes_for_asyncpg():
             "connector_devices",
             "connector_bindings",
             "connector_commands",
+            "connector_agent_task_results",
             "connector_events",
             "connector_audit",
         )
@@ -136,6 +156,7 @@ def test_gateway_iso_timestamps_are_bound_as_datetimes_for_asyncpg():
         "connector_devices": (4,),
         "connector_bindings": (5,),
         "connector_commands": (6, 7),
+        "connector_agent_task_results": (7,),
         "connector_events": (5,),
         "connector_audit": (4,),
     }

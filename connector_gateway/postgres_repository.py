@@ -315,6 +315,11 @@ class PostgresConnectorRepository:
                 ("devices", "connector_devices", "created_at"),
                 ("bindings", "connector_bindings", "created_at"),
                 ("commands", "connector_commands", "created_at"),
+                (
+                    "agent_task_results",
+                    "connector_agent_task_results",
+                    "received_at",
+                ),
             )
             state: dict[str, Any] = {}
             for key, table, order_by in tables:
@@ -449,6 +454,27 @@ class PostgresConnectorRepository:
                         _timestamp(command["created_at"]),
                         _timestamp(command["expires_at"]),
                         json.dumps(command),
+                    )
+                for result in state.get("agent_task_results", []):
+                    await connection.execute(
+                        """
+                        INSERT INTO connector_agent_task_results (
+                            task_id, result_id, binding_id, device_id,
+                            command_id, binding_epoch, result_hash,
+                            received_at, record
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+                        ON CONFLICT (task_id) DO NOTHING
+                        """,
+                        result["task_id"],
+                        result["result_id"],
+                        result["binding_id"],
+                        result["device_id"],
+                        result["command_id"],
+                        result["binding_epoch"],
+                        result["result_hash"],
+                        _timestamp(result["received_at"]),
+                        json.dumps(result),
                     )
                 for event in state["events"]:
                     await connection.execute(

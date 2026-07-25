@@ -14,13 +14,19 @@ in locally for a specific runtime.
 ## Arena game integration status
 
 The Connector is an implemented control plane, not the Arena game authority.
-It does not currently implement the target `arena.decide` or
-`arena.negotiate` business payload adapters described in
-[`../docs/agent-onboarding.md`](../docs/agent-onboarding.md).
-They will be versioned payload kinds inside the existing top-level
-`task.dispatch` action, not new Connector protocol actions.
+It now accepts versioned `arena.decide` and `arena.negotiate` payloads inside
+the existing top-level `task.dispatch` action and returns a separate
+`arena.agent-result.v1` terminal result. The local result is durably stored
+before transport, replayed after reconnect, and removed only after
+`agent_task.result.ack`.
 
-When that adapter is added:
+The remaining Arena integration work is the Local Arena Agent identity bridge,
+automatic Connector-owned Arena session startup, queued AgentTask dispatch,
+and Hosted/Connector mixed-Runtime round orchestration. Until those pieces are
+complete, the typed adapter is an implementation foundation rather than a
+complete playable Local Agent path.
+
+The authority boundaries remain:
 
 - Arena owns game, round, pairing, negotiation, inventory, and ranking state;
 - the Connector owns Device, Runtime, Binding, Command, receipt, and
@@ -188,6 +194,7 @@ types are:
 - `heartbeat`
 - `command.ack`
 - `runtime.event`
+- `agent_task.result`
 
 The only accepted platform message with an operational effect is `command`,
 whose `action` must be one of:
@@ -198,6 +205,12 @@ whose `action` must be one of:
 - `task.cancel`
 - `session.stop`
 - `session.resume`
+
+The Gateway can also acknowledge a committed terminal Arena result with
+`agent_task.result.ack`; both `task_id` and `result_id` must match the pending
+record before it is deleted. This acknowledgement affects only the local
+durable result outbox; it is not an Arena business-action or payment
+acknowledgement.
 
 All other actions, including shell execution, are rejected. Commands carry an
 expiry, idempotency key, and binding epoch. Receipts survive restarts, so a
@@ -235,6 +248,13 @@ atomically converts its durable receipt to `failed` with
 `connector_restarted` and replays that terminal acknowledgement. A
 `task.cancel` command is terminal as soon as the cancellation signal has been
 delivered to the owned task; it is never left indefinitely at `accepted`.
+
+For a typed Arena task, process completion also produces exactly one
+independent `AgentTaskResult`. A succeeded result must contain a strict
+`buy|sell|pass` or `propose|accept|reject` action. Failed, timed-out, and
+cancelled results contain no action. The Connector does not infer an Arena
+action from a command acknowledgement, a generic event, or unstructured
+stdout.
 
 Sequence allocation and outbox insertion use a crash-recoverable staged event
 in the state file. On startup (and before staging another event), the Connector

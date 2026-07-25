@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -76,6 +77,56 @@ func TestFileStoreRoundTripsCredentialsStagedEventAndReceipt(t *testing.T) {
 	receipts, err := fileStore.Receipts()
 	if err != nil || len(receipts) != 1 || receipts[0].CommandID != "cmd-1" {
 		t.Fatalf("unexpected receipt replay set: %#v, %v", receipts, err)
+	}
+}
+
+func TestAgentTaskResultOutboxPersistsUntilAcknowledged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	fileStore := NewFileStore(path)
+	result := protocol.AgentTaskResultEnvelope{
+		BindingID:    "binding-1",
+		BindingEpoch: 3,
+		Result: protocol.AgentTaskResult{
+			SchemaVersion: "arena.agent-result.v1",
+			ResultID:      "result-1",
+			TaskID:        "task-1",
+			Status:        "succeeded",
+			Action:        json.RawMessage(`{"action":"buy","good":"grain"}`),
+		},
+	}
+
+	if err := fileStore.SaveAgentTaskResult(result); err != nil {
+		t.Fatal(err)
+	}
+	if err := fileStore.SaveAgentTaskResult(result); err != nil {
+		t.Fatalf("saving the same terminal result must be idempotent: %v", err)
+	}
+	pending, err := fileStore.AgentTaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Result.ResultID != "result-1" {
+		t.Fatalf("unexpected pending AgentTask results: %#v", pending)
+	}
+
+	conflict := result
+	conflict.Result.Status = "failed"
+	conflict.Result.Action = nil
+	if err := fileStore.SaveAgentTaskResult(conflict); err == nil {
+		t.Fatal("a different result for the same task must be rejected")
+	}
+	if err := fileStore.AckAgentTaskResult("task-1", "result-other"); err == nil {
+		t.Fatal("a mismatched result acknowledgement must not clear the outbox")
+	}
+	if err := fileStore.AckAgentTaskResult("task-1", "result-1"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = fileStore.AgentTaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("acknowledged AgentTask result remains pending: %#v", pending)
 	}
 }
 

@@ -19,6 +19,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from arena_agent_contracts import AgentTaskResultV1, ArenaAgentTaskV1
+from pydantic import ValidationError
+
 from .models import (
     BindingStatus,
     CommandAction,
@@ -64,7 +67,12 @@ class ConnectorGateway:
             "initial_prompt",
             "environment_refs",
         },
-        CommandAction.TASK_DISPATCH: {"session_id", "prompt", "request_id"},
+        CommandAction.TASK_DISPATCH: {
+            "session_id",
+            "prompt",
+            "request_id",
+            "task",
+        },
         CommandAction.TASK_CANCEL: {"session_id", "request_id"},
         CommandAction.SESSION_STOP: {"session_id", "reason"},
         CommandAction.SESSION_RESUME: {"session_id"},
@@ -72,7 +80,7 @@ class ConnectorGateway:
     _required_payload_fields: dict[CommandAction, set[str]] = {
         CommandAction.RUNTIME_PROBE: set(),
         CommandAction.SESSION_START: {"working_directory"},
-        CommandAction.TASK_DISPATCH: {"session_id", "prompt", "request_id"},
+        CommandAction.TASK_DISPATCH: {"session_id"},
         CommandAction.TASK_CANCEL: {"session_id", "request_id"},
         CommandAction.SESSION_STOP: {"session_id"},
         CommandAction.SESSION_RESUME: {"session_id"},
@@ -121,6 +129,7 @@ class ConnectorGateway:
         self.devices: dict[str, dict[str, Any]] = {}
         self.bindings: dict[str, dict[str, Any]] = {}
         self.commands: dict[str, dict[str, Any]] = {}
+        self.agent_task_results: dict[str, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []
         self.audit: list[dict[str, Any]] = []
         self.connections: dict[str, Any] = {}
@@ -598,7 +607,11 @@ class ConnectorGateway:
         expires_in_seconds: int,
     ) -> dict[str, Any]:
         payload = dict(payload)
-        if action == CommandAction.TASK_DISPATCH and "request_id" not in payload:
+        if (
+            action == CommandAction.TASK_DISPATCH
+            and "task" not in payload
+            and "request_id" not in payload
+        ):
             payload["request_id"] = idempotency_key or new_id("request")
         self._validate_command_payload(action, payload)
         request_fingerprint = hashlib.sha256(
@@ -1014,6 +1027,105 @@ class ConnectorGateway:
             )
             return self._public_command(command)
 
+    async def submit_agent_task_result(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            device = self._get_device(device_id)
+            self._ensure_not_revoked(device)
+            self._ensure_connection_generation(device, expected_generation)
+            binding_id = str(payload.get("binding_id", ""))
+            binding = self.bindings.get(binding_id)
+            if not binding or binding["device_id"] != device_id:
+                raise ConnectorError(404, "Binding not found for this device")
+            try:
+                binding_epoch = int(payload.get("binding_epoch", 0))
+            except (TypeError, ValueError) as exc:
+                raise ConnectorError(
+                    422, "binding_epoch must be a positive integer"
+                ) from exc
+            if binding_epoch != binding["binding_epoch"]:
+                raise ConnectorError(409, "Stale binding epoch")
+            try:
+                result = AgentTaskResultV1.model_validate(payload.get("result"))
+            except ValidationError as exc:
+                raise ConnectorError(
+                    422,
+                    "result must be a valid arena.agent-result.v1 payload",
+                ) from exc
+
+            dispatched = next(
+                (
+                    command
+                    for command in self.commands.values()
+                    if command["binding_id"] == binding_id
+                    and command["action"] == CommandAction.TASK_DISPATCH.value
+                    and isinstance(command["payload"].get("task"), dict)
+                    and command["payload"]["task"].get("taskId") == result.task_id
+                ),
+                None,
+            )
+            if dispatched is None:
+                raise ConnectorError(
+                    409,
+                    "AgentTaskResult does not match a typed task dispatched to this binding",
+                )
+
+            result_payload = result.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=False,
+            )
+            result_hash = hashlib.sha256(
+                json.dumps(
+                    result_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            existing = self.agent_task_results.get(result.task_id)
+            if existing is not None:
+                if existing["result_hash"] != result_hash:
+                    raise ConnectorError(
+                        409,
+                        "AgentTask already has a different terminal result",
+                    )
+                return self._public_agent_task_result_receipt(
+                    existing,
+                    disposition="replay",
+                )
+
+            received_at = iso(utc_now())
+            record = {
+                "task_id": result.task_id,
+                "result_id": result.result_id,
+                "binding_id": binding_id,
+                "binding_epoch": binding_epoch,
+                "device_id": device_id,
+                "command_id": dispatched["command_id"],
+                "result": result_payload,
+                "result_hash": result_hash,
+                "received_at": received_at,
+            }
+            self.agent_task_results[result.task_id] = record
+            self._append_audit(
+                "agent_task.result_received",
+                device_id,
+                {
+                    "task_id": result.task_id,
+                    "result_id": result.result_id,
+                    "binding_id": binding_id,
+                },
+            )
+            return self._public_agent_task_result_receipt(
+                record,
+                disposition="accepted",
+            )
+
     async def append_runtime_event(
         self,
         device_id: str,
@@ -1167,6 +1279,27 @@ class ConnectorGateway:
                 422,
                 f"Missing payload fields for {action.value}: {', '.join(sorted(missing))}",
             )
+        if action == CommandAction.TASK_DISPATCH:
+            has_prompt = "prompt" in payload
+            has_task = "task" in payload
+            if has_prompt == has_task:
+                raise ConnectorError(
+                    422,
+                    "task.dispatch requires exactly one of prompt or task",
+                )
+            if has_prompt and "request_id" not in payload:
+                raise ConnectorError(
+                    422,
+                    "Missing payload fields for task.dispatch: request_id",
+                )
+            if has_task:
+                try:
+                    ArenaAgentTaskV1.model_validate(payload["task"])
+                except ValidationError as exc:
+                    raise ConnectorError(
+                        422,
+                        "task must be a valid arena.agent-task.v1 payload",
+                    ) from exc
         working_directory = payload.get("working_directory")
         if working_directory is not None and (
             not isinstance(working_directory, str)
@@ -1204,6 +1337,20 @@ class ConnectorGateway:
             raise ConnectorError(
                 422, "environment_refs must be a bounded list of secret references"
             )
+
+    @staticmethod
+    def _public_agent_task_result_receipt(
+        record: dict[str, Any],
+        *,
+        disposition: str,
+    ) -> dict[str, Any]:
+        return {
+            "task_id": record["task_id"],
+            "result_id": record["result_id"],
+            "binding_id": record["binding_id"],
+            "disposition": disposition,
+            "received_at": record["received_at"],
+        }
 
     def _public_pairing(self, record: dict[str, Any]) -> dict[str, Any]:
         return {

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,13 +13,15 @@ import (
 const (
 	Version = "1.0"
 
-	MessageHello             = "hello"
-	MessageInventorySnapshot = "inventory.snapshot"
-	MessageHeartbeat         = "heartbeat"
-	MessageCommand           = "command"
-	MessageCommandAck        = "command.ack"
-	MessageRuntimeEvent      = "runtime.event"
-	MessageEventAck          = "event.ack"
+	MessageHello              = "hello"
+	MessageInventorySnapshot  = "inventory.snapshot"
+	MessageHeartbeat          = "heartbeat"
+	MessageCommand            = "command"
+	MessageCommandAck         = "command.ack"
+	MessageRuntimeEvent       = "runtime.event"
+	MessageEventAck           = "event.ack"
+	MessageAgentTaskResult    = "agent_task.result"
+	MessageAgentTaskResultAck = "agent_task.result.ack"
 
 	CommandRuntimeProbe  = "runtime.probe"
 	CommandSessionStart  = "session.start"
@@ -251,6 +254,56 @@ func NewRuntimeEvent(runtimeID, sessionID, taskID, eventType string, data map[st
 
 type EventAck struct {
 	ThroughSequence uint64 `json:"through_sequence"`
+}
+
+type AgentTaskResult struct {
+	SchemaVersion string          `json:"schemaVersion"`
+	ResultID      string          `json:"resultId"`
+	TaskID        string          `json:"taskId"`
+	Status        string          `json:"status"`
+	Action        json.RawMessage `json:"action,omitempty"`
+}
+
+func (r AgentTaskResult) Validate() error {
+	if r.SchemaVersion != "arena.agent-result.v1" {
+		return fmt.Errorf("unsupported AgentTaskResult schema version %q", r.SchemaVersion)
+	}
+	if r.ResultID == "" || r.TaskID == "" {
+		return errors.New("AgentTaskResult resultId and taskId are required")
+	}
+	switch r.Status {
+	case "succeeded":
+		if len(r.Action) == 0 {
+			return errors.New("succeeded AgentTaskResult requires an action")
+		}
+	case "failed", "timed_out", "cancelled":
+		if len(r.Action) != 0 {
+			return fmt.Errorf("%s AgentTaskResult must not include an action", r.Status)
+		}
+	default:
+		return fmt.Errorf("unsupported AgentTaskResult status %q", r.Status)
+	}
+	return nil
+}
+
+type AgentTaskResultEnvelope struct {
+	BindingID    string          `json:"binding_id"`
+	BindingEpoch uint64          `json:"binding_epoch"`
+	Result       AgentTaskResult `json:"result"`
+}
+
+func (r AgentTaskResultEnvelope) Validate() error {
+	if r.BindingID == "" || r.BindingEpoch == 0 {
+		return errors.New("AgentTaskResult binding_id and binding_epoch are required")
+	}
+	return r.Result.Validate()
+}
+
+func NewAgentTaskResultID(bindingID, taskID, idempotencyKey string) string {
+	digest := sha256.Sum256(
+		[]byte(bindingID + "\x1f" + taskID + "\x1f" + idempotencyKey),
+	)
+	return "result-" + hex.EncodeToString(digest[:12])
 }
 
 func NewID(prefix string) string {

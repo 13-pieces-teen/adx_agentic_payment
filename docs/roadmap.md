@@ -127,8 +127,10 @@ Verified local PostgreSQL evidence on 2026-07-25:
 > 状态：当前跨模块实施状态与建议顺序。
 
 Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游戏的本地开发闭环，并已建立
-确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 游戏适配、
-通用 PaymentMandate 与生产实机验收仍未完成。Hosted 方向以
+确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 已完成 typed
+Task/Result 传输、durable result outbox、Gateway inbox 与 Arena Result Sink 基础接线；
+Arena Agent 身份创建、自动 Task 调度和 mixed-Runtime 回合编排仍未完成。通用
+PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
@@ -217,8 +219,12 @@ create game
       `arena402.game_participants`、20 gold 初始组合和公开 joined event。
 - [ ] 公网单机加密 vault、真实 Provider Key 与服务器离线连续性尚未实机验收；
       腾讯 CAM/SSM 三身份保留为可选高安全验收。
-- [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
-- [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
+- [x] Connector 已严格解析 `arena.decide` / `arena.negotiate` typed Task，并把
+      deadline、binding epoch 和固定业务 prompt 传给本地 CC/Codex child。
+- [x] Connector 已返回与 dispatch ACK 分离的唯一 typed AgentTaskResult；结果先写
+      本地 durable outbox，再经 WSS/Gateway PostgreSQL inbox 进入 Arena Result Sink。
+- [ ] 尚缺 Connector-owned Arena session 启动、queued AgentTask 自动 dispatch，
+      以及 Hosted/Connector mixed-Runtime 回合编排。
 - [ ] PaymentMandate 的额度、期限、范围、撤销和
       `reserve / consume / release` 尚未实现。
 - [ ] Hosted 上线目标要求 platform-managed testnet guest wallet、入局一次授权和
@@ -319,13 +325,17 @@ create game
 - [x] 本地双 Hosted Agent 在客户端脚本仅等待 HTTP 状态的情况下持续完成五回合。
 - [ ] 在真实服务器关闭浏览器、重启进程并验证连续性与最小权限拒绝证据。
 
-### Phase 6：Arena 与 Connector 接线（M2）
+### Phase 6：Arena 与 Connector 接线（M2，进行中）
 
 - [x] 先用确定性 rule Agent 验证 Game Core。
-- [ ] Hosted、Connector 与 rule Adapter 共用同一 AgentTask/Result schema；
-      Hosted/rule 已完成，Connector 游戏 Adapter 尚未接入。
-- [ ] Connector `task.dispatch` ACK 与唯一 terminal Result 分离；不解析
-   `runtime.message` 或 stdout 作为动作。
+- [x] Hosted、Connector 与 rule Adapter 共用同一 AgentTask/Result schema；
+      Connector 已实现 frozen route adapter 和 typed WSS 映射。
+- [x] Connector `task.dispatch` ACK 与唯一 terminal Result 分离；只有 Runtime 的
+      terminal structured result 进入严格 action parser，普通 stdout/Event 不作为动作。
+- [x] terminal Result 使用本地 durable outbox、Gateway PostgreSQL inbox 与 Arena
+      Result Sink；重复提交按 Task/Result hash 幂等恢复。
+- [ ] 实现 Local Arena Agent identity bridge、Arena session lifecycle、Task dispatcher
+      和 Hosted/Connector mixed-Runtime Round coordinator。
 - [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`。
 - [x] 实现完整 N 回合的持久化 Round、Pool、Pairing、Negotiation、Inventory、
       Event、Round portfolio snapshot、final settlement price 和排名闭环。

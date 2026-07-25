@@ -163,11 +163,12 @@ task.dispatch Arena branch
 - Decide：`action=buy|sell|pass`；
 - Negotiate：`action=propose|accept|reject`。
 
-实现时必须把 Command persisted/delivered ACK、terminal Result 和 Arena
+当前实现已把 Command persisted/delivered ACK、terminal Result 和 Arena
 applied/rejected ACK 建模为三个可独立恢复的状态。不得从 stdout、
 `runtime.message`、普通 Event 或 Command `succeeded` 推断 Arena action。完整
 payload 见 [`local-agent-connector-spec.md`](./local-agent-connector-spec.md)；
-当前代码尚未实现该 variant。
+typed variant 已实现，identity/session/task dispatcher 与 mixed-Runtime 编排仍待
+完成。
 
 ### 3.4 投递与幂等
 
@@ -200,7 +201,7 @@ payload 见 [`local-agent-connector-spec.md`](./local-agent-connector-spec.md)�
 | Phase 5A：Self-hosted persistence/auth | 已完成 beta | PostgreSQL、Auth、CSRF、owner scope、rate limit、bounded Pairing 和 durable barrier 已实现 |
 | Phase 5B：Single-host deployment assets | 已完成代码 | Docker/Caddy、domain/IP TLS、artifact 与运维脚本已实现；真实服务器部署待验收 |
 | Phase 5C：GA/HA hardening | 未完成 | signed release、SBOM、共享限流、multi-worker ownership、隐私治理和容量测试待实现 |
-| Phase 6：Arena typed Runtime Adapter | 未开始 | 统一 Task/Result、binding epoch、Result Sink/Finalizer |
+| Phase 6：Arena typed Runtime Adapter | 进行中 | typed Task/Result、binding epoch、durable result outbox、Gateway inbox 与 Result Sink 基础接线已完成；identity/session/task dispatcher 与 mixed-Runtime 编排待实现 |
 | Phase 7：Native A2A Endpoint | 未开始 | 保持独立入口，不混入本地 Device 模型 |
 
 ## 5. 已完成的安全加固
@@ -323,7 +324,7 @@ Public 80/443
 
 “已覆盖”表示仓库存在并曾执行相应自动化测试，不替代提交前重新运行，也不等同于真实服务器 E2E。
 
-Arena typed adapter 落地后追加：
+Arena typed adapter 当前自动化验证范围：
 
 | 区域 | 必须覆盖 |
 |---|---|
@@ -409,22 +410,16 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 - 设计安全 updater、分阶段 rollout 和回滚；
 - 增加发布 provenance。
 
-### P1：业务持久化边界
+### P1：Local Arena 编排闭环
 
 - 将真实 Arena 402 Agent registry 与 Connector Binding 对接；
 - Arena route 只引用 Connector-owned `connector_binding_id + binding_epoch`，
   不复制 Device/Runtime/Session 权威；
 - 数据库原子保证一名 User 每局只有一个 Game Agent，并在入局时冻结 binding epoch；
-- 持久化 Game、Game Agent、Round、AgentTask/Result/Attempt、Pool、Pairing、
-  Negotiation、Inventory 与业务 Audit；
+- 为入局后的 Local Agent 自动建立 Connector-owned Session，并从数据库
+  AgentTask 驱动 typed dispatch；
+- 让 Hosted/Local/rule 参与者经过同一个 mixed-Runtime Round coordinator；
 - 保持 Runtime telemetry、Business Event 和 Payment finality 三类权威来源分离；
-- 实现版本化 `arena.decide` / `arena.negotiate` payload 和统一 `action` union；
-- 增加显式 terminal AgentTaskResult；Connector 只负责有界投递和结构化结果，
-  不解释游戏规则；
-- 接入 Arena Result Sink/Consumer：过滤公开 message、数据库生成接收时间、
-  唯一 Result 与最多一次业务 apply；
-- 接入独立 Deadline Finalizer；Connector 整体离线时 Decide 收敛为唯一 `pass`，
-  Negotiate 收敛为唯一 timeout；
 - 同一 Game 的 Hosted/Local/rule Runtime 使用同一、经真实 P95/P99 和负载测试
   校准的 `action_timeout_ms`；每个逻辑 AgentTask 最多一次重试；
 - `accept` 只进入 pending settlement；PaymentMandate/链上确认与库存提交仍由

@@ -2,8 +2,9 @@
 
 > 状态：Hosted Runtime、统一 Task/Result、生产 Game Operator API、通用 Join 的
 > Game Core 投影，以及 Connector Binding 到 Arena identity/route 的注册桥已实现；
-> Local Connector 的 `arena.decide` / `arena.negotiate` Adapter 与终态 Result
-> 回传仍未完成。
+> Local Connector 的 `arena.decide` / `arena.negotiate` typed transport、终态 Result
+> durable 回传和 Result Sink 接线已实现，Connector-owned session、task dispatcher
+> 与 mixed-Runtime 编排仍未完成。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、

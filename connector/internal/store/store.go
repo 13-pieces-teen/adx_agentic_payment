@@ -45,11 +45,12 @@ func (c Credentials) Validate() error {
 }
 
 type state struct {
-	SchemaVersion   int                            `json:"schema_version"`
-	Credentials     Credentials                    `json:"credentials"`
-	NextSequence    uint64                         `json:"next_sequence"`
-	StagedEvent     *protocol.RuntimeEvent         `json:"staged_event,omitempty"`
-	CommandReceipts map[string]protocol.CommandAck `json:"command_receipts,omitempty"`
+	SchemaVersion    int                                         `json:"schema_version"`
+	Credentials      Credentials                                 `json:"credentials"`
+	NextSequence     uint64                                      `json:"next_sequence"`
+	StagedEvent      *protocol.RuntimeEvent                      `json:"staged_event,omitempty"`
+	CommandReceipts  map[string]protocol.CommandAck              `json:"command_receipts,omitempty"`
+	AgentTaskResults map[string]protocol.AgentTaskResultEnvelope `json:"agent_task_results,omitempty"`
 }
 
 type FileStore struct {
@@ -230,6 +231,89 @@ func (s *FileStore) Receipts() ([]protocol.CommandAck, error) {
 	return receipts, nil
 }
 
+func (s *FileStore) SaveAgentTaskResult(result protocol.AgentTaskResultEnvelope) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := s.load()
+	if err != nil && !errors.Is(err, ErrNotInitialized) {
+		return err
+	}
+	if errors.Is(err, ErrNotInitialized) {
+		current = newState()
+	}
+	if current.AgentTaskResults == nil {
+		current.AgentTaskResults = make(map[string]protocol.AgentTaskResultEnvelope)
+	}
+	if existing, found := current.AgentTaskResults[result.Result.TaskID]; found {
+		existingJSON, existingErr := json.Marshal(existing)
+		resultJSON, resultErr := json.Marshal(result)
+		if existingErr != nil || resultErr != nil || !bytes.Equal(existingJSON, resultJSON) {
+			return fmt.Errorf(
+				"AgentTask %s already has a different terminal result",
+				result.Result.TaskID,
+			)
+		}
+		return nil
+	}
+	current.AgentTaskResults[result.Result.TaskID] = result
+	return s.save(current)
+}
+
+func (s *FileStore) AgentTaskResults() ([]protocol.AgentTaskResultEnvelope, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := s.load()
+	if errors.Is(err, ErrNotInitialized) {
+		return []protocol.AgentTaskResultEnvelope{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	results := make([]protocol.AgentTaskResultEnvelope, 0, len(current.AgentTaskResults))
+	for _, result := range current.AgentTaskResults {
+		results = append(results, result)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Result.TaskID < results[j].Result.TaskID
+	})
+	return results, nil
+}
+
+func (s *FileStore) AckAgentTaskResult(taskID, resultID string) error {
+	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(resultID) == "" {
+		return errors.New(
+			"AgentTask result acknowledgement requires task_id and result_id",
+		)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := s.load()
+	if errors.Is(err, ErrNotInitialized) {
+		return ErrNotInitialized
+	}
+	if err != nil {
+		return err
+	}
+	pending, found := current.AgentTaskResults[taskID]
+	if !found {
+		return nil
+	}
+	if pending.Result.ResultID != resultID {
+		return fmt.Errorf(
+			"AgentTask result acknowledgement does not match pending result %s",
+			taskID,
+		)
+	}
+	delete(current.AgentTaskResults, taskID)
+	return s.save(current)
+}
+
 func (s *FileStore) RecoverInterruptedReceipts() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -281,6 +365,9 @@ func (s *FileStore) load() (state, error) {
 	if current.CommandReceipts == nil {
 		current.CommandReceipts = make(map[string]protocol.CommandAck)
 	}
+	if current.AgentTaskResults == nil {
+		current.AgentTaskResults = make(map[string]protocol.AgentTaskResultEnvelope)
+	}
 	return current, nil
 }
 
@@ -290,6 +377,9 @@ func (s *FileStore) save(current state) error {
 	}
 	if current.CommandReceipts == nil {
 		current.CommandReceipts = make(map[string]protocol.CommandAck)
+	}
+	if current.AgentTaskResults == nil {
+		current.AgentTaskResults = make(map[string]protocol.AgentTaskResultEnvelope)
 	}
 	data, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
@@ -327,8 +417,9 @@ func (s *FileStore) save(current state) error {
 
 func newState() state {
 	return state{
-		SchemaVersion:   schemaVersion,
-		CommandReceipts: make(map[string]protocol.CommandAck),
+		SchemaVersion:    schemaVersion,
+		CommandReceipts:  make(map[string]protocol.CommandAck),
+		AgentTaskResults: make(map[string]protocol.AgentTaskResultEnvelope),
 	}
 }
 

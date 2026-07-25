@@ -84,6 +84,8 @@ type StateStore interface {
 	ClearStagedEvent(uint64) error
 	Receipts() ([]protocol.CommandAck, error)
 	RecoverInterruptedReceipts() (int, error)
+	AgentTaskResults() ([]protocol.AgentTaskResultEnvelope, error)
+	AckAgentTaskResult(string, string) error
 }
 
 type Outbox interface {
@@ -276,6 +278,9 @@ func (c *Client) Run(ctx context.Context) error {
 					timer.Stop()
 					return persistErr
 				}
+			case <-c.supervisor.Results():
+				// AgentTask results are already durable. The next connection
+				// replays them from the state store.
 			case <-timer.C:
 				goto reconnect
 			}
@@ -340,6 +345,10 @@ func (c *Client) runConnection(ctx context.Context) error {
 	if err != nil {
 		return c.degradePersistence("load durable command receipts", err)
 	}
+	taskResults, err := c.state.AgentTaskResults()
+	if err != nil {
+		return c.degradePersistence("load durable AgentTask result outbox", err)
+	}
 	pending, err := c.outbox.Pending()
 	if err != nil {
 		return c.degradePersistence("load event outbox", err)
@@ -349,6 +358,7 @@ func (c *Client) runConnection(ctx context.Context) error {
 		return err
 	}
 	receiptIndex := 0
+	resultIndex := 0
 
 	heartbeatTicker := time.NewTicker(c.config.HeartbeatInterval)
 	defer heartbeatTicker.Stop()
@@ -394,6 +404,20 @@ func (c *Client) runConnection(ctx context.Context) error {
 			default:
 			}
 
+			if resultIndex < len(taskResults) {
+				result := taskResults[resultIndex]
+				if err := c.send(
+					connection,
+					protocol.MessageAgentTaskResult,
+					0,
+					result,
+				); err != nil {
+					return err
+				}
+				resultIndex++
+				sent++
+				continue
+			}
 			if receiptIndex < len(receipts) {
 				receipt := receipts[receiptIndex]
 				if err := c.send(
@@ -425,7 +449,9 @@ func (c *Client) runConnection(ctx context.Context) error {
 		}
 
 		var replayWake <-chan struct{}
-		if receiptIndex < len(receipts) {
+		if resultIndex < len(taskResults) {
+			replayWake = replayReady
+		} else if receiptIndex < len(receipts) {
 			replayWake = replayReady
 		} else if _, available := replay.Next(); available {
 			replayWake = replayReady
@@ -466,6 +492,15 @@ func (c *Client) runConnection(ctx context.Context) error {
 			if sendErr != nil {
 				c.supervisor.RequeueAck(update)
 				return sendErr
+			}
+		case result := <-c.supervisor.Results():
+			if err := c.send(
+				connection,
+				protocol.MessageAgentTaskResult,
+				0,
+				result,
+			); err != nil {
+				return err
 			}
 		case <-replayWake:
 		case <-heartbeatTicker.C:
@@ -575,6 +610,24 @@ func (c *Client) handleIncoming(
 		}
 		if err := c.outbox.AckThrough(ack.ThroughSequence); err != nil {
 			return c.degradePersistence("acknowledge event outbox", err)
+		}
+		return nil
+	case protocol.MessageAgentTaskResultAck:
+		var ack struct {
+			TaskID   string `json:"task_id"`
+			ResultID string `json:"result_id"`
+		}
+		if err := json.Unmarshal(envelope.Payload, &ack); err != nil {
+			return fmt.Errorf("decode AgentTask result acknowledgement: %w", err)
+		}
+		if strings.TrimSpace(ack.TaskID) == "" ||
+			strings.TrimSpace(ack.ResultID) == "" {
+			return errors.New(
+				"AgentTask result acknowledgement requires task_id and result_id",
+			)
+		}
+		if err := c.state.AckAgentTaskResult(ack.TaskID, ack.ResultID); err != nil {
+			return c.degradePersistence("acknowledge AgentTask result outbox", err)
 		}
 		return nil
 	default:

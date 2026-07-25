@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from arena_core import (
+    ArenaResultSink,
     PostgresArenaCoreRepository,
     PostgresArenaParticipationRepository,
     PostgresConnectorArenaRegistrar,
@@ -253,6 +254,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         )
 
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
+    connector_result_core: PostgresArenaCoreRepository | None = None
     pawnhouse_coordinator: PawnhouseHostedCoordinator | None = None
     pawnhouse_coordinator_task: asyncio.Task[None] | None = None
     pawnhouse_orchestrator: PawnhouseGameOrchestrator | None = None
@@ -271,6 +273,11 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 "ADX_ARENA_CORE_DATABASE_URL is required when Arena Core is enabled"
             )
         pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
+        if connector_bundle is not None:
+            connector_result_core = PostgresArenaCoreRepository(pawnhouse_dsn)
+            connector_bundle.service.bind_agent_task_result_sink(
+                ArenaResultSink(connector_result_core)
+            )
 
     if pawnhouse_dev_enabled:
         pawnhouse_dev_token = os.getenv(
@@ -325,6 +332,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await arena_participation.initialize()
         if pawnhouse_repository is not None:
             await pawnhouse_repository.initialize()
+        if connector_result_core is not None:
+            await connector_result_core.initialize()
 
         nonlocal pawnhouse_coordinator_task, pawnhouse_orchestrator_task
         if pawnhouse_orchestrator is not None:
@@ -362,6 +371,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 await connector_bundle.close()
             if connector_arena_registrar is not None:
                 await connector_arena_registrar.close()
+            if connector_result_core is not None:
+                await connector_result_core.close()
 
     app = FastAPI(
         title="Arena 402",

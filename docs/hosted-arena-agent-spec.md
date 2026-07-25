@@ -1,8 +1,10 @@
 # Arena 402 Hosted Arena Agent 产品与技术规格
 
 > 文档状态：已批准实施；Hosted control/runtime、DeepSeek/OpenAI-compatible
-> Provider、durable Worker 与 Pawnhouse Adapter 已实现。Local Connector 游戏
-> Adapter、公网 Hosted credential/backend 验收和完整支付授权仍待完成
+> Provider、durable Worker 与 Pawnhouse Adapter 已实现。Local Connector typed
+> Task/Result、durable result outbox 与 Result Sink 基础接线已实现；Connector-owned
+> session/task dispatcher、mixed-Runtime 编排、公网 Hosted credential/backend
+> 验收和完整支付授权仍待完成
 > 最后更新：2026-07-25
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
@@ -1317,8 +1319,8 @@ External:
 | Credential validation/lifecycle jobs | 核心路径已实现 | durable validation、claim/CAS、Credential Controller 和创建/Runtime PATCH 已实现；其余生命周期操作仍待完成 |
 | Hosted Worker | 已实现 | 独立无公网端口 Worker 已进入 Compose，并通过本地多回合恢复路径 |
 | Game Agent 单局唯一 | 已实现 | 数据库约束、入局快照和当前 Runtime/config 冻结已实现 |
-| Arena `decide`/`negotiate` adapter | Hosted/rule 已实现 | Local Connector 游戏 Adapter 仍未实现 |
-| Local Connector 控制面 | Self-hosted beta 已实现 | 仍缺 Arena typed task/result 适配 |
+| Arena `decide`/`negotiate` adapter | Hosted/rule 已实现；Connector transport/result 基础已实现 | Local identity/session/task dispatcher 与 mixed-Runtime coordinator 仍未实现 |
+| Local Connector 控制面 | Self-hosted beta 已实现 | typed task/result、durable result outbox 与 Result Sink 已接线；完整游戏编排待完成 |
 | Native A2A Endpoint | 未实现 | 作为后续第三 Adapter |
 | EIP-3009 testnet direct settlement | 原型存在 | 不等于完整 x402 或 PaymentMandate |
 

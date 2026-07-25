@@ -20,6 +20,7 @@ from connector_gateway.models import CommandAction, RuntimeInventoryItem
 from connector_gateway.persistent_service import PersistentConnectorGateway
 from connector_gateway.production import build_production_connector
 from connector_gateway.repository import MemoryConnectorRepository
+from connector_gateway.service import ConnectorError
 
 
 def _hash(value: str) -> str:
@@ -949,5 +950,104 @@ def test_observability_streams_are_persisted_as_deltas_and_survive_restart():
         assert restarted.events[0]["event_id"] == "event_incremental"
         assert restarted.audit[0]["audit_id"] == "audit_incremental"
         assert restarted.event_ack_watermarks["device_incremental"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_terminal_agent_task_result_survives_gateway_restart():
+    class RecordingResultSink:
+        def __init__(self):
+            self.task_ids: list[str] = []
+            self.fail = True
+
+        async def submit(self, result):
+            if self.fail:
+                raise RuntimeError("simulated Arena Result Sink outage")
+            self.task_ids.append(result.task_id)
+
+    repository = MemoryConnectorRepository()
+    sink = RecordingResultSink()
+    service = PersistentConnectorGateway(
+        repository,
+        verification_uri="https://arena.example.test/connect",
+        agent_task_result_sink=sink,
+    )
+
+    async def scenario():
+        await service.initialize()
+        now = datetime.now(timezone.utc).isoformat()
+        task_id = "task-persistent-result-1"
+        async with service._lock:
+            service.devices["device-result"] = {
+                "device_id": "device-result",
+                "owner_id": "owner-result",
+                "token_hash": "0" * 64,
+                "status": "offline",
+                "created_at": now,
+                "revoked_at": None,
+                "_connection_generation": 0,
+                "event_ack_watermark": 0,
+                "event_pending_sequences": [],
+                "runtimes": [],
+            }
+            service.bindings["binding-result"] = {
+                "binding_id": "binding-result",
+                "device_id": "device-result",
+                "runtime_id": "codex",
+                "agent_id": "agent-result",
+                "binding_epoch": 7,
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            }
+            service.commands["command-result"] = {
+                "command_id": "command-result",
+                "binding_id": "binding-result",
+                "device_id": "device-result",
+                "status": "delivered",
+                "action": CommandAction.TASK_DISPATCH.value,
+                "idempotency_key": "persistent-result-once",
+                "payload": {"task": {"taskId": task_id}},
+                "created_at": now,
+                "expires_at": now,
+            }
+        await service._persist_current()
+
+        payload = {
+            "binding_id": "binding-result",
+            "binding_epoch": 7,
+            "result": {
+                "schemaVersion": "arena.agent-result.v1",
+                "resultId": "result-persistent-1",
+                "taskId": task_id,
+                "status": "succeeded",
+                "action": {"action": "pass"},
+            },
+        }
+        with pytest.raises(ConnectorError) as exc:
+            await service.submit_agent_task_result(
+                "device-result",
+                payload,
+            )
+        assert exc.value.status_code == 503
+        assert exc.value.detail == "Arena Result Sink unavailable"
+        assert repository.gateway_state["agent_task_results"][0]["task_id"] == task_id
+
+        sink.fail = False
+        restarted = PersistentConnectorGateway(
+            repository,
+            verification_uri="https://arena.example.test/connect",
+            agent_task_result_sink=sink,
+        )
+        await restarted.initialize()
+        receipt = await restarted.submit_agent_task_result(
+            "device-result",
+            payload,
+        )
+        assert receipt["disposition"] == "replay"
+        assert sink.task_ids == [task_id]
+        assert restarted.agent_task_results[task_id]["result_id"] == (
+            "result-persistent-1"
+        )
 
     asyncio.run(scenario())
