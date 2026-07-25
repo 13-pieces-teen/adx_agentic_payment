@@ -16,6 +16,7 @@ from arena_game import (
     RoundPhase,
     WorldState,
     apply_basis_points,
+    build_event_schedule,
     demo_events,
     format_gold,
     gold,
@@ -84,6 +85,33 @@ def test_demo_event_schedule_is_deterministic_and_resets_gem_bubble() -> None:
     assert round_five.bubble_premium_bps["gems"] == 0
     assert round_five.market_prices["gems"] == INITIAL_PRICES["gems"]
     assert round_five.final_prices["gems"] == INITIAL_PRICES["gems"]
+
+
+def test_seeded_event_deck_builds_a_replayable_ten_round_schedule() -> None:
+    first = build_event_schedule(
+        round_count=10,
+        seed="ten-round-seed",
+        mode="seeded_shuffle",
+    )
+    replay = build_event_schedule(
+        round_count=10,
+        seed="ten-round-seed",
+        mode="seeded_shuffle",
+    )
+    other = build_event_schedule(
+        round_count=10,
+        seed="different-ten-round-seed",
+        mode="seeded_shuffle",
+    )
+
+    assert [event.to_wire() for event in first] == [
+        event.to_wire() for event in replay
+    ]
+    assert [event.event_id for event in first] != [
+        event.event_id for event in other
+    ]
+    assert [event.reveal_round for event in first] == list(range(1, 11))
+    assert len({event.event_id for event in first}) == 10
 
 
 def test_game_requires_unique_users_and_locked_twenty_gold_portfolios() -> None:
@@ -157,4 +185,3 @@ def test_game_advances_all_rounds_and_calculates_deterministic_ranking() -> None
     assert rankings[0].agent_id == "agent_a"
     assert rankings[0].tier == "公爵"
     assert rankings[0].net_worth_atomic > rankings[1].net_worth_atomic
-

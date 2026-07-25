@@ -8,30 +8,20 @@
 import "dotenv/config";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAddress, type Hex } from "viem";
+import { type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
+  authorizationNonceForIntent,
   loadDeployments,
   signTransferAuthorization,
+  validateArenaSettlementIntent,
   verifyAuthorizationLocally,
+  type ArenaSettlementIntent,
   type PaymentAuthorization,
 } from "../src/index.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 process.loadEnvFile(resolve(__dirname, "../../.env"));
-
-interface SettlementIntent {
-  settlementIntentId: string;
-  gameId: string;
-  status: string;
-  buyerAccount: string;
-  sellerAccount: string;
-  amountAtomic: string;
-  chainId: number;
-  tokenAddress: string;
-  tokenDecimals: number;
-  authorizationMode: string;
-}
 
 interface JsonObject {
   [key: string]: unknown;
@@ -42,11 +32,27 @@ const arenaUrl = (process.env.ARENA_API_URL ?? "http://127.0.0.1:8000")
 const facilitatorUrl = (
   process.env.FACILITATOR_URL ?? "http://127.0.0.1:4021"
 ).replace(/\/+$/, "");
-const gameId = process.env.ARENA_GAME_ID;
-const requestedIntentId = process.env.ARENA_SETTLEMENT_INTENT_ID;
+const gameId = argumentValue("--game-id") ?? process.env.ARENA_GAME_ID;
+const requestedIntentId =
+  argumentValue("--intent-id") ??
+  process.env.ARENA_SETTLEMENT_INTENT_ID;
 const devToken = process.env.ARENA_DEV_TOKEN;
 const buyerPrivateKey = process.env.BUYER_PRIVATE_KEY as Hex | undefined;
 const confirmed = process.argv.includes("--confirm-testnet-transfer");
+const approvedIntentHash =
+  argumentValue("--approved-intent-hash") ??
+  process.env.ARENA_APPROVED_INTENT_HASH;
+const existingTxHash = argumentValue("--record-existing-tx-hash");
+
+function argumentValue(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${name} requires a value`);
+  }
+  return value;
+}
 
 function required(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is required`);
@@ -85,7 +91,7 @@ function arenaHeaders(): Record<string, string> {
   };
 }
 
-async function loadIntent(): Promise<SettlementIntent> {
+async function loadIntent(): Promise<ArenaSettlementIntent> {
   const game = required(gameId, "ARENA_GAME_ID");
   const response = await jsonRequest(
     `${arenaUrl}/api/v1/pawnhouse/games/${encodeURIComponent(game)}` +
@@ -96,7 +102,7 @@ async function loadIntent(): Promise<SettlementIntent> {
     throw new Error("Arena response omitted settlementIntents");
   }
   const candidates = values.filter(
-    (value): value is SettlementIntent =>
+    (value): value is ArenaSettlementIntent =>
       typeof value === "object" && value !== null,
   );
   const intent = requestedIntentId
@@ -112,39 +118,6 @@ async function loadIntent(): Promise<SettlementIntent> {
     );
   }
   return intent;
-}
-
-function validateIntent(
-  intent: SettlementIntent,
-  buyerAddress: string,
-): void {
-  const deployments = loadDeployments(
-    resolve(__dirname, "../../deployments.json"),
-  );
-  if (intent.status !== "authorization_requested") {
-    throw new Error(`Intent is not authorizable: ${intent.status}`);
-  }
-  if (intent.authorizationMode !== "single_eip3009") {
-    throw new Error("Intent does not use single_eip3009");
-  }
-  if (intent.chainId !== deployments.chainId) {
-    throw new Error("Intent chain does not match deployments.json");
-  }
-  if (
-    getAddress(intent.tokenAddress) !==
-    getAddress(deployments.usdc.address)
-  ) {
-    throw new Error("Intent token does not match deployments.json");
-  }
-  if (intent.tokenDecimals !== deployments.usdc.decimals) {
-    throw new Error("Intent token decimals do not match deployments.json");
-  }
-  if (getAddress(intent.buyerAccount) !== getAddress(buyerAddress)) {
-    throw new Error("Local buyer signer does not own the frozen payer");
-  }
-  if (BigInt(intent.amountAtomic) <= 0n) {
-    throw new Error("Intent amount must be positive");
-  }
 }
 
 async function facilitatorPost(
@@ -190,10 +163,20 @@ async function main(): Promise<void> {
   ) as Hex;
   const buyer = privateKeyToAccount(privateKey);
   const intent = await loadIntent();
-  validateIntent(intent, buyer.address);
   const deployments = loadDeployments(
     resolve(__dirname, "../../deployments.json"),
   );
+  const approvedHash = required(
+    approvedIntentHash,
+    "--approved-intent-hash or ARENA_APPROVED_INTENT_HASH",
+  );
+  validateArenaSettlementIntent({
+    intent,
+    buyerAddress: buyer.address,
+    deployments,
+    approvedIntentHash: approvedHash,
+  });
+  const authorizationNonce = authorizationNonceForIntent(intent);
 
   console.log(
     JSON.stringify(
@@ -205,6 +188,7 @@ async function main(): Promise<void> {
         buyerAccount: intent.buyerAccount,
         sellerAccount: intent.sellerAccount,
         amountAtomic: intent.amountAtomic,
+        intentHash: intent.intentHash,
         facilitatorUrl,
         confirmed,
       },
@@ -223,24 +207,47 @@ async function main(): Promise<void> {
     to: intent.sellerAccount,
     value: BigInt(intent.amountAtomic),
     dep: deployments,
+    nonce: authorizationNonce,
     nowSeconds: Math.floor(Date.now() / 1000),
   });
   if (!(await verifyAuthorizationLocally(authorization, deployments))) {
     throw new Error("Local EIP-3009 signature verification failed");
   }
-  const verified = await facilitatorPost("/verify", authorization);
-  if (verified.ok !== true) {
-    throw new Error("Facilitator preflight rejected the authorization");
-  }
+  await jsonRequest(
+    `${arenaUrl}/api/dev/pawnhouse/settlement-intents/` +
+      `${encodeURIComponent(intent.settlementIntentId)}/approval`,
+    {
+      method: "POST",
+      headers: arenaHeaders(),
+      body: JSON.stringify({
+        approvedIntentHash: approvedHash,
+        authorizationNonce: authorization.nonce,
+        approvalSource: "operator_cli",
+        humanConfirmed: true,
+      }),
+    },
+  );
 
-  const settled = await facilitatorPost("/settle", authorization);
-  if (
-    settled.status !== "success" ||
-    typeof settled.txHash !== "string"
-  ) {
-    throw new Error("Facilitator did not return a successful tx hash");
+  let txHash = existingTxHash;
+  if (txHash === undefined) {
+    const verified = await facilitatorPost("/verify", authorization);
+    if (verified.ok !== true) {
+      throw new Error(
+        "Facilitator preflight rejected the deterministic authorization; " +
+          "if it was already broadcast, recover its public hash and rerun " +
+          "with --record-existing-tx-hash",
+      );
+    }
+
+    const settled = await facilitatorPost("/settle", authorization);
+    if (
+      settled.status !== "success" ||
+      typeof settled.txHash !== "string"
+    ) {
+      throw new Error("Facilitator did not return a successful tx hash");
+    }
+    txHash = settled.txHash;
   }
-  const txHash = settled.txHash;
   await jsonRequest(
     `${arenaUrl}/api/dev/pawnhouse/settlement-intents/` +
       `${encodeURIComponent(intent.settlementIntentId)}/submission`,
@@ -250,6 +257,7 @@ async function main(): Promise<void> {
       body: JSON.stringify({
         txHash,
         authorizationNonce: authorization.nonce,
+        approvedIntentHash: approvedHash,
         submissionSource: "wallet",
         humanConfirmed: true,
       }),

@@ -3,8 +3,8 @@
 ## Current clean-slate path
 
 The maintained King's Pawnhouse path now includes the world/event core,
-PostgreSQL market and negotiation state, complete five-round backend
-orchestration, and dual Hosted Agent development demonstrations. Arena
+PostgreSQL market and negotiation state, configurable 1–10 round backend
+orchestration, and 2–16 Hosted Agent development demonstrations. Arena
 automatically opens each round, reveals its event, queues all Decide tasks,
 pairs four-good pools by database-clock FCFS, runs bounded negotiations,
 persists round portfolio snapshots, and freezes final prices and rankings.
@@ -31,6 +31,14 @@ an unpaid settlement, use fresh invitations and:
 python scripts/run_full_hosted_pawnhouse_demo.py
 ```
 
+To exercise a larger game, mint invitations as one JSON batch and run 12
+Hosted Agents through the versioned, seed-shuffled 10-round event deck:
+
+```powershell
+$env:ARENA_HOSTED_INVITES = docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 12 --json
+python scripts/run_many_hosted_pawnhouse_demo.py --agents 12 --rounds 10
+```
+
 The full-game models deliberately propose and reject. The accepted-deal demo
 above still stops at `accepted_pending_settlement` until a real payment is
 confirmed.
@@ -48,10 +56,12 @@ python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
 
 This freezes one public `SettlementIntent` at
 `authorization_requested`. The local settlement bridge can sign and submit
-that exact intent, but refuses to broadcast unless the operator supplies the
-explicit `--confirm-testnet-transfer` flag. Wallet private keys remain in the
-local settlement process and never enter Arena, PostgreSQL, logs, or API
-responses.
+that exact intent, but refuses to broadcast unless the operator supplies its
+reviewed `intentHash` and the explicit `--confirm-testnet-transfer` flag.
+Arena records the approval before broadcast and the bridge derives one
+deterministic nonce per Intent, so a restart cannot create a replacement
+payment. Wallet private keys remain in the local settlement process and never
+enter Arena, PostgreSQL, logs, or API responses.
 
 **Arena 402 是一场由 AI Agent 自主买卖、有限轮砍价并通过 Injective testnet
 真实结算的回合制交易竞技游戏。**
@@ -99,20 +109,20 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 
 ## 当前实现状态
 
-仓库已跑通双 Hosted Agent 的五回合本地开发闭环，以及独立的成交后冻结结算意图
+仓库已跑通 12 Hosted Agent 的十回合本地开发闭环，以及独立的成交后冻结结算意图
 边界；新鲜 testnet 交易和生产 Tencent SSM/真实 Provider 验收仍未执行：
 
 | 模块 | 当前状态 |
 |------|----------|
-| 王城典当行 Game Core | 已实现四种货物、20 金初始组合、五回合自动推进、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
+| 王城典当行 Game Core | 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
 | Python matching/Arena | `matching/` 与 `web/api.py` 提供内存版 Agent、listing/intent、matching、有限 negotiation 和 ELO/Arena 原型；它不是新游戏的持久化回合引擎 |
 | Local Agent Connector | `connector/` 与 `connector_gateway/` 已实现配对、Runtime discovery、typed command、durable event/receipt 和 PostgreSQL 控制面；尚未接入 `arena.decide` / `arena.negotiate` |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；Local Connector 游戏适配仍待实现 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
 | 静态 Arena 前端 | `arena402/index.html` 已有 Supabase 驱动的 Agent、Battle、Market 和 ELO 页面；新的 `/game` 回合视图、数据表和实时状态机尚未实现 |
-| 游戏业务持久化 | `006`–`010` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices 与 Rankings |
-| 端到端集成 | 双 Hosted Agent 可持续完成五回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
+| 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
+| 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
 | 标准 HTTP x402 | 尚未实现 `402 Payment Required` challenge、支付 header、paid retry 或标准公共 Facilitator 兼容 |
 
 现有 settlement 是 **EIP-3009 direct-relay prototype**，不能描述为完整标准
@@ -125,7 +135,7 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `matching/`, `web/` | 现有内存 matching、negotiation 和 Arena/ELO 原型 |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`010` Pawnhouse 市场、Hosted orchestration、确认后结算和完整游戏迁移 |
+| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`012` Pawnhouse 市场、Hosted orchestration、确认后结算、完整游戏和参赛容量迁移 |
 | `arena402/` | 根 Vercel 部署使用的 CDN-only 静态前端 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |

@@ -66,11 +66,48 @@ async def _main(args: argparse.Namespace) -> int:
             "",
             pool=_SingleConnectionPool(connection),
         )
+        game_id = await connection.fetchval(
+            """
+            SELECT game_id
+            FROM arena402.settlement_intents
+            WHERE settlement_intent_id = $1
+            """,
+            args.intent_id,
+        )
+        if game_id is None:
+            raise RuntimeError("settlement intent not found")
+        before_automation = await repository.automation_state(
+            game_id=str(game_id)
+        )
+        if before_automation["action"] != "wait_settlement":
+            raise RuntimeError(
+                "game is not waiting for the selected settlement intent"
+            )
         tx_hash = "0x" + "ab" * 32
+        intent_hash = await connection.fetchval(
+            """
+            SELECT intent_hash
+            FROM arena402.settlement_intents
+            WHERE settlement_intent_id = $1
+            """,
+            args.intent_id,
+        )
+        if not isinstance(intent_hash, str):
+            raise RuntimeError("settlement intent not found")
+        authorization_nonce = (
+            "0x" + intent_hash.removeprefix("sha256:")
+        )
+        await repository.record_settlement_approval(
+            settlement_intent_id=args.intent_id,
+            approved_intent_hash=intent_hash,
+            authorization_nonce=authorization_nonce,
+            approval_source="operator_cli",
+        )
         await repository.record_settlement_submission(
             settlement_intent_id=args.intent_id,
             tx_hash=tx_hash,
-            authorization_nonce="0x" + "cd" * 32,
+            authorization_nonce=authorization_nonce,
+            approved_intent_hash=intent_hash,
             submission_source="wallet",
         )
         intent, _ = await repository.settlement_confirmation_target(
@@ -99,8 +136,18 @@ async def _main(args: argparse.Namespace) -> int:
         )
         if committed != replay:
             raise RuntimeError("inventory commit replay changed the receipt")
+        after_automation = await repository.automation_state(
+            game_id=str(game_id)
+        )
+        if after_automation["action"] != "advance_round":
+            raise RuntimeError(
+                "game did not become eligible for automatic advancement"
+            )
         summary = {
             "settlementIntentId": args.intent_id,
+            "gameId": str(game_id),
+            "automationBefore": before_automation["action"],
+            "automationAfter": after_automation["action"],
             "statusInsideTransaction": committed["status"],
             "buyerCashDeltaAtomic": str(
                 int(committed["buyerCashAfterAtomic"])

@@ -14,6 +14,7 @@ class _Repository:
     def __init__(self) -> None:
         self.created: list[dict[str, object]] = []
         self.participants: list[dict[str, object]] = []
+        self.approvals: list[dict[str, object]] = []
         self.submissions: list[dict[str, object]] = []
 
     async def create_game(self, **values):
@@ -28,7 +29,7 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
-    async def start_game(self, *, game_id, events):
+    async def start_game(self, *, game_id):
         return {
             "gameId": game_id,
             "roundId": f"round:{game_id}:1",
@@ -104,6 +105,26 @@ class _Repository:
             "settlementIntentId": values["settlement_intent_id"],
             "status": "submitted",
             "txHash": values["tx_hash"],
+        }
+
+    async def record_settlement_approval(self, **values):
+        self.approvals.append(values)
+        return {
+            "settlementIntentId": values["settlement_intent_id"],
+            "status": "authorization_requested",
+            "intentHash": values["approved_intent_hash"],
+            "approvalRecorded": True,
+        }
+
+    async def inventory_commit_for_intent(self, *, settlement_intent_id):
+        return {
+            "settlementIntentId": settlement_intent_id,
+            "status": "inventory_committed",
+            "inventoryCommitId": f"inventory-commit:{settlement_intent_id}",
+            "buyerHoldingBefore": 0,
+            "buyerHoldingAfter": 1,
+            "sellerHoldingBefore": 1,
+            "sellerHoldingAfter": 0,
         }
 
 
@@ -220,6 +241,75 @@ def test_create_game_and_add_twenty_gold_rule_participant() -> None:
     assert len(repository.participants) == 1
 
 
+def test_create_game_accepts_an_eight_round_seeded_event_deck() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "eight-round-game",
+            "eventSeed": "eight-round-fixed-seed",
+            "roundCount": 8,
+            "eventDeckId": "pawnhouse-standard-v1",
+            "eventMode": "seeded_shuffle",
+        },
+    )
+
+    assert created.status_code == 201
+    events = repository.created[0]["events"]
+    assert len(events) == 8
+    assert [event.reveal_round for event in events] == list(range(1, 9))
+    assert len({event.event_id for event in events}) == 8
+    assert repository.created[0]["event_deck_id"] == "pawnhouse-standard-v1"
+    assert repository.created[0]["event_mode"] == "seeded_shuffle"
+
+
+def test_fixed_demo_event_mode_rejects_a_non_five_round_game() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "invalid-fixed-demo",
+            "eventSeed": "invalid-fixed-demo-seed",
+            "roundCount": 8,
+        },
+    )
+
+    assert created.status_code == 422
+    assert created.json()["detail"]["code"] == (
+        "fixed_demo_requires_exactly_five_rounds"
+    )
+    assert repository.created == []
+
+
+def test_create_game_freezes_a_twelve_agent_participant_limit() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "twelve-agent-game",
+            "eventSeed": "twelve-agent-fixed-seed",
+            "maxParticipants": 12,
+        },
+    )
+
+    assert created.status_code == 201
+    assert repository.created[0]["max_participants"] == 12
+
+
+def test_start_game_uses_the_schedule_persisted_at_creation() -> None:
+    client, _ = _client()
+    started = client.post(
+        "/api/dev/pawnhouse/games/eight-round-game/start",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+    )
+
+    assert started.status_code == 200
+    assert started.json()["phase"] == "decide"
+
+
 def test_create_game_freezes_explicit_eip3009_settlement_config() -> None:
     client, repository = _client()
     created = client.post(
@@ -314,6 +404,7 @@ def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -
     body = {
         "txHash": "0x" + "44" * 32,
         "authorizationNonce": "0x" + "55" * 32,
+        "approvedIntentHash": "sha256:" + "66" * 32,
         "submissionSource": "wallet",
         "humanConfirmed": False,
     }
@@ -336,6 +427,51 @@ def test_settlement_submission_requires_explicit_observation_and_hides_nonce() -
     assert accepted.json()["status"] == "submitted"
     assert body["authorizationNonce"] not in accepted.text
     assert len(repository.submissions) == 1
+    assert repository.submissions[0]["approved_intent_hash"] == (
+        "sha256:" + "66" * 32
+    )
+
+
+def test_settlement_approval_is_recorded_before_broadcast_and_bound_to_hash() -> None:
+    client, repository = _client()
+    intent_id = "settlement:neg:1"
+    intent_hash = "sha256:" + "44" * 32
+    path = (
+        f"/api/dev/pawnhouse/settlement-intents/{intent_id}/approval"
+    )
+    body = {
+        "approvedIntentHash": intent_hash,
+        "authorizationNonce": "0x" + "44" * 32,
+        "approvalSource": "operator_cli",
+        "humanConfirmed": False,
+    }
+
+    denied = client.post(
+        path,
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json=body,
+    )
+    assert denied.status_code == 422
+    assert denied.json()["detail"]["code"] == "human_confirmation_required"
+    assert repository.approvals == []
+
+    body["humanConfirmed"] = True
+    approved = client.post(
+        path,
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json=body,
+    )
+    assert approved.status_code == 200
+    assert approved.json()["approvalRecorded"] is True
+    assert body["authorizationNonce"] not in approved.text
+    assert repository.approvals == [
+        {
+            "settlement_intent_id": intent_id,
+            "approved_intent_hash": intent_hash,
+            "authorization_nonce": "0x" + "44" * 32,
+            "approval_source": "operator_cli",
+        }
+    ]
 
 
 def test_settlement_intent_projection_is_public_and_read_only() -> None:
@@ -348,4 +484,18 @@ def test_settlement_intent_projection_is_public_and_read_only() -> None:
     assert (
         response.json()["settlementIntents"][0]["status"]
         == "authorization_requested"
+    )
+
+
+def test_inventory_commit_receipt_is_public_and_stable() -> None:
+    client, _ = _client()
+    intent_id = "settlement:neg:1"
+    response = client.get(
+        f"/api/v1/pawnhouse/settlement-intents/{intent_id}/inventory-commit"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "inventory_committed"
+    assert response.json()["inventoryCommitId"] == (
+        f"inventory-commit:{intent_id}"
     )

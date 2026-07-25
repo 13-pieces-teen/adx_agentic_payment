@@ -10,6 +10,12 @@ from .events import (
     WorldState,
     schedule_commitment,
 )
+from .event_deck import (
+    EventDeckError,
+    EventMode,
+    STANDARD_EVENT_DECK_ID,
+    build_event_schedule,
+)
 from .evm_confirmation import ChainReadError, EvmJsonRpcConfirmationReader
 from .game import (
     GameConfig,
@@ -65,6 +71,8 @@ __all__ = [
     "MVP_EVENT_CATALOG",
     "EffectKind",
     "EventEffect",
+    "EventDeckError",
+    "EventMode",
     "EventError",
     "GameConfig",
     "GameError",
@@ -103,10 +111,12 @@ __all__ = [
     "SettlementError",
     "SettlementIntent",
     "SettlementRecoveryWorker",
+    "STANDARD_EVENT_DECK_ID",
     "WorldEvent",
     "WorldSnapshot",
     "WorldState",
     "apply_basis_points",
+    "build_event_schedule",
     "calculate_rankings",
     "demo_events",
     "format_gold",

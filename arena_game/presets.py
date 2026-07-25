@@ -211,6 +211,75 @@ MVP_EVENT_CATALOG: Final[dict[str, WorldEvent]] = {
             ),
         ),
     ),
+    "merchant-caravan": WorldEvent(
+        event_id="merchant-caravan",
+        display_name="商队入城",
+        narrative="南方商队穿过封锁抵达王城，粮草与宝石的短期供给同时增加。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.SUPPLY_INDEX_ADD_BPS,
+                good="grain",
+                target="market",
+                basis_points=2_000,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="market",
+                basis_points=-1_000,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="market",
+                basis_points=-1_000,
+            ),
+        ),
+    ),
+    "royal-wedding": WorldEvent(
+        event_id="royal-wedding",
+        display_name="王室婚礼",
+        narrative="王室突然宣布联姻，贵族争购宝石与战马以赶赴盛典。",
+        reveal_round=1,
+        duration_rounds=None,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="both",
+                basis_points=2_000,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="both",
+                basis_points=1_500,
+            ),
+        ),
+    ),
+    "stable-plague": WorldEvent(
+        event_id="stable-plague",
+        display_name="马厩疫病",
+        narrative="王城马厩爆发疫病，战马交易骤冷，幸存马匹的终场估值承压。",
+        reveal_round=1,
+        duration_rounds=None,
+        effects=(
+            EventEffect(
+                kind=EffectKind.SUPPLY_INDEX_ADD_BPS,
+                good="warhorse",
+                target="market",
+                basis_points=-2_000,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="both",
+                basis_points=-2_000,
+            ),
+        ),
+    ),
 }
 
 

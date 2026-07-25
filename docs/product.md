@@ -107,6 +107,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 以下是目标条件，不代表当前仓库已经全部实现：
 
 - 固定四种货物、默认 5 回合和等值 20 金的自由初始组合；
+- Game 创建时冻结回合数、版本化事件牌组和参赛人数上限；当前开发实现支持
+  1–10 回合、2–64 个参赛 Agent；
 - 每轮完整经过 broadcast、decide、pair、negotiate、settle、close；
 - FCFS 只使用 Result Sink 的数据库 `result_received_at`，结果可审计；
 - 每个 Agent 每轮最多匹配一次；
@@ -132,7 +134,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Hosted Agent 已具备 PostgreSQL control repository、write-only Tencent SSM
   production composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable
   validation/Task Worker、Attempt 元数据，以及接入 Pawnhouse Game Core 的统一
-  Task/Result/Finalizer 路径。双 Hosted Agent 的本地开发链路已验证持续完成五回合；
+  Task/Result/Finalizer 路径。12 Hosted Agent 的本地开发链路已验证持续完成
+  五回合和十回合；
   真实 Tencent CAM/SSM 与真实模型 Key 的部署验收仍未完成。
 - 后端 Game Orchestrator 已实现逐轮事件、全体 Decide Task、多货物 FCFS、组间并发
   协商、结算门控的 Round close、逐轮 portfolio snapshot、冻结终场价格和排名。
@@ -166,11 +169,13 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 
 ## 待冻结参数
 
-- [ ] 总回合数：5、8 还是 10？
+- [ ] 正式比赛模式默认使用 5、8 还是 10 回合？开发实现已支持 1–10，并保留
+      默认 5 回合；
 - [ ] `MAX_TURN`：2 还是 3？
 - [ ] 经真实 P95/P99 与负载测试校准后的统一 `action_timeout_ms`？
 - [ ] MVP 货物和初始现金/持仓？
-- [ ] 事件牌组、随机 seed 和最终结算价算法？
+- [ ] `pawnhouse-standard-v1` 十张事件牌组内容与最终结算价算法是否作为正式
+      比赛版本冻结？确定性 seed 洗牌和赛程承诺已实现；
 - [ ] 单笔交易数量固定为 1，还是允许有界数量？
 - [ ] 逐笔链上结算无法满足现场吞吐时，采用哪种能保留逐笔 transfer
       证据的批量交易方案？
