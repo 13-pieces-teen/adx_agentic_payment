@@ -29,8 +29,12 @@ class ConnectorGatewayConfig:
     database_url: str
     session_secret: str
     public_app_url: str
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = None
     session_cookie_name: str = "adx_session"
     csrf_cookie_name: str = "adx_csrf"
+    github_oauth_state_cookie_name: str = "adx_github_oauth_state"
+    github_oauth_state_ttl_seconds: int = 10 * 60
     session_ttl_seconds: int = 7 * 24 * 60 * 60
     cookie_secure: bool = True
     bootstrap_invite_hash: str | None = None
@@ -46,6 +50,10 @@ class ConnectorGatewayConfig:
         ).strip()
         session_secret = os.getenv("ADX_CONNECTOR_SESSION_SECRET", "").strip()
         public_app_url = os.getenv("ADX_PUBLIC_APP_URL", "").strip().rstrip("/")
+        github_oauth_client_id = os.getenv("ADX_GITHUB_OAUTH_CLIENT_ID", "").strip()
+        github_oauth_client_secret = os.getenv(
+            "ADX_GITHUB_OAUTH_CLIENT_SECRET", ""
+        ).strip()
         environment = os.getenv("ADX_ENV", "production").strip().lower()
         cookie_secure_raw = os.getenv("ADX_CONNECTOR_COOKIE_SECURE", "true")
         cookie_secure = cookie_secure_raw.strip().lower() in {"1", "true", "yes"}
@@ -68,6 +76,11 @@ class ConnectorGatewayConfig:
         if environment == "production" and parsed_app_url.scheme != "https":
             raise ConnectorConfigurationError(
                 "ADX_PUBLIC_APP_URL must use HTTPS in production"
+            )
+        if bool(github_oauth_client_id) != bool(github_oauth_client_secret):
+            raise ConnectorConfigurationError(
+                "ADX_GITHUB_OAUTH_CLIENT_ID and ADX_GITHUB_OAUTH_CLIENT_SECRET "
+                "must be configured together"
             )
         if environment == "production" and not cookie_secure:
             raise ConnectorConfigurationError(
@@ -95,10 +108,18 @@ class ConnectorGatewayConfig:
             database_url=database_url,
             session_secret=session_secret,
             public_app_url=public_app_url,
+            github_oauth_client_id=github_oauth_client_id or None,
+            github_oauth_client_secret=github_oauth_client_secret or None,
             session_cookie_name=cookie_name,
             # The browser client reads this stable non-HttpOnly double-submit
             # cookie name. Keep it independent from a customized session name.
             csrf_cookie_name="adx_csrf",
+            github_oauth_state_ttl_seconds=_positive_int(
+                "ADX_GITHUB_OAUTH_STATE_TTL_SECONDS",
+                10 * 60,
+                60,
+                15 * 60,
+            ),
             session_ttl_seconds=_positive_int(
                 "ADX_CONNECTOR_SESSION_TTL_SECONDS",
                 7 * 24 * 60 * 60,

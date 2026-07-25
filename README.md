@@ -120,7 +120,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、`005` 迁移、创建 API 和最小 UI 已实现；本地开发模式可直接创建并持续运行，生产模式使用 Tencent SSM 且仍需部署环境完成真实凭据验收 |
 | 统一 Runtime 基础 | Hosted Agent 已通过版本化 `AgentTask -> AgentTaskResult`、Result Sink/Consumer 与独立 Finalizer 接入 Game Core；Local Connector 游戏适配仍待实现 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并在 Injective EVM testnet 验证 |
-| 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)；外部 `main` 已更新为 Next.js 15.5.21 并包含 Vercel 配置。Vercel 发布与当前 Pawnhouse/Hosted API、Cookie/CORS 的切换验收尚未完成；本仓库 `frontend/` 仅作为 Compose 过渡壳 |
+| 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限 |
 | 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；独立成交演示可冻结单笔 EIP-3009 意图；只读链上恢复与确认后现金/货物幂等提交已实现；通用 PaymentMandate 和新鲜交易验收尚未完成 |
 | 标准 HTTP x402 | 尚未实现 `402 Payment Required` challenge、支付 header、paid retry 或标准公共 Facilitator 兼容 |
@@ -135,14 +135,14 @@ x402 HTTP 实现。Arena 402 的产品红线是“真实链上结算”，而不
 |------|------|
 | `web/` | 当前 HTTP 组合根：Connector、Hosted Agent、Arena participation 与 Pawnhouse API |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
-| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`013` Pawnhouse 市场、Hosted orchestration、确认后结算、完整游戏、参赛容量和 Hosted Runtime PATCH 迁移 |
+| `db/` | Connector、Hosted Agent/Runtime/Task，以及 `006`–`014` Pawnhouse、Hosted Runtime PATCH 与 GitHub OAuth 身份迁移 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
 | `hosted_agent_runtime/` | Secret Store、durable Attempt recorder、Provider/Model/thinking capability registry、安全 Prompt/Driver，以及 DeepSeek/OpenAI-compatible HTTPS Provider |
 | `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、同 Provider Runtime PATCH、PostgreSQL repository、Tencent SSM 生产组合与显式 local-development 组合 |
 | `docs/hosted-arena-agent-*.md` | Hosted/Local 统一 Runtime 的已批准规格、实施计划与当前阶段状态 |
-| `frontend/` | 当前 Compose 仍依赖的临时 Next.js 集成壳；新产品 UI 在外部 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402) 开发和部署，完成切换后删除本目录 |
-| `deploy/`, `docker-compose.production.yml` | Connector 控制面，以及可选 Hosted Worker、Credential Controller、Arena Worker 的 fail-closed 单机部署 |
+| `frontend/` | 仅用于本地开发和显式 `legacy-web` profile 的过渡壳；生产默认不再构建或启动它 |
+| `deploy/`, `docker-compose.production.yml` | 面向 `api.arena402.com` 的后端单机部署，以及可选 Hosted Worker、Credential Controller、Arena Worker；非 API 请求回到 Vercel 前端 |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 结算原型 |
 | `agent-arena/specs/` | 已完成且冻结的 settlement 开发记录 |
 | `docs/game-design.md` | 当前权威游戏机制与跨模块 I/O |

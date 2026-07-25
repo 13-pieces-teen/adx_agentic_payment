@@ -12,6 +12,9 @@ x-api-environment: &api-environment
   ADX_ARENA_API_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
   DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
   ADX_CONNECTOR_SESSION_SECRET: ${ADX_CONNECTOR_SESSION_SECRET:?Set ADX_CONNECTOR_SESSION_SECRET in deploy/.env}
+  ADX_GITHUB_OAUTH_CLIENT_ID: ${ADX_GITHUB_OAUTH_CLIENT_ID:-}
+  ADX_GITHUB_OAUTH_CLIENT_SECRET: ${ADX_GITHUB_OAUTH_CLIENT_SECRET:-}
+  ADX_GITHUB_OAUTH_STATE_TTL_SECONDS: ${ADX_GITHUB_OAUTH_STATE_TTL_SECONDS:-600}
   ADX_BOOTSTRAP_INVITE_HASH: ${ADX_BOOTSTRAP_INVITE_HASH:?Set ADX_BOOTSTRAP_INVITE_HASH in deploy/.env}
   ADX_CONNECTOR_SESSION_TTL_SECONDS: ${ADX_CONNECTOR_SESSION_TTL_SECONDS:-604800}
   ADX_CONNECTOR_COOKIE_NAME: ${ADX_CONNECTOR_COOKIE_NAME:-adx_session}
@@ -285,6 +288,8 @@ services:
     logging: *default-logging
 
   web:
+    profiles:
+      - legacy-web
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.web
@@ -334,10 +339,9 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      web:
-        condition: service_healthy
     environment:
       ADX_PUBLIC_HOST: ${ADX_PUBLIC_HOST:?Set ADX_PUBLIC_HOST in deploy/.env}
+      ADX_PUBLIC_APP_URL: ${ADX_PUBLIC_APP_URL:?Set ADX_PUBLIC_APP_URL in deploy/.env}
     ports:
       - "80:80"
       - "443:443"

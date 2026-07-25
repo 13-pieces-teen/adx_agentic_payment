@@ -134,10 +134,11 @@ Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游�
 为当前目标。
 
 产品前端已迁移到
-[`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，计划由
-Vercel 部署。外部 `main` 已更新为 Next.js 15.5.21 并包含 Vercel 配置；legacy
-Agent/listing/ELO client 到 Pawnhouse/Hosted/Connector API 的迁移、Cookie/CORS
-联调和部署验收尚未完成。本仓库 `frontend/` 仅保留为 Compose 过渡壳。
+[`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
+Vercel 部署到 `www.arena402.com`。后端 GitHub OAuth + PKCE、Session/CSRF Cookie
+和安全回跳契约已实现；legacy Agent/listing/ELO client 到当前 API 的迁移、
+真实 OAuth App、Vercel→腾讯云 Cookie/CORS 联调和部署验收尚未完成。本仓库
+`frontend/` 仅保留为本地开发与显式 `legacy-web` profile。
 
 王城典当行 clean-slate 后端闭环已经形成。`arena_game/`、`arena_core/` 与
 PostgreSQL `arena402` schema 是游戏业务权威；旧 `matching/`、Supabase 业务
@@ -214,9 +215,11 @@ create game
       `reserve / consume / release` 尚未实现。
 - [ ] 当前完整链路尚未执行一笔新鲜 Injective testnet 交易；现有实现停在显式
       人工确认闸门。
+- [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
+      不可变 GitHub subject 身份、现有 Session/CSRF Cookie 和安全回跳。
 - [ ] 外部前端已完成 Next.js 仓库升级，但尚需移除 legacy Agent/listing/ELO
-      API client，完成 Vercel 发布、Cookie/CORS 联调、Realtime 推送、完整 Game
-      Operator UI 与生产级错误恢复；完成后删除本仓库过渡壳。
+      API client，完成 Vercel→腾讯云 OAuth/Cookie/CORS 公网联调、Realtime 推送、
+      完整 Game Operator UI 与生产级错误恢复；本仓库过渡壳已退出默认生产 profile。
 - [x] 固定五回合事件表、版本化十张牌组、确定性 seed 洗牌、schedule
       commitment、结束后 seed 揭晓与冻结终场价格已实现。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令

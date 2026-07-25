@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -148,6 +149,7 @@ class PostgresConnectorRepository:
                         )
                         VALUES ($1, $2, $3, $4, $5)
                         RETURNING user_id, username, password_hash, temporary,
+                                  identity_provider, provider_subject,
                                   created_at, disabled_at
                         """,
                         user_id,
@@ -180,13 +182,80 @@ class PostgresConnectorRepository:
         pool = self._require_pool()
         row = await pool.fetchrow(
             """
-            SELECT user_id, username, password_hash, temporary, created_at, disabled_at
+            SELECT user_id, username, password_hash, temporary,
+                   identity_provider, provider_subject, created_at, disabled_at
             FROM connector_users
             WHERE username = $1
             """,
             normalized_username,
         )
         return dict(row) if row else None
+
+    async def get_or_create_oauth_user(
+        self,
+        provider: str,
+        subject: str,
+        preferred_username: str,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                existing = await connection.fetchrow(
+                    """
+                    SELECT user_id, username, password_hash, temporary,
+                           identity_provider, provider_subject,
+                           created_at, disabled_at
+                    FROM connector_users
+                    WHERE identity_provider = $1 AND provider_subject = $2
+                    FOR UPDATE
+                    """,
+                    provider,
+                    subject,
+                )
+                if existing is not None:
+                    return dict(existing)
+
+                user_id = f"user_{uuid.uuid4().hex[:20]}"
+                candidates = (
+                    preferred_username,
+                    f"{provider}-{subject}"[:64],
+                )
+                for username in dict.fromkeys(candidates):
+                    created = await connection.fetchrow(
+                        """
+                        INSERT INTO connector_users (
+                            user_id, username, password_hash, temporary,
+                            identity_provider, provider_subject, created_at
+                        )
+                        VALUES ($1, $2, NULL, FALSE, $3, $4, $5)
+                        ON CONFLICT DO NOTHING
+                        RETURNING user_id, username, password_hash, temporary,
+                                  identity_provider, provider_subject,
+                                  created_at, disabled_at
+                        """,
+                        user_id,
+                        username,
+                        provider,
+                        subject,
+                        created_at,
+                    )
+                    if created is not None:
+                        return dict(created)
+                    existing = await connection.fetchrow(
+                        """
+                        SELECT user_id, username, password_hash, temporary,
+                               identity_provider, provider_subject,
+                               created_at, disabled_at
+                        FROM connector_users
+                        WHERE identity_provider = $1 AND provider_subject = $2
+                        """,
+                        provider,
+                        subject,
+                    )
+                    if existing is not None:
+                        return dict(existing)
+                raise DuplicateIdentityError
 
     async def create_session(
         self,

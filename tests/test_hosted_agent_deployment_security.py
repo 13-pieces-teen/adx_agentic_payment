@@ -93,3 +93,30 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
     ) in deploy
     assert "compose --profile arena up -d arena-worker" in deploy
     assert "verified writer/reader/controller SSM IAM" in deploy
+
+
+def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "deploy" / "scripts" / "deploy.sh").read_text(
+        encoding="utf-8"
+    )
+    generator = (
+        ROOT / "deploy" / "scripts" / "generate-env.sh"
+    ).read_text(encoding="utf-8")
+    caddy = (ROOT / "deploy" / "caddy" / "Caddyfile.domain").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ADX_GITHUB_OAUTH_CLIENT_ID:" in compose
+    assert "ADX_GITHUB_OAUTH_CLIENT_SECRET:" in compose
+    assert "profiles:\n      - legacy-web" in compose
+    assert "compose build --pull api migrate provision-db-roles" in deploy
+    assert "compose up -d api caddy" in deploy
+    assert "compose up -d api web caddy" not in deploy
+    assert "--app-url" in generator
+    assert 'printf \'ADX_GITHUB_OAUTH_CLIENT_ID=\\n\'' in generator
+    assert 'printf \'ADX_GITHUB_OAUTH_CLIENT_SECRET=\\n\'' in generator
+    assert "redir {$ADX_PUBLIC_APP_URL}{uri} permanent" in caddy
+    assert "reverse_proxy web:3000" not in caddy

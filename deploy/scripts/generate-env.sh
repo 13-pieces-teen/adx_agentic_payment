@@ -6,11 +6,12 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "${script_dir}/lib.sh"
 
 usage() {
-  echo "Usage: $0 [--http] [--invite-output-file PATH] <public-domain-or-ip> [acme-email]" >&2
+  echo "Usage: $0 [--http] [--app-url URL] [--invite-output-file PATH] <public-api-domain-or-ip> [acme-email]" >&2
   exit 2
 }
 
 http_only=false
+app_url=
 invite_output_file=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -21,6 +22,11 @@ while [ "$#" -gt 0 ]; do
     --invite-output-file)
       [ "$#" -ge 2 ] || usage
       invite_output_file=$2
+      shift 2
+      ;;
+    --app-url)
+      [ "$#" -ge 2 ] || usage
+      app_url=$2
       shift 2
       ;;
     --*)
@@ -103,6 +109,31 @@ else
   adx_environment=production
   cookie_secure=true
 fi
+if [ -n "${app_url}" ]; then
+  public_url="${app_url}"
+fi
+case "${public_url}" in
+  https://*)
+    app_host="${public_url#https://}"
+    ;;
+  http://*)
+    if [ "${adx_environment}" = "production" ]; then
+      echo "--app-url must use HTTPS in production." >&2
+      exit 1
+    fi
+    app_host="${public_url#http://}"
+    ;;
+  *)
+    echo "--app-url must be an absolute HTTP(S) URL without credentials." >&2
+    exit 1
+    ;;
+esac
+case "${app_host}" in
+  ""|*[!A-Za-z0-9.:-]*|*@*|*/*|*\?*|*\#*)
+    echo "--app-url must contain only a host and optional port." >&2
+    exit 1
+    ;;
+esac
 
 postgres_password="$(openssl rand -hex 32)"
 api_database_password="$(openssl rand -hex 32)"
@@ -132,6 +163,9 @@ umask 077
   printf 'ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD=%s\n' "${credential_controller_database_password}"
   printf '\n'
   printf 'ADX_CONNECTOR_SESSION_SECRET=%s\n' "${session_secret}"
+  printf 'ADX_GITHUB_OAUTH_CLIENT_ID=\n'
+  printf 'ADX_GITHUB_OAUTH_CLIENT_SECRET=\n'
+  printf 'ADX_GITHUB_OAUTH_STATE_TTL_SECONDS=600\n'
   printf 'ADX_BOOTSTRAP_INVITE_HASH=%s\n' "${bootstrap_invite_hash}"
   printf 'ADX_CONNECTOR_SESSION_TTL_SECONDS=604800\n'
   printf 'ADX_CONNECTOR_COOKIE_NAME=adx_session\n'

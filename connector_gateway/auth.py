@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import re
@@ -11,6 +12,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHash, VerificationError
@@ -18,6 +20,7 @@ from fastapi import Request, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .config import ConnectorGatewayConfig
+from .github_oauth import GithubOAuthClient, GithubOAuthError
 from .repository import (
     ConnectorRepository,
     DuplicateIdentityError,
@@ -64,12 +67,18 @@ class ConnectorAuth:
         self,
         repository: ConnectorRepository,
         config: ConnectorGatewayConfig,
+        github_oauth_client: GithubOAuthClient | None = None,
     ) -> None:
         self.repository = repository
         self.config = config
+        self.github_oauth_client = github_oauth_client
         self._signer = URLSafeTimedSerializer(
             config.session_secret,
             salt="adx-connector-session-v1",
+        )
+        self._github_state_signer = URLSafeTimedSerializer(
+            config.session_secret,
+            salt="arena402-github-oauth-state-v1",
         )
         self._password_hasher = PasswordHasher(
             time_cost=3,
@@ -169,6 +178,7 @@ class ConnectorAuth:
             not verified
             or user is None
             or user.get("temporary")
+            or user.get("identity_provider", "password") != "password"
             or user.get("disabled_at") is not None
         ):
             raise AuthError(401, "Invalid username or password")
@@ -221,6 +231,153 @@ class ConnectorAuth:
         await self.repository.revoke_session(
             principal.session_token_hash,
             _now(),
+        )
+
+    def begin_github_oauth(self, return_to: str | None) -> tuple[str, str]:
+        if not (
+            self.config.github_oauth_client_id
+            and self.config.github_oauth_client_secret
+        ):
+            raise AuthError(503, "GitHub sign-in is unavailable")
+
+        state = secrets.token_urlsafe(32)
+        code_verifier = secrets.token_urlsafe(64)
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode("ascii")).digest()
+        ).rstrip(b"=").decode("ascii")
+        redirect_uri = (
+            f"{self.config.public_app_url}/api/auth/github/callback"
+        )
+        signed_state = self._github_state_signer.dumps(
+            {
+                "state": state,
+                "code_verifier": code_verifier,
+                "return_to": self.safe_return_to(return_to),
+            }
+        )
+        query = urlencode(
+            {
+                "client_id": self.config.github_oauth_client_id,
+                "redirect_uri": redirect_uri,
+                "scope": "read:user",
+                "state": state,
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
+                "prompt": "select_account",
+            }
+        )
+        return f"https://github.com/login/oauth/authorize?{query}", signed_state
+
+    def validate_github_oauth_state(
+        self,
+        signed_state: str | None,
+        supplied_state: str | None,
+    ) -> dict[str, str]:
+        if not signed_state or not supplied_state:
+            raise AuthError(401, "invalid_state")
+        try:
+            value = self._github_state_signer.loads(
+                signed_state,
+                max_age=self.config.github_oauth_state_ttl_seconds,
+            )
+        except (BadSignature, SignatureExpired) as exc:
+            raise AuthError(401, "invalid_state") from exc
+        if not isinstance(value, dict):
+            raise AuthError(401, "invalid_state")
+        expected_state = value.get("state")
+        code_verifier = value.get("code_verifier")
+        return_to = value.get("return_to")
+        if (
+            not isinstance(expected_state, str)
+            or not hmac.compare_digest(expected_state, supplied_state)
+            or not isinstance(code_verifier, str)
+            or not 43 <= len(code_verifier) <= 128
+            or not isinstance(return_to, str)
+        ):
+            raise AuthError(401, "invalid_state")
+        return {
+            "code_verifier": code_verifier,
+            "return_to": self.safe_return_to(return_to),
+        }
+
+    async def sign_in_with_github(
+        self,
+        *,
+        code: str,
+        oauth_state: dict[str, str],
+    ) -> IssuedSession:
+        if self.github_oauth_client is None:
+            raise AuthError(503, "github_unavailable")
+        try:
+            identity = await self.github_oauth_client.authenticate(
+                code=code,
+                code_verifier=oauth_state["code_verifier"],
+                redirect_uri=(
+                    f"{self.config.public_app_url}/api/auth/github/callback"
+                ),
+            )
+        except GithubOAuthError as exc:
+            raise AuthError(502, "github_failed") from exc
+
+        subject = identity.get("subject")
+        login = identity.get("login")
+        if (
+            not isinstance(subject, str)
+            or not subject.isdigit()
+            or not isinstance(login, str)
+        ):
+            raise AuthError(502, "github_failed")
+        normalized_login = login.strip().lower()
+        if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38})", normalized_login):
+            raise AuthError(502, "github_failed")
+        try:
+            user = await self.repository.get_or_create_oauth_user(
+                "github",
+                subject,
+                normalized_login,
+                _now(),
+            )
+        except DuplicateIdentityError as exc:
+            raise AuthError(409, "github_failed") from exc
+        if user.get("disabled_at") is not None:
+            raise AuthError(403, "account_disabled")
+        return await self._issue_session(user)
+
+    @staticmethod
+    def safe_return_to(value: str | None) -> str:
+        if (
+            not value
+            or len(value) > 1024
+            or not value.startswith("/")
+            or value.startswith("//")
+            or "\\" in value
+            or any(ord(char) < 32 for char in value)
+        ):
+            return "/agents"
+        return value
+
+    def set_github_oauth_state_cookie(
+        self,
+        response: Response,
+        signed_state: str,
+    ) -> None:
+        response.set_cookie(
+            self.config.github_oauth_state_cookie_name,
+            signed_state,
+            max_age=self.config.github_oauth_state_ttl_seconds,
+            path="/api/auth/github",
+            secure=self.config.cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+
+    def clear_github_oauth_state_cookie(self, response: Response) -> None:
+        response.delete_cookie(
+            self.config.github_oauth_state_cookie_name,
+            path="/api/auth/github",
+            secure=self.config.cookie_secure,
+            httponly=True,
+            samesite="lax",
         )
 
     def set_session_cookies(self, response: Response, issued: IssuedSession) -> None:

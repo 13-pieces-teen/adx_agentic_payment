@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from .api import create_production_connector_router
 from .auth import ConnectorAuth
 from .config import ConnectorGatewayConfig
+from .github_oauth import GithubOAuthClient, HttpxGithubOAuthClient
 from .persistent_service import PersistentConnectorGateway
 from .postgres_repository import PostgresConnectorRepository
 from .repository import ConnectorRepository
@@ -34,6 +35,7 @@ class ProductionConnectorBundle:
 def build_production_connector(
     config: ConnectorGatewayConfig | None = None,
     repository: ConnectorRepository | None = None,
+    github_oauth_client: GithubOAuthClient | None = None,
 ) -> ProductionConnectorBundle:
     """Build a fail-closed production bundle without performing network I/O."""
 
@@ -46,7 +48,21 @@ def build_production_connector(
         verification_uri=f"{resolved_config.public_app_url}/connect",
         max_pending_pairings=resolved_config.max_pending_pairings,
     )
-    auth = ConnectorAuth(resolved_repository, resolved_config)
+    resolved_github_oauth_client = github_oauth_client
+    if (
+        resolved_github_oauth_client is None
+        and resolved_config.github_oauth_client_id
+        and resolved_config.github_oauth_client_secret
+    ):
+        resolved_github_oauth_client = HttpxGithubOAuthClient(
+            resolved_config.github_oauth_client_id,
+            resolved_config.github_oauth_client_secret,
+        )
+    auth = ConnectorAuth(
+        resolved_repository,
+        resolved_config,
+        github_oauth_client=resolved_github_oauth_client,
+    )
     return ProductionConnectorBundle(
         config=resolved_config,
         repository=resolved_repository,

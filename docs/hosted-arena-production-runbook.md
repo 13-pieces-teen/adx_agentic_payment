@@ -24,7 +24,9 @@ plane. PostgreSQL, not process memory, is the durable queue and state authority.
 On the server:
 
 ```sh
-sh deploy/scripts/generate-env.sh arena.example.com
+sh deploy/scripts/generate-env.sh \
+  --app-url https://www.arena402.com \
+  api.arena402.com
 chmod 600 deploy/.env
 ```
 
@@ -35,7 +37,21 @@ optional production workers disabled.
 Never commit `deploy/.env`. Do not place a model API key, wallet private key,
 seed phrase, or EIP-3009 signature in this file.
 
-## 2. Configure Tencent SSM identities
+## 2. Configure GitHub browser identity
+
+Create a GitHub OAuth App whose callback URL is exactly:
+
+```text
+https://www.arena402.com/api/auth/github/callback
+```
+
+Set `ADX_GITHUB_OAUTH_CLIENT_ID` and `ADX_GITHUB_OAUTH_CLIENT_SECRET` only in
+the root-readable `deploy/.env`. The backend uses `state` plus PKCE, discards
+the access token after resolving the immutable GitHub user ID, and reuses the
+existing HttpOnly Session and CSRF cookies. The callback intentionally returns
+through Vercel so the browser cookies belong to `www.arena402.com`.
+
+## 3. Configure Tencent SSM identities
 
 Before setting `ADX_TENCENT_SSM_IAM_VERIFIED=true`, verify three distinct CAM
 identities against only the Arena Hosted-model Secret prefix:
@@ -65,7 +81,7 @@ SSM settings, PostgreSQL repository, and role-specific IAM verification flag
 are all present. There is no production fallback to the in-memory Secret
 Store or deterministic demo Provider.
 
-## 3. Enable the Arena Worker
+## 4. Enable the Arena Worker
 
 Review the Injective testnet read endpoints, then set:
 
@@ -89,14 +105,15 @@ starting point remains conservative. The local development profile defaults
 to 12 only so the scripted 12-Agent demonstration does not serialize all
 calls. Do not copy that value to production before real Provider load tests.
 
-## 4. Deploy
+## 5. Deploy
 
 ```sh
 sh deploy/scripts/deploy.sh
 ```
 
-The script always deploys PostgreSQL, migration, role provisioning, API, Web,
-and Caddy. It starts Hosted and Arena profiles only when their explicit enable
+The script always deploys PostgreSQL, migration, role provisioning, API, and
+Caddy. The repository-local Web is an opt-in `legacy-web` profile and is not
+part of the Vercel production topology. The script starts Hosted and Arena profiles only when their explicit enable
 flags are true. Hosted startup additionally refuses to proceed until SSM IAM
 has been marked verified.
 
@@ -105,7 +122,7 @@ Compose memory limits total about 3.5 GB; migration and role-provisioning jobs
 are short-lived. Do not add API replicas because the current Connector WSS
 connection registry and rate limiter remain single-process.
 
-## 5. Verify without moving funds
+## 6. Verify without moving funds
 
 ```sh
 docker compose --env-file deploy/.env -f docker-compose.production.yml \
@@ -141,7 +158,7 @@ uses a deterministic per-Intent nonce. If submission recording is interrupted,
 resume only with the already public transaction hash; never replace it with a
 new authorization.
 
-## 6. Rollback
+## 7. Rollback
 
 Disable new Hosted creation first:
 

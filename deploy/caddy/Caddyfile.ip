@@ -58,6 +58,6 @@ https://{$ADX_PUBLIC_HOST} {
 	}
 
 	handle {
-		reverse_proxy web:3000
+		redir {$ADX_PUBLIC_APP_URL}{uri} permanent
 	}
 }

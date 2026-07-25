@@ -1,9 +1,9 @@
 # Arena 402 Connector 云端控制面部署与运维
 
-> 前端迁移说明（2026-07-25）：产品前端权威已迁移到
-> [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，目标由
-> Vercel 部署。本文的 Next.js/Caddy web 拓扑仍描述当前可运行的 Compose 过渡栈；
-> 外部前端与 API/CORS 切换验收完成后需要删除该 web service 并更新本文。
+> 前端边界（2026-07-25）：产品前端权威位于
+> [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
+> Vercel 发布到 `www.arena402.com`。腾讯云仅承载 `api.arena402.com` 后端；
+> 本仓库 `frontend/` 只保留为显式 `legacy-web` profile，不属于默认生产部署。
 
 本文档描述当前仓库的单机生产拓扑，目标是让外部用户完成“一次安装、一次授权、自动上线”。部署不依赖 Supabase：Connector 身份、配对、设备、Runtime、命令、事件和审计数据均落在自托管 PostgreSQL。
 
@@ -15,21 +15,22 @@ Command succeeded 也不能作为成交或链上支付确认。
 ## 1. 目标拓扑
 
 ```text
-Internet
-  |
-  | TCP 80/443, UDP 443
-  v
-Caddy
-  |----------------------|
-  v                      v
-Next.js :3000        FastAPI :8000
-                         |
-                         v
-                   PostgreSQL :5432
+Browser -> www.arena402.com (Vercel Next.js)
+             |
+             | same-origin /api/* rewrite
+             v
+       api.arena402.com (Tencent Caddy)
+             |
+             v
+         FastAPI :8000
+             |
+             v
+       PostgreSQL :5432
 ```
 
-- 只有 Caddy 映射主机端口。Next.js、FastAPI、PostgreSQL 仅存在于 Docker 网络。
-- `edge` 网络连接 Caddy、Web 和 API；`data` 是 `internal: true` 的数据库网络。
+- 只有 Caddy 映射主机端口。FastAPI、PostgreSQL 和所有 Worker 仅存在于 Docker 网络。
+- `edge` 网络连接 Caddy、API 和可选 Worker；`data` 是 `internal: true` 的数据库网络。
+- Caddy 代理 `/api/*`、提供 `/downloads/*`，其他请求重定向到 `ADX_PUBLIC_APP_URL`。
 - API 固定为一个 Uvicorn worker，因为在线 WebSocket 注册表当前仍在进程内；业务状态由 PostgreSQL 持久化。
 - Event/Audit 按增量写入并仅保留最近 10,000 条；这是一套单机 beta 留存策略，不是不可篡改金融审计仓库。
 - 容器配置了健康检查、内存/CPU 上限、只读根文件系统（适用服务）以及 Docker 日志轮转。
@@ -44,7 +45,9 @@ Next.js :3000        FastAPI :8000
 `ADX_TLS_MODE=domain` 时，Caddy 自动申请和续期证书。将域名 A 记录指向主机公网 IP，然后生成环境文件：
 
 ```bash
-sh deploy/scripts/generate-env.sh arena.example.com ops@example.com
+sh deploy/scripts/generate-env.sh \
+  --app-url https://www.arena402.com \
+  api.arena402.com ops@example.com
 ```
 
 中国大陆地域用域名对公网提供 Web 服务前，应先确认备案和接入要求。腾讯云说明见 [轻量应用服务器网站备案](https://cloud.tencent.com/document/product/1207/44376/)。
@@ -97,12 +100,17 @@ sudo sh deploy/scripts/bootstrap-host.sh
 
 ```bash
 # 1. 在仓库根目录生成 chmod 600 的服务器专用环境文件。
-sh deploy/scripts/generate-env.sh <domain-or-ip> [acme-email]
+sh deploy/scripts/generate-env.sh \
+  --app-url https://www.arena402.com \
+  api.arena402.com [acme-email]
 
 # 2. 检查模式和公开地址；不要把完整文件贴到工单或聊天。
 grep -E '^(ADX_TLS_MODE|ADX_PUBLIC_HOST|ADX_PUBLIC_APP_URL)=' deploy/.env
 
-# 3. 构建四个平台 Connector 安装包、迁移数据库并收敛所有服务。
+# 3. 在 deploy/.env 写入后端专用 GitHub OAuth App 凭据。
+#    Callback URL 必须是 https://www.arena402.com/api/auth/github/callback
+
+# 4. 构建 Connector 安装包、迁移数据库并收敛后端服务。
 sh deploy/scripts/deploy.sh
 ```
 
@@ -122,8 +130,8 @@ sh deploy/scripts/generate-env.sh \
 - 先执行 `docker compose config --quiet`；
 - 构建或校验 Connector 安装包与 SHA-256；
 - 等待 PostgreSQL 健康；
-- 使用 advisory lock 和迁移校验和执行 `002_connector_gateway.sql`；
-- 仅在迁移成功后启动单 worker API、Web 和 Caddy；
+- 使用 advisory lock 和迁移校验和执行所有维护中的 `002`–`014` 迁移；
+- 仅在迁移成功后启动单 worker API 和 Caddy；生产默认不启动本地 Web；
 - IP 模式自动处理证书与续期 timer。
 
 如由 CI 上传已签名的安装包，将 `ADX_BUILD_CONNECTOR_ARTIFACTS=false`，并把四个二进制、四个对应的 `.sha256`、`install.sh` 和 `install.ps1` 放到 `deploy/artifacts/`。脚本会重新计算并校验每个二进制的 SHA-256，而不只检查文件是否存在。

@@ -7,8 +7,9 @@
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
 > 相关入口：[Agent 入场与 Runtime 绑定](./agent-onboarding.md)
-> 前端边界：产品 UI 由外部 `sunruize93-cmyk/arena402` 负责并计划通过 Vercel
-> 部署；本仓库 Next.js 页面仅是尚未完成外部切换前的 Compose 过渡壳
+> 前端边界：产品 UI 由外部 `sunruize93-cmyk/arena402` 负责并通过 Vercel
+> 部署；后端 GitHub OAuth/Session 契约已实现，本仓库 Next.js 页面不属于默认
+> 生产 profile
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本规格同步
 > 设计优先级：本规格以最终 Hosted/Local 统一 Runtime 目标为准；现有 Game Design
 > 仅作为背景和待迁移输入，不作为阻止目标架构调整的严格约束

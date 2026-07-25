@@ -147,10 +147,11 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   只读链上恢复与确认后持仓幂等提交；尚未实现通用 PaymentMandate，也尚未执行
   当前完整链路的一笔新鲜 testnet 交易。
 - 产品前端已迁移到外部
-  [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，目标由
-  Vercel 部署；外部 `main` 已是 Next.js 15.5.21 并包含 Vercel 配置。当前仍需把
-  legacy Agent/listing/ELO API client 切换到 Pawnhouse/Hosted/Connector API，并
-  完成 Cookie/CORS 与部署验收。本仓库 `frontend/` 只是 Compose 过渡壳。
+  [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
+  Vercel 部署到 `www.arena402.com`。后端已实现同源 GitHub OAuth + PKCE、不可变
+  GitHub subject、现有 Session/CSRF Cookie 与安全回跳；仍需配置真实 OAuth App，
+  把 legacy Agent/listing/ELO client 切换到当前 API，并完成 Vercel→腾讯云公网
+  联调。本仓库 `frontend/` 已退出默认生产 profile。
 - 标准 HTTP x402 challenge/retry/header 与公共 Facilitator 兼容尚未实现。
 - TEE、主网资金、链上 escrow、退款、争议、生产手续费和多链不属于已实现能力。
 

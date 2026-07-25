@@ -7,8 +7,9 @@
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
-> 前端边界：产品 UI 已迁移到外部 `sunruize93-cmyk/arena402`；本计划中的
-> `frontend/` 路径记录当前 Compose 过渡壳，Vercel/API 切换尚未验收
+> 前端边界：产品 UI 已迁移到外部 `sunruize93-cmyk/arena402`；后端 GitHub
+> OAuth/Session 契约已实现，本计划中的 `frontend/` 路径只记录本地开发与
+> 显式 `legacy-web` profile，Vercel→腾讯云公网联调尚未验收
 > 设计优先级：以本计划定义的最终 Hosted/Local 统一 Runtime 目标为准；现有
 > Game Design 是待同步的背景输入，不是限制目标架构调整的硬约束
 
@@ -98,7 +99,7 @@ User logs in
 | `web/api.py` | production composition、Session principal 与 CSRF 接线 |
 | `frontend/src/app/agents/page.tsx` | Agent 统一入口页面 |
 | `frontend/src/lib/connector-api.ts` | 同源 authenticated API client 模式 |
-| `docker-compose.production.yml` | 单机 PostgreSQL/API/Web/Caddy 部署骨架 |
+| `docker-compose.production.yml` | 单机 PostgreSQL/API/Caddy 默认后端部署骨架；Web 仅为显式 legacy profile |
 
 复用的是安全与持久化模式，不是把 Connector Device/Command 表作为 Hosted Agent 表。
 

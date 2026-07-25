@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import threading
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import FastAPI
@@ -79,6 +80,8 @@ def test_production_configuration_fails_closed(monkeypatch):
         "ADX_CONNECTOR_SESSION_SECRET",
         "ADX_PUBLIC_APP_URL",
         "ADX_BOOTSTRAP_INVITE_HASH",
+        "ADX_GITHUB_OAUTH_CLIENT_ID",
+        "ADX_GITHUB_OAUTH_CLIENT_SECRET",
     ):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ConnectorConfigurationError, match="DATABASE_URL"):
@@ -95,6 +98,270 @@ def test_production_configuration_fails_closed(monkeypatch):
     config = ConnectorGatewayConfig.from_env()
     assert config.session_cookie_name == "adx_session"
     assert config.csrf_cookie_name == "adx_csrf"
+
+    monkeypatch.setenv("ADX_GITHUB_OAUTH_CLIENT_ID", "github-client-id")
+    with pytest.raises(ConnectorConfigurationError, match="configured together"):
+        ConnectorGatewayConfig.from_env()
+    monkeypatch.setenv("ADX_GITHUB_OAUTH_CLIENT_SECRET", "github-client-secret")
+    config = ConnectorGatewayConfig.from_env()
+    assert config.github_oauth_client_id == "github-client-id"
+
+
+def test_github_sign_in_starts_same_origin_pkce_flow():
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://arena402.com",
+        github_oauth_client_id="github-client-id",
+        github_oauth_client_secret="github-client-secret",
+    )
+    bundle = build_production_connector(config, MemoryConnectorRepository())
+    app = FastAPI()
+    app.include_router(bundle.router)
+    client = TestClient(app, base_url="https://arena402.com")
+
+    response = client.get(
+        "/api/auth/github/start",
+        params={"return_to": "/agents?tab=hosted"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert response.headers["cache-control"] == "no-store"
+    location = urlparse(response.headers["location"])
+    assert (location.scheme, location.netloc, location.path) == (
+        "https",
+        "github.com",
+        "/login/oauth/authorize",
+    )
+    query = parse_qs(location.query)
+    assert query["client_id"] == ["github-client-id"]
+    assert query["redirect_uri"] == [
+        "https://arena402.com/api/auth/github/callback"
+    ]
+    assert query["scope"] == ["read:user"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert len(query["code_challenge"][0]) == 43
+    assert len(query["state"][0]) >= 32
+    state_cookie = response.headers["set-cookie"]
+    assert "adx_github_oauth_state=" in state_cookie
+    assert "HttpOnly" in state_cookie
+    assert "Secure" in state_cookie
+    assert "SameSite=lax" in state_cookie
+
+
+def test_github_callback_creates_session_without_persisting_access_token():
+    class FakeGithubOAuthClient:
+        def __init__(self) -> None:
+            self.exchanges: list[dict[str, str]] = []
+
+        async def authenticate(
+            self,
+            *,
+            code: str,
+            code_verifier: str,
+            redirect_uri: str,
+        ) -> dict[str, str]:
+            self.exchanges.append(
+                {
+                    "code": code,
+                    "code_verifier": code_verifier,
+                    "redirect_uri": redirect_uri,
+                }
+            )
+            return {"subject": "1234567", "login": "octo-cat"}
+
+    oauth_client = FakeGithubOAuthClient()
+    repository = MemoryConnectorRepository()
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://arena402.com",
+        github_oauth_client_id="github-client-id",
+        github_oauth_client_secret="github-client-secret",
+    )
+    bundle = build_production_connector(
+        config,
+        repository,
+        github_oauth_client=oauth_client,
+    )
+    app = FastAPI()
+    app.include_router(bundle.router)
+    client = TestClient(app, base_url="https://arena402.com")
+    started = client.get(
+        "/api/auth/github/start",
+        params={"return_to": "/agents?tab=hosted"},
+        follow_redirects=False,
+    )
+    state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+
+    callback = client.get(
+        "/api/auth/github/callback",
+        params={"code": "temporary-code", "state": state},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 307
+    assert callback.headers["cache-control"] == "no-store"
+    assert callback.headers["location"] == "https://arena402.com/agents?tab=hosted"
+    assert oauth_client.exchanges == [
+        {
+            "code": "temporary-code",
+            "code_verifier": oauth_client.exchanges[0]["code_verifier"],
+            "redirect_uri": "https://arena402.com/api/auth/github/callback",
+        }
+    ]
+    assert len(oauth_client.exchanges[0]["code_verifier"]) >= 43
+    session = client.get("/api/auth/session")
+    assert session.status_code == 200
+    assert session.headers["cache-control"] == "no-store"
+    assert session.json()["user"] == {
+        "user_id": session.json()["user"]["user_id"],
+        "username": "octo-cat",
+        "temporary": False,
+    }
+    stored_user = repository.users[session.json()["user"]["user_id"]]
+    assert stored_user["identity_provider"] == "github"
+    assert stored_user["provider_subject"] == "1234567"
+    assert "access_token" not in stored_user
+    password_login = client.post(
+        "/api/auth/login",
+        json={"username": "octo-cat", "password": "correct horse battery staple"},
+    )
+    assert password_login.status_code == 401
+
+
+def test_github_subject_not_mutable_login_owns_arena_identity():
+    class RenamingGithubOAuthClient:
+        def __init__(self) -> None:
+            self.logins = iter(("octo-cat", "renamed-octo-cat"))
+
+        async def authenticate(self, **_kwargs) -> dict[str, str]:
+            return {"subject": "7654321", "login": next(self.logins)}
+
+    invite = "github-collision-invite-that-is-long-enough"
+    repository = MemoryConnectorRepository()
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://arena402.com",
+        github_oauth_client_id="github-client-id",
+        github_oauth_client_secret="github-client-secret",
+        bootstrap_invite_hash=_hash(invite),
+    )
+    bundle = build_production_connector(
+        config,
+        repository,
+        github_oauth_client=RenamingGithubOAuthClient(),
+    )
+    app = FastAPI()
+    app.include_router(bundle.router)
+    client = TestClient(app, base_url="https://arena402.com")
+    local = client.post(
+        "/api/auth/register",
+        json={
+            "invite_code": invite,
+            "username": "octo-cat",
+            "password": "correct horse battery staple",
+        },
+    ).json()["user"]
+    client.cookies.clear()
+
+    def github_sign_in() -> dict:
+        started = client.get(
+            "/api/auth/github/start",
+            follow_redirects=False,
+        )
+        state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+        response = client.get(
+            "/api/auth/github/callback",
+            params={"code": "temporary-code", "state": state},
+            follow_redirects=False,
+        )
+        assert response.status_code == 307
+        return client.get("/api/auth/session").json()["user"]
+
+    first = github_sign_in()
+    assert first["user_id"] != local["user_id"]
+    assert first["username"] == "github-7654321"
+    client.cookies.clear()
+    second = github_sign_in()
+    assert second["user_id"] == first["user_id"]
+    assert second["username"] == first["username"]
+
+
+def test_github_callback_uses_frontend_error_contract_and_rejects_bad_state():
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://arena402.com",
+        github_oauth_client_id="github-client-id",
+        github_oauth_client_secret="github-client-secret",
+    )
+    bundle = build_production_connector(config, MemoryConnectorRepository())
+    app = FastAPI()
+    app.include_router(bundle.router)
+    client = TestClient(app, base_url="https://arena402.com")
+
+    started = client.get(
+        "/api/auth/github/start",
+        params={"return_to": "/connect"},
+        follow_redirects=False,
+    )
+    state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+    denied = client.get(
+        "/api/auth/github/callback",
+        params={"error": "access_denied", "state": state},
+        follow_redirects=False,
+    )
+    denied_query = parse_qs(urlparse(denied.headers["location"]).query)
+    assert denied_query == {
+        "error": ["github_denied"],
+        "return_to": ["/connect"],
+    }
+    assert denied.headers["cache-control"] == "no-store"
+
+    tampered = client.get(
+        "/api/auth/github/callback",
+        params={"code": "temporary-code", "state": "attacker-state"},
+        follow_redirects=False,
+    )
+    tampered_query = parse_qs(urlparse(tampered.headers["location"]).query)
+    assert tampered_query == {
+        "error": ["invalid_state"],
+        "return_to": ["/agents"],
+    }
+    assert client.get("/api/auth/session").status_code == 401
+
+
+def test_github_sign_in_unavailable_redirects_safely_without_open_redirect():
+    config = ConnectorGatewayConfig(
+        database_url="postgresql://unused-in-memory",
+        session_secret="session-secret-that-is-more-than-32-characters",
+        public_app_url="https://arena402.com",
+    )
+    bundle = build_production_connector(config, MemoryConnectorRepository())
+    app = FastAPI()
+    app.include_router(bundle.router)
+    client = TestClient(app, base_url="https://arena402.com")
+
+    response = client.get(
+        "/api/auth/github/start",
+        params={"return_to": "//attacker.example/path"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    location = urlparse(response.headers["location"])
+    assert (location.scheme, location.netloc, location.path) == (
+        "https",
+        "arena402.com",
+        "/signin",
+    )
+    assert parse_qs(location.query) == {
+        "error": ["github_unavailable"],
+        "return_to": ["/agents"],
+    }
 
 
 def test_invite_is_one_time_password_is_argon2id_and_cookie_is_hardened():

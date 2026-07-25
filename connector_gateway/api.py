@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import (
     APIRouter,
@@ -13,6 +14,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 
 from .auth import AuthError, AuthPrincipal, ConnectorAuth
@@ -358,6 +360,91 @@ def create_production_connector_router(
         auth.config.rate_limit_window_seconds,
     )
 
+    @router.get("/api/auth/github/start")
+    async def github_start(request: Request, return_to: str | None = None):
+        await _enforce_rate_limit(auth_limiter, request, "auth:github")
+        try:
+            authorization_url, signed_state = auth.begin_github_oauth(return_to)
+        except AuthError:
+            query = urlencode(
+                {
+                    "error": "github_unavailable",
+                    "return_to": auth.safe_return_to(return_to),
+                }
+            )
+            return RedirectResponse(
+                f"{auth.config.public_app_url}/signin?{query}",
+                status_code=307,
+                headers={"Cache-Control": "no-store"},
+            )
+        response = RedirectResponse(
+            authorization_url,
+            status_code=307,
+            headers={"Cache-Control": "no-store"},
+        )
+        auth.set_github_oauth_state_cookie(response, signed_state)
+        return response
+
+    @router.get("/api/auth/github/callback")
+    async def github_callback(
+        request: Request,
+        code: str | None = Query(default=None, max_length=512),
+        state: str | None = Query(default=None, max_length=512),
+        error: str | None = Query(default=None, max_length=128),
+    ):
+        await _enforce_rate_limit(auth_limiter, request, "auth:github")
+        signed_state = request.cookies.get(
+            auth.config.github_oauth_state_cookie_name
+        )
+        try:
+            oauth_state = auth.validate_github_oauth_state(signed_state, state)
+        except AuthError:
+            return_to = "/agents"
+            error_code = "invalid_state"
+        else:
+            return_to = oauth_state["return_to"]
+            if error is not None:
+                error_code = (
+                    "github_denied" if error == "access_denied" else "github_failed"
+                )
+            elif not code:
+                error_code = "github_failed"
+            else:
+                try:
+                    issued = await auth.sign_in_with_github(
+                        code=code,
+                        oauth_state=oauth_state,
+                    )
+                except AuthError as exc:
+                    error_code = (
+                        exc.detail
+                        if exc.detail
+                        in {
+                            "github_unavailable",
+                            "github_failed",
+                            "account_disabled",
+                        }
+                        else "github_failed"
+                    )
+                else:
+                    response = RedirectResponse(
+                        f"{auth.config.public_app_url}{return_to}",
+                        status_code=307,
+                        headers={"Cache-Control": "no-store"},
+                    )
+                    auth.set_session_cookies(response, issued)
+                    auth.clear_github_oauth_state_cookie(response)
+                    return response
+
+        query = urlencode({"error": error_code, "return_to": return_to})
+        response = RedirectResponse(
+            f"{auth.config.public_app_url}/signin?{query}",
+            status_code=307,
+            headers={"Cache-Control": "no-store"},
+        )
+        auth.clear_github_oauth_state_cookie(response)
+        return response
+
     @router.post("/api/auth/invite", status_code=201)
     async def accept_invite(
         req: AcceptInviteRequest,
@@ -388,8 +475,9 @@ def create_production_connector_router(
         return _session_response(issued.principal, issued.csrf_token)
 
     @router.get("/api/auth/session")
-    async def session(request: Request):
+    async def session(request: Request, response: Response):
         principal = await _require_principal(auth, request)
+        response.headers["Cache-Control"] = "no-store"
         return _session_response(
             principal,
             request.cookies.get(auth.config.csrf_cookie_name, ""),

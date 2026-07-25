@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import uuid
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -43,6 +44,14 @@ class ConnectorRepository(Protocol):
         self, normalized_username: str
     ) -> dict[str, Any] | None: ...
 
+    async def get_or_create_oauth_user(
+        self,
+        provider: str,
+        subject: str,
+        preferred_username: str,
+        created_at: datetime,
+    ) -> dict[str, Any]: ...
+
     async def create_session(
         self,
         token_hash: str,
@@ -69,6 +78,7 @@ class MemoryConnectorRepository:
         self.invites: dict[str, dict[str, Any]] = {}
         self.users: dict[str, dict[str, Any]] = {}
         self.users_by_name: dict[str, str] = {}
+        self.oauth_users: dict[tuple[str, str], str] = {}
         self.sessions: dict[str, dict[str, Any]] = {}
         self.gateway_state: dict[str, Any] = {
             "pairings": [],
@@ -135,6 +145,8 @@ class MemoryConnectorRepository:
                 "username": username,
                 "password_hash": password_hash,
                 "temporary": temporary,
+                "identity_provider": "password",
+                "provider_subject": None,
                 "created_at": created_at,
                 "disabled_at": None,
             }
@@ -150,6 +162,41 @@ class MemoryConnectorRepository:
         async with self._lock:
             user_id = self.users_by_name.get(normalized_username)
             return copy.deepcopy(self.users.get(user_id)) if user_id else None
+
+    async def get_or_create_oauth_user(
+        self,
+        provider: str,
+        subject: str,
+        preferred_username: str,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            identity_key = (provider, subject)
+            existing_id = self.oauth_users.get(identity_key)
+            if existing_id:
+                return copy.deepcopy(self.users[existing_id])
+
+            username = preferred_username
+            if username in self.users_by_name:
+                username = f"{provider}-{subject}"[:64]
+            if username in self.users_by_name:
+                raise DuplicateIdentityError
+
+            user_id = f"user_{uuid.uuid4().hex[:20]}"
+            user = {
+                "user_id": user_id,
+                "username": username,
+                "password_hash": None,
+                "temporary": False,
+                "identity_provider": provider,
+                "provider_subject": subject,
+                "created_at": created_at,
+                "disabled_at": None,
+            }
+            self.users[user_id] = user
+            self.users_by_name[username] = user_id
+            self.oauth_users[identity_key] = user_id
+            return copy.deepcopy(user)
 
     async def create_session(
         self,
