@@ -135,3 +135,58 @@ def test_github_wallet_and_mandate_api() -> None:
     assert revoked.status_code == 200
     assert revoked.json()["mandate"]["revokedAt"] is not None
     assert payments.mandates["mandate-game-1"].revoked_at is not None
+
+
+def test_payment_mandate_api_supports_pre_join_dynamic_payee_scope() -> None:
+    client, connector_auth, users, _ = _app()
+    user = users.users.setdefault(
+        "user-github-dynamic",
+        {
+            "user_id": "user-github-dynamic",
+            "username": "dynamic-octocat",
+            "password_hash": None,
+            "temporary": False,
+            "identity_provider": "github",
+            "provider_subject": "654321",
+            "created_at": datetime.now(timezone.utc),
+            "disabled_at": None,
+        },
+    )
+    users.users_by_name["dynamic-octocat"] = "user-github-dynamic"
+    users.oauth_users[("github", "654321")] = "user-github-dynamic"
+    issued = __import__("asyncio").run(connector_auth._issue_session(user))
+    connector_auth.set_session_cookies(
+        type(
+            "CookieSink",
+            ( ),
+            {
+                "set_cookie": lambda self, key, value, **kwargs: client.cookies.set(
+                    key, value
+                )
+            },
+        )(),
+        issued,
+    )
+    assert client.get("/api/v1/me/wallet").status_code == 200
+    now = datetime.now(timezone.utc)
+    created = client.post(
+        "/api/v1/me/payment-mandates",
+        headers={"x-csrf-token": issued.csrf_token},
+        json={
+            "mandateId": "mandate-current-game",
+            "gameId": "current-game",
+            "chainId": 1439,
+            "tokenAddress": "0x" + "33" * 20,
+            "maxPerPaymentAtomic": 50,
+            "maxCumulativeAtomic": 100,
+            "allowedPayeeRule": "SAME_GAME_SETTLEMENT_ACCOUNT",
+            "joinAuthorizationId": "ja:current-game",
+            "validFrom": (now - timedelta(seconds=1)).isoformat(),
+            "expiresAt": (now + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+    mandate = created.json()["mandate"]
+    assert mandate["allowedPayees"] == []
+    assert mandate["allowedPayeeRule"] == "SAME_GAME_SETTLEMENT_ACCOUNT"
+    assert mandate["joinAuthorizationId"] == "ja:current-game"

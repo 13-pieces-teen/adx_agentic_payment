@@ -204,30 +204,60 @@ class PostgresPaymentRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                context = await connection.fetchrow(
-                    """
-                    SELECT
-                        wallet.chain_id AS wallet_chain_id,
-                        game.config_snapshot -> 'settlement'
-                            AS settlement_config
-                    FROM arena402.game_participants AS participant
-                    JOIN arena402.games AS game
-                      ON game.game_id = participant.game_id
-                    JOIN arena402.user_wallets AS wallet
-                      ON wallet.user_id = participant.user_id
-                     AND wallet.wallet_id = $3
-                    WHERE participant.game_id = $1
-                      AND participant.user_id = $2
-                      AND participant.status IN (
-                          'joined', 'active', 'settling'
-                      )
-                    """,
-                    mandate.game_id,
-                    mandate.user_id,
-                    mandate.wallet_id,
-                )
+                if mandate.allowed_payee_rule is None:
+                    context = await connection.fetchrow(
+                        """
+                        SELECT
+                            wallet.chain_id AS wallet_chain_id,
+                            game.config_snapshot -> 'settlement'
+                                AS settlement_config
+                        FROM arena402.game_participants AS participant
+                        JOIN arena402.games AS game
+                          ON game.game_id = participant.game_id
+                        JOIN arena402.user_wallets AS wallet
+                          ON wallet.user_id = participant.user_id
+                         AND wallet.wallet_id = $3
+                        WHERE participant.game_id = $1
+                          AND participant.user_id = $2
+                          AND participant.status IN (
+                              'joined', 'active', 'settling'
+                          )
+                        """,
+                        mandate.game_id,
+                        mandate.user_id,
+                        mandate.wallet_id,
+                    )
+                else:
+                    context = await connection.fetchrow(
+                        """
+                        SELECT
+                            wallet.chain_id AS wallet_chain_id,
+                            game.config_snapshot -> 'settlement'
+                                AS settlement_config
+                        FROM arena402.join_authorizations AS authorization
+                        JOIN arena402.games AS game
+                          ON game.game_id = authorization.game_id
+                        JOIN arena402.user_wallets AS wallet
+                          ON wallet.user_id = authorization.user_id
+                         AND wallet.wallet_id = $4
+                        WHERE authorization.join_authorization_id = $1
+                          AND authorization.game_id = $2
+                          AND authorization.user_id = $3
+                          AND authorization.status = 'pending'
+                          AND authorization.expires_at > clock_timestamp()
+                        FOR SHARE OF authorization, game, wallet
+                        """,
+                        mandate.join_authorization_id,
+                        mandate.game_id,
+                        mandate.user_id,
+                        mandate.wallet_id,
+                    )
                 if context is None:
-                    raise MandateRejected("game_participation_required")
+                    raise MandateRejected(
+                        "join_authorization_required"
+                        if mandate.allowed_payee_rule is not None
+                        else "game_participation_required"
+                    )
                 if int(context["wallet_chain_id"]) != mandate.chain_id:
                     raise MandateRejected("mandate_wallet_chain_mismatch")
                 raw_config = context["settlement_config"]
@@ -248,25 +278,26 @@ class PostgresPaymentRepository:
                     != mandate.token_address
                 ):
                     raise MandateRejected("mandate_game_token_mismatch")
-                invalid_payee = await connection.fetchval(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM unnest($2::text[]) AS requested(account_address)
-                        WHERE NOT EXISTS (
+                if mandate.allowed_payee_rule is None:
+                    invalid_payee = await connection.fetchval(
+                        """
+                        SELECT EXISTS (
                             SELECT 1
-                            FROM arena402.participant_settlement_accounts AS account
-                            WHERE account.game_id = $1
-                              AND account.account_address =
-                                  requested.account_address
+                            FROM unnest($2::text[]) AS requested(account_address)
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM arena402.participant_settlement_accounts AS account
+                                WHERE account.game_id = $1
+                                  AND account.account_address =
+                                      requested.account_address
+                            )
                         )
+                        """,
+                        mandate.game_id,
+                        list(mandate.allowed_payees),
                     )
-                    """,
-                    mandate.game_id,
-                    list(mandate.allowed_payees),
-                )
-                if invalid_payee:
-                    raise MandateRejected("mandate_payee_not_in_game")
+                    if invalid_payee:
+                        raise MandateRejected("mandate_payee_not_in_game")
                 try:
                     row = await connection.fetchrow(
                         """
@@ -274,11 +305,12 @@ class PostgresPaymentRepository:
                             mandate_id, user_id, wallet_id, game_id, chain_id,
                             token_address, max_per_payment_atomic,
                             max_cumulative_atomic, allowed_payees, valid_from,
-                            expires_at, revoked_at
+                            expires_at, revoked_at, allowed_payee_rule,
+                            join_authorization_id
                         )
                         VALUES (
                             $1, $2, $3, $4, $5, $6,
-                            $7, $8, $9, $10, $11, $12
+                            $7, $8, $9, $10, $11, $12, $13, $14
                         )
                         ON CONFLICT (mandate_id) DO NOTHING
                         RETURNING *
@@ -295,6 +327,8 @@ class PostgresPaymentRepository:
                         mandate.valid_from,
                         mandate.expires_at,
                         mandate.revoked_at,
+                        mandate.allowed_payee_rule,
+                        mandate.join_authorization_id,
                     )
                 except Exception as exc:
                     if getattr(exc, "sqlstate", None) == "23505":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,7 +25,17 @@ class CreateMandateRequest(BaseModel):
     max_per_payment_atomic: int = Field(alias="maxPerPaymentAtomic", gt=0)
     max_cumulative_atomic: int = Field(alias="maxCumulativeAtomic", gt=0)
     allowed_payees: list[str] = Field(
-        alias="allowedPayees", min_length=1, max_length=1000
+        default_factory=list, alias="allowedPayees", max_length=1000
+    )
+    allowed_payee_rule: Literal["SAME_GAME_SETTLEMENT_ACCOUNT"] | None = Field(
+        default=None,
+        alias="allowedPayeeRule",
+    )
+    join_authorization_id: str | None = Field(
+        default=None,
+        alias="joinAuthorizationId",
+        min_length=1,
+        max_length=128,
     )
     valid_from: datetime = Field(alias="validFrom")
     expires_at: datetime = Field(alias="expiresAt")
@@ -52,6 +63,12 @@ def _mandate_public(value: PaymentMandate) -> dict[str, object]:
         "reservedAtomic": str(value.reserved_atomic),
         "consumedAtomic": str(value.consumed_atomic),
         "allowedPayees": list(value.allowed_payees),
+        "allowedPayeeRule": (
+            "SAME_GAME_SETTLEMENT_ACCOUNT"
+            if value.allowed_payee_rule == "same_game_settlement_account"
+            else None
+        ),
+        "joinAuthorizationId": value.join_authorization_id,
         "validFrom": value.valid_from.isoformat(),
         "expiresAt": value.expires_at.isoformat(),
         "revokedAt": (
@@ -130,6 +147,13 @@ def create_payment_account_router(
                     allowed_payees=tuple(body.allowed_payees),
                     valid_from=body.valid_from,
                     expires_at=body.expires_at,
+                    allowed_payee_rule=(
+                        "same_game_settlement_account"
+                        if body.allowed_payee_rule
+                        == "SAME_GAME_SETTLEMENT_ACCOUNT"
+                        else None
+                    ),
+                    join_authorization_id=body.join_authorization_id,
                 )
             )
         except (ValueError, MandateRejected) as exc:
