@@ -381,7 +381,9 @@ def test_current_game_join_migration_freezes_readiness_and_dynamic_payees():
     assert "same_game_settlement_account" in sql
     assert "cardinality(allowed_payees) = 0" in sql
     assert "ADD COLUMN payment_mandate_id" in sql
-    assert "readiness IN ('pending', 'ready', 'withdrawn')" in sql
+    assert "readiness = 'pending'" in sql
+    assert "readiness = 'ready'" in sql
+    assert "readiness = 'withdrawn'" in sql
     assert "payment_mandate_id IS NOT NULL" in sql
     assert "portfolio_locked_at IS NOT NULL" in sql
     assert "GRANT SELECT, INSERT, UPDATE ON" in sql

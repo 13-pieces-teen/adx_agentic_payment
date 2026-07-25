@@ -94,9 +94,7 @@ ALTER TABLE arena402.game_participants
     ADD COLUMN payment_mandate_id TEXT
         REFERENCES arena402.payment_mandates(mandate_id)
         ON DELETE RESTRICT,
-    ADD COLUMN readiness TEXT NOT NULL DEFAULT 'pending' CHECK (
-        readiness IN ('pending', 'ready', 'withdrawn')
-    ),
+    ADD COLUMN readiness TEXT NOT NULL DEFAULT 'pending',
     ADD COLUMN ready_at TIMESTAMPTZ,
     ADD COLUMN withdrawn_at TIMESTAMPTZ,
     ADD CONSTRAINT game_participants_readiness_check CHECK (
