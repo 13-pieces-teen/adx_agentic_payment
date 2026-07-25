@@ -649,7 +649,7 @@ button { font-family: inherit; }
 }
 .tech-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px; background: var(--line); border: 1px solid var(--line);
   margin-top: 36px;
 }
@@ -686,6 +686,7 @@ button { font-family: inherit; }
 /* === Responsive — medium-large === */
 @media (max-width: 1280px) {
   .hero { grid-template-columns: 1fr 1fr; gap: 2vw; }
+  .tech-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -725,6 +726,7 @@ button { font-family: inherit; }
   .btn-try { padding: 14px 32px; font-size: 12px; }
   .section, .paper-panel, .page-head { max-width: none; }
   .paper-panel-inner { max-width: none; }
+  .tech-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* === Responsive — phone === */
@@ -736,4 +738,5 @@ button { font-family: inherit; }
   .nav-signin { padding: 6px 12px; font-size: 9px; }
   .kline-ticker-inner { gap: 28px; animation-duration: 28s; }
   .gm { padding-left: 14px; padding-right: 14px; }
+  .tech-grid { grid-template-columns: 1fr; }
 }
