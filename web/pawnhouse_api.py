@@ -124,6 +124,12 @@ class JoinPreflightBody(_Body):
     agent_id: _Id = Field(alias="agentId")
 
 
+class JoinCurrentGameBody(_Body):
+    agent_id: _Id = Field(alias="agentId")
+    payment_mandate_id: _Id = Field(alias="paymentMandateId")
+    join_authorization_id: _Id = Field(alias="joinAuthorizationId")
+
+
 class SettlementConfigBody(_Body):
     authorization_mode: Literal["none", "single_eip3009"] = Field(
         default="none",
@@ -392,6 +398,54 @@ def create_pawnhouse_participation_router(
             )
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
+
+    @router.post("/api/v1/games/{game_id}/participants", status_code=201)
+    async def join_current_game(
+        game_id: _Id,
+        body: JoinCurrentGameBody,
+        request: Request,
+    ) -> dict[str, object]:
+        try:
+            principal = await auth.authenticate(request)
+            await auth.require_csrf(request, principal)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from None
+        try:
+            participant_id = await repository.add_hosted_participant(
+                game_id=game_id,
+                user_id=principal.user_id,
+                agent_id=body.agent_id,
+                portfolio=Portfolio.initial(
+                    cash_atomic=gold("20"),
+                    holdings={},
+                ),
+                payment_mandate_id=body.payment_mandate_id,
+                join_authorization_id=body.join_authorization_id,
+                require_current_game=True,
+            )
+            current = await repository.current_game(owner_user_id=principal.user_id)
+        except (PortfolioError, SettlementError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": str(exc)},
+            ) from None
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        game = current["game"]
+        return {
+            "gameId": game_id,
+            "participantId": participant_id,
+            "readiness": "READY",
+            "status": game["status"] if game is not None else "WAITING",
+            "readyCount": game["readyCount"] if game is not None else 0,
+            "startThreshold": (
+                game["startThreshold"] if game is not None else 0
+            ),
+            "schemaVersion": "arena.game-join.v2",
+        }
 
     @router.post(
         "/api/v1/pawnhouse/games/{game_id}/hosted-participants",

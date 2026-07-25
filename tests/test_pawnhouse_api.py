@@ -37,6 +37,10 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
+    async def add_hosted_participant(self, **values):
+        self.participants.append(values)
+        return f"gp:{values['game_id']}:{values['agent_id']}"
+
     async def start_game(self, *, game_id):
         return {
             "gameId": game_id,
@@ -449,6 +453,43 @@ def test_current_game_join_preflight_is_authenticated_and_idempotent() -> None:
     assert repository.preflights[-1]["agent_id"] == "agent-hosted-1"
 
 
+def test_current_game_join_requires_ready_mandate_and_returns_authoritative_status() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=repository,  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/games/game_current/participants",
+        headers={"x-csrf-token": "csrf"},
+        json={
+            "agentId": "agent-current",
+            "paymentMandateId": "mandate-current",
+            "joinAuthorizationId": "ja-current",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {
+        "gameId": "game_current",
+        "participantId": "gp:game_current:agent-current",
+        "readiness": "READY",
+        "status": "WAITING",
+        "readyCount": 1,
+        "startThreshold": 2,
+        "schemaVersion": "arena.game-join.v2",
+    }
+    joined = repository.participants[0]
+    assert joined["require_current_game"] is True
+    assert joined["payment_mandate_id"] == "mandate-current"
+    assert joined["join_authorization_id"] == "ja-current"
+    assert joined["portfolio"].cash_atomic == 20_000_000
+
+
 def test_development_mutations_require_the_explicit_token() -> None:
     client, _ = _client()
     response = client.post(
@@ -561,6 +602,8 @@ def test_create_game_freezes_a_twelve_agent_participant_limit() -> None:
 
     assert created.status_code == 201
     assert repository.created[0]["max_participants"] == 12
+
+
 def test_start_game_uses_the_schedule_persisted_at_creation() -> None:
     client, _ = _client()
     started = client.post(

@@ -565,6 +565,9 @@ class PostgresPawnhouseRepository:
         agent_id: str,
         portfolio: Portfolio,
         settlement_account: SettlementAccount | None = None,
+        payment_mandate_id: str | None = None,
+        join_authorization_id: str | None = None,
+        require_current_game: bool = False,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
         pool = self._require_pool()
@@ -572,7 +575,8 @@ class PostgresPawnhouseRepository:
             async with connection.transaction():
                 phase = await connection.fetchrow(
                     """
-                    SELECT phase, config_snapshot, max_participants
+                    SELECT phase, config_snapshot, max_participants,
+                           min_participants
                     FROM arena402.games
                     WHERE game_id = $1
                     FOR UPDATE
@@ -589,6 +593,7 @@ class PostgresPawnhouseRepository:
                         SELECT count(*)
                         FROM arena402.game_participants
                         WHERE game_id = $1
+                          AND readiness <> 'withdrawn'
                         """,
                         game_id,
                     )
@@ -603,6 +608,36 @@ class PostgresPawnhouseRepository:
                     else dict(phase["config_snapshot"])
                 )
                 settlement_config = self._settlement_config(game_config)
+                if (
+                    payment_mandate_id is not None
+                    and settlement_account is None
+                    and settlement_config.authorization_mode != "none"
+                ):
+                    wallet = await connection.fetchrow(
+                        """
+                        SELECT chain_id, account_address
+                        FROM arena402.user_wallets
+                        WHERE user_id = $1
+                        FOR SHARE
+                        """,
+                        user_id,
+                    )
+                    if wallet is None:
+                        raise PawnhouseRepositoryError("wallet_not_ready")
+                    settlement_account = SettlementAccount(
+                        chain_id=int(wallet["chain_id"]),
+                        address=str(wallet["account_address"]),
+                        custody_mode="sandbox_guest",
+                    )
+                if require_current_game:
+                    pointer = await connection.fetchval(
+                        """
+                        SELECT game_id FROM arena402.current_game
+                        WHERE singleton = TRUE FOR SHARE
+                        """
+                    )
+                    if pointer != game_id:
+                        raise PawnhouseRepositoryError("game_not_current")
                 if settlement_config.authorization_mode != "none":
                     if settlement_account is None:
                         raise PawnhouseRepositoryError(
@@ -612,6 +647,40 @@ class PostgresPawnhouseRepository:
                         raise PawnhouseRepositoryError(
                             "settlement_account_chain_mismatch"
                         )
+                if payment_mandate_id is not None:
+                    mandate = await connection.fetchrow(
+                        """
+                        SELECT mandate.mandate_id
+                        FROM arena402.payment_mandates AS mandate
+                        JOIN arena402.join_authorizations AS authorization
+                          ON authorization.join_authorization_id =
+                             mandate.join_authorization_id
+                        WHERE mandate.mandate_id = $1
+                          AND mandate.user_id = $2
+                          AND mandate.game_id = $3
+                          AND mandate.revoked_at IS NULL
+                          AND mandate.valid_from <= clock_timestamp()
+                          AND mandate.expires_at > clock_timestamp()
+                          AND mandate.allowed_payee_rule =
+                              'same_game_settlement_account'
+                          AND authorization.join_authorization_id = $4
+                          AND authorization.user_id = $2
+                          AND authorization.game_id = $3
+                          AND authorization.agent_id = $5
+                          AND authorization.status = 'pending'
+                          AND authorization.expires_at > clock_timestamp()
+                        FOR UPDATE OF mandate, authorization
+                        """,
+                        payment_mandate_id,
+                        user_id,
+                        game_id,
+                        join_authorization_id,
+                        agent_id,
+                    )
+                    if mandate is None:
+                        raise PawnhouseRepositoryError("mandate_not_ready")
+                elif require_current_game:
+                    raise PawnhouseRepositoryError("mandate_not_ready")
                 hosted = await connection.fetchrow(
                     """
                     SELECT
@@ -668,15 +737,22 @@ class PostgresPawnhouseRepository:
                     """
                     INSERT INTO arena402.game_participants (
                         game_participant_id, game_id, user_id, agent_id,
-                        runtime_binding_id, runtime_kind, portfolio_locked_at
+                        runtime_binding_id, runtime_kind, portfolio_locked_at,
+                        payment_mandate_id, readiness, ready_at
                     )
-                    VALUES ($1, $2, $3, $4, $5, 'hosted', clock_timestamp())
+                    VALUES (
+                        $1, $2, $3, $4, $5, 'hosted', clock_timestamp(),
+                        $6,
+                        CASE WHEN $6 IS NULL THEN 'pending' ELSE 'ready' END,
+                        CASE WHEN $6 IS NULL THEN NULL ELSE clock_timestamp() END
+                    )
                     """,
                     participant_id,
                     game_id,
                     user_id,
                     agent_id,
                     hosted["runtime_binding_id"],
+                    payment_mandate_id,
                 )
                 await connection.execute(
                     """
@@ -759,6 +835,31 @@ class PostgresPawnhouseRepository:
                         "runtimeKind": "hosted",
                     },
                 )
+                if payment_mandate_id is not None:
+                    consumed = await connection.execute(
+                        """
+                        UPDATE arena402.join_authorizations
+                        SET status = 'consumed', consumed_at = clock_timestamp()
+                        WHERE join_authorization_id = $1 AND status = 'pending'
+                        """,
+                        join_authorization_id,
+                    )
+                    if consumed != "UPDATE 1":
+                        raise PawnhouseRepositoryError("mandate_not_ready")
+                    ready_count = int(
+                        await connection.fetchval(
+                            """
+                            SELECT count(*) FROM arena402.game_participants
+                            WHERE game_id = $1 AND readiness = 'ready'
+                            """,
+                            game_id,
+                        )
+                    )
+                    if ready_count >= int(phase["min_participants"]):
+                        await self._start_game_locked(
+                            connection,
+                            game_id=game_id,
+                        )
         return participant_id
 
     async def add_connector_participant(
@@ -976,145 +1077,127 @@ class PostgresPawnhouseRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                game = await connection.fetchrow(
-                    """
-                    SELECT
-                        phase,
-                        min_participants,
-                        round_count,
-                        operator_user_id
-                    FROM arena402.games
-                    WHERE game_id = $1
-                    FOR UPDATE
-                    """,
-                    game_id,
-                )
-                if game is None:
-                    raise PawnhouseRepositoryError("game_not_found")
-                if (
-                    operator_user_id is not None
-                    and game["operator_user_id"] != operator_user_id
-                ):
-                    raise PawnhouseRepositoryError(
-                        "game_operator_forbidden"
-                    )
-                if game["phase"] != "portfolio_setup":
-                    raise PawnhouseRepositoryError("game_not_ready")
-                count = await connection.fetchval(
-                    """
-                    SELECT count(*)
-                    FROM arena402.game_participants
-                    WHERE game_id = $1
-                      AND portfolio_locked_at IS NOT NULL
-                    """,
-                    game_id,
-                )
-                if count < game["min_participants"]:
-                    raise PawnhouseRepositoryError("not_enough_participants")
-                events = await self._scheduled_events(
+                return await self._start_game_locked(
                     connection,
                     game_id=game_id,
+                    operator_user_id=operator_user_id,
                 )
-                if len(events) != int(game["round_count"]):
-                    raise PawnhouseRepositoryError(
-                        "event_schedule_incomplete"
-                    )
-                await connection.execute(
-                    """
-                    UPDATE arena402.games
-                    SET phase = 'running',
-                        current_round = 1,
-                        started_at = clock_timestamp()
-                    WHERE game_id = $1
-                    """,
-                    game_id,
+
+    async def _start_game_locked(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        operator_user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Start a game using the caller's transaction and game-row lock."""
+
+        game = await connection.fetchrow(
+            """
+            SELECT phase, min_participants, round_count, operator_user_id
+            FROM arena402.games
+            WHERE game_id = $1
+            FOR UPDATE
+            """,
+            game_id,
+        )
+        if game is None:
+            raise PawnhouseRepositoryError("game_not_found")
+        if (
+            operator_user_id is not None
+            and game["operator_user_id"] != operator_user_id
+        ):
+            raise PawnhouseRepositoryError("game_operator_forbidden")
+        if game["phase"] != "portfolio_setup":
+            raise PawnhouseRepositoryError("game_not_ready")
+        count = await connection.fetchval(
+            """
+            SELECT count(*)
+            FROM arena402.game_participants
+            WHERE game_id = $1
+              AND readiness = 'ready'
+              AND portfolio_locked_at IS NOT NULL
+            """,
+            game_id,
+        )
+        if count < game["min_participants"]:
+            raise PawnhouseRepositoryError("not_enough_participants")
+        events = await self._scheduled_events(connection, game_id=game_id)
+        if len(events) != int(game["round_count"]):
+            raise PawnhouseRepositoryError("event_schedule_incomplete")
+        await connection.execute(
+            """
+            UPDATE arena402.games
+            SET phase = 'running', current_round = 1,
+                started_at = clock_timestamp()
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.game_participants SET status = 'active'
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        round_id = f"round:{game_id}:1"
+        await connection.execute(
+            """
+            INSERT INTO arena402.rounds (round_id, game_id, round_index, phase)
+            VALUES ($1, $2, 1, 'event_reveal')
+            """,
+            round_id,
+            game_id,
+        )
+        snapshot = WorldState({event.event_id: event for event in events})
+        world_snapshot = snapshot.reveal(events[0].event_id, round_index=1)
+        await self._persist_world_snapshot(
+            connection,
+            game_id=game_id,
+            round_id=round_id,
+            event=events[0],
+            snapshot=world_snapshot,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.rounds
+            SET phase = 'decide',
+                phase_deadline_at = (
+                    clock_timestamp() + (
+                        SELECT action_timeout_ms FROM arena402.games
+                        WHERE game_id = $2
+                    ) * interval '1 millisecond'
                 )
-                await connection.execute(
-                    """
-                    UPDATE arena402.game_participants
-                    SET status = 'active'
-                    WHERE game_id = $1
-                    """,
-                    game_id,
-                )
-                round_id = f"round:{game_id}:1"
-                await connection.execute(
-                    """
-                    INSERT INTO arena402.rounds (
-                        round_id, game_id, round_index, phase
-                    )
-                    VALUES ($1, $2, 1, 'event_reveal')
-                    """,
-                    round_id,
-                    game_id,
-                )
-                snapshot = WorldState(
-                    {event.event_id: event for event in events}
-                )
-                world_snapshot = snapshot.reveal(
-                    events[0].event_id,
-                    round_index=1,
-                )
-                await self._persist_world_snapshot(
-                    connection,
-                    game_id=game_id,
-                    round_id=round_id,
-                    event=events[0],
-                    snapshot=world_snapshot,
-                )
-                await connection.execute(
-                    """
-                    UPDATE arena402.rounds
-                    SET phase = 'decide',
-                        phase_deadline_at = (
-                            clock_timestamp()
-                            + (
-                                SELECT action_timeout_ms
-                                FROM arena402.games
-                                WHERE game_id = $2
-                            ) * interval '1 millisecond'
-                        )
-                    WHERE round_id = $1
-                    """,
-                    round_id,
-                    game_id,
-                )
-                deadline_at = await connection.fetchval(
-                    """
-                    SELECT phase_deadline_at
-                    FROM arena402.rounds
-                    WHERE round_id = $1
-                    """,
-                    round_id,
-                )
-                await connection.execute(
-                    """
-                    UPDATE public.games
-                    SET status = 'running',
-                        started_at = clock_timestamp()
-                    WHERE game_id = $1
-                    """,
-                    game_id,
-                )
-                await connection.execute(
-                    """
-                    UPDATE public.game_agents
-                    SET status = 'active'
-                    WHERE game_id = $1
-                    """,
-                    game_id,
-                )
-                await connection.execute(
-                    """
-                    INSERT INTO public.rounds (
-                        round_id, game_id, round_index, phase, deadline_at
-                    )
-                    VALUES ($1, $2, 1, 'decide', $3)
-                    """,
-                    round_id,
-                    game_id,
-                    deadline_at,
-                )
+            WHERE round_id = $1
+            """,
+            round_id,
+            game_id,
+        )
+        deadline_at = await connection.fetchval(
+            "SELECT phase_deadline_at FROM arena402.rounds WHERE round_id = $1",
+            round_id,
+        )
+        await connection.execute(
+            """
+            UPDATE public.games SET status = 'running', started_at = clock_timestamp()
+            WHERE game_id = $1
+            """,
+            game_id,
+        )
+        await connection.execute(
+            "UPDATE public.game_agents SET status = 'active' WHERE game_id = $1",
+            game_id,
+        )
+        await connection.execute(
+            """
+            INSERT INTO public.rounds (round_id, game_id, round_index, phase, deadline_at)
+            VALUES ($1, $2, 1, 'decide', $3)
+            """,
+            round_id,
+            game_id,
+            deadline_at,
+        )
         return {"gameId": game_id, "roundId": round_id, "phase": "decide"}
 
     async def run_rule_market(self, *, game_id: str) -> dict[str, object]:
