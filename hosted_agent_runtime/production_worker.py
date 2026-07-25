@@ -11,7 +11,11 @@ from .postgres_worker import (
     PostgresHostedWorkerRepository,
 )
 from .production_providers import build_production_provider_bundle
-from .secret_store import TencentSecretReader, TencentSsmSettings
+from .production_secrets import (
+    build_production_secret_reader,
+    close_secret_port,
+    initialize_secret_port,
+)
 
 
 def _required(name: str) -> str:
@@ -21,28 +25,11 @@ def _required(name: str) -> str:
     return value
 
 
-def _true(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
-
-
 async def main() -> None:
-    if not _true("ADX_TENCENT_SSM_IAM_VERIFIED"):
-        raise RuntimeError(
-            "Role-specific Tencent SSM IAM validation is required"
-        )
-    repository = PostgresHostedWorkerRepository(
-        _required("ADX_HOSTED_WORKER_DATABASE_URL")
-    )
+    database_url = _required("ADX_HOSTED_WORKER_DATABASE_URL")
+    repository = PostgresHostedWorkerRepository(database_url)
     providers = build_production_provider_bundle()
-    reader = TencentSecretReader(
-        TencentSsmSettings(
-            region=os.getenv(
-                "ADX_TENCENT_SSM_REGION",
-                "ap-guangzhou",
-            ),
-            deployment_iam_verified=True,
-        )
-    )
+    reader = build_production_secret_reader(database_url)
     worker = DurableHostedWorker(
         repository=repository,
         providers=providers,
@@ -55,14 +42,15 @@ async def main() -> None:
             os.getenv("ADX_HOSTED_WORKER_TASK_CONCURRENCY", "5")
         ),
     )
-    await repository.initialize()
-    loop = asyncio.get_running_loop()
-    for signal_name in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(signal_name, worker.stop)
-        except NotImplementedError:  # Windows development only
-            pass
     try:
+        await repository.initialize()
+        await initialize_secret_port(reader)
+        loop = asyncio.get_running_loop()
+        for signal_name in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(signal_name, worker.stop)
+            except NotImplementedError:  # Windows development only
+                pass
         await worker.run_forever(
             poll_seconds=float(
                 os.getenv("ADX_HOSTED_WORKER_POLL_SECONDS", "1")
@@ -70,6 +58,7 @@ async def main() -> None:
         )
     finally:
         await providers.close()
+        await close_secret_port(reader)
         await repository.close()
 
 

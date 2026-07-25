@@ -11,10 +11,12 @@ from connector_gateway.auth import ConnectorAuth
 from hosted_agent_runtime.production_providers import (
     build_production_capability_registry,
 )
-from hosted_agent_runtime.secret_store import (
-    TencentSecretWriter,
-    TencentSsmSettings,
+from hosted_agent_runtime.production_secrets import (
+    build_production_secret_writer,
+    close_secret_port,
+    initialize_secret_port,
 )
+from hosted_agent_runtime.secret_store import SecretWriter
 
 from .postgres_repository import PostgresHostedAgentControlRepository
 from .services import (
@@ -42,11 +44,18 @@ class ProductionHostedControlBundle:
     credential_service: CredentialIngressService
     agent_service: HostedAgentService
     auth: ConnectorAuth
+    secret_writer: SecretWriter
 
     async def initialize(self) -> None:
         await self.repository.initialize()
+        try:
+            await initialize_secret_port(self.secret_writer)
+        except BaseException:
+            await self.repository.close()
+            raise
 
     async def close(self) -> None:
+        await close_secret_port(self.secret_writer)
         await self.repository.close()
 
 
@@ -55,11 +64,6 @@ def build_production_hosted_control(
 ) -> ProductionHostedControlBundle:
     if not _true("ADX_HOSTED_AGENTS_ENABLED"):
         raise RuntimeError("Hosted Agents are not enabled")
-    if not _true("ADX_TENCENT_SSM_IAM_VERIFIED"):
-        raise RuntimeError(
-            "ADX_TENCENT_SSM_IAM_VERIFIED must be true after role-specific "
-            "Tencent SSM IAM validation"
-        )
     try:
         pepper = base64.b64decode(
             _required("ADX_HOSTED_FINGERPRINT_PEPPER_B64"),
@@ -74,16 +78,9 @@ def build_production_hosted_control(
             "ADX_HOSTED_FINGERPRINT_PEPPER_B64 must decode to 32+ bytes"
         )
 
-    settings = TencentSsmSettings(
-        region=os.getenv("ADX_TENCENT_SSM_REGION", "ap-guangzhou"),
-        recovery_window_days=int(
-            os.getenv("ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS", "0")
-        ),
-        deployment_iam_verified=True,
-    )
-    repository = PostgresHostedAgentControlRepository(
-        _required("ADX_HOSTED_CONTROL_DATABASE_URL")
-    )
+    database_url = _required("ADX_HOSTED_CONTROL_DATABASE_URL")
+    repository = PostgresHostedAgentControlRepository(database_url)
+    secret_writer = build_production_secret_writer(database_url)
     registry = build_production_capability_registry()
     catalog = CapabilityCatalogService(
         registry,
@@ -92,7 +89,7 @@ def build_production_hosted_control(
     )
     credential_service = CredentialIngressService(
         repository,
-        secret_writer=TencentSecretWriter(settings),
+        secret_writer=secret_writer,
         fingerprint_pepper=pepper,
         fingerprint_pepper_version=int(
             os.getenv("ADX_HOSTED_FINGERPRINT_PEPPER_VERSION", "1")
@@ -109,6 +106,7 @@ def build_production_hosted_control(
         credential_service=credential_service,
         agent_service=agent_service,
         auth=auth,
+        secret_writer=secret_writer,
     )
 
 

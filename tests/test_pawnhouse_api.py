@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from web.api import create_app
 from web.pawnhouse_api import (
     create_pawnhouse_read_router,
     create_pawnhouse_router,
 )
-from web.api import create_app
 
 
 class _Repository:

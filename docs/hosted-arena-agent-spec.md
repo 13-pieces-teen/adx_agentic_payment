@@ -2,7 +2,7 @@
 
 > 文档状态：已批准实施；Hosted control/runtime、DeepSeek/OpenAI-compatible
 > Provider、durable Worker 与 Pawnhouse Adapter 已实现。Local Connector 游戏
-> Adapter、生产 Tencent SSM/CAM 验收和完整支付授权仍待完成
+> Adapter、公网 Hosted credential/backend 验收和完整支付授权仍待完成
 > 最后更新：2026-07-25
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
@@ -24,7 +24,7 @@ Hosted Arena Agent 不是一个通用自主 Agent，也不是把现有
 稳定 Agent 身份
   + 私有 Hosted 配置
   + 可撤销 Runtime Binding
-  + Secret Manager 中的模型凭据
+  + 专用 Secret backend 中的模型凭据
   + Arena-owned AgentTask 执行端口
 ```
 
@@ -629,8 +629,19 @@ Provider 输入必须有确定性大小上限。Arena Task Factory 在冻结快�
 
 ### 8.1 存储边界
 
-生产 BYOK 必须使用真实外部 Secret Store。腾讯云部署的默认实现为腾讯云
-Secrets Manager，并由 KMS 提供底层密钥保护。
+生产 BYOK 必须使用专用 Secret Store。当前批准的单机 beta 默认实现为：
+
+- API/Hosted Worker 从独立、只读的主机文件读取同一 256-bit master key；
+- API 使用 AES-256-GCM 和随机 96-bit nonce 加密，AAD 绑定
+  `secret_ref + key_version`；
+- PostgreSQL 专用 vault 只保存 ciphertext、nonce、key version 和 lifecycle
+  status，业务表仍只保存 opaque `secret_ref`；
+- API、Worker、Controller 只经各自的 `SECURITY DEFINER` 函数访问 vault，
+  Controller 不挂载 master key。
+
+该方案保护数据库 dump/备份单独泄漏，但不保护整台主机或 root 被攻破。腾讯云
+Secrets Manager/KMS 仍作为付费、高隔离等级的可选后端；迁移时保持现有
+Writer/Reader/Controller port 不变。
 
 业务数据库只保存：
 
@@ -674,12 +685,12 @@ Operator
   - no application endpoint that returns SecretValue
 ```
 
-API、Worker 和 Credential Controller 使用不同、范围受限的 CAM 身份。优先使用
-CVM 角色或短期 credential broker；若单机 beta 必须使用静态云凭据，只能通过
-root-owned Docker secret/read-only file 注入、定期轮换且容器间互不可读，严禁写入
-仓库、`deploy/.env` 或 Compose 明文。不能把一个全权限云密钥共享给所有容器。
-Hosted Worker 的 Secret read 范围不能包含数据库、Session、Wallet/Signer、
-Connector 或部署凭据。
+使用腾讯 SSM 时，API、Worker 和 Credential Controller 使用不同、范围受限的 CAM
+身份。使用单机 ciphertext vault 时，只有 API 与 Hosted Worker 挂载 master key；
+Controller 只能改变 lifecycle。master key 必须位于 release tree 与
+`deploy/.env` 之外，由主机权限限制并只读挂载，严禁写入仓库、`.env` 或 Compose
+明文。Hosted Worker 的 Secret read 范围不能包含 Session、Wallet/Signer、
+Connector 或其他部署凭据。
 
 数据库同样使用不同角色：
 
@@ -732,7 +743,9 @@ Connector 或部署凭据。
 - 撤销、Binding degraded/disabled 或 Worker outage 时，Arena 仍为每个已调度逻辑
   行动写入唯一 Task/default 结果，不能留下无记录的“跳过”；
 - Secret backend 未配置、权限错误或不可用时 fail closed；
-- 内存 Fake SecretStore 只用于测试，不得作为生产 BYOK 后端。
+- 内存 Fake SecretStore 只用于测试，不得作为生产 BYOK 后端；
+- 单机 master key 轮换采用新增 `key_version` 后重加密的维护窗口；在轮换工具完成
+  前不得删除旧 key。数据库备份必须与主机 key 分开保管。
 
 ### 8.4 Credential validation 恢复
 

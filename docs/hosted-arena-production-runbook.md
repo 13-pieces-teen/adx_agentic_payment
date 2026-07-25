@@ -393,7 +393,9 @@ revoke command 只能由 Participant 所属用户发出，必须使用现有 Ses
 `docker-compose.production.yml` 已接入 payment migration、API、Arena Worker 自动
 支付循环，以及可选 `wallet-signer` 和 `arena-facilitator`。两者分别使用
 `testnet-signer` / `testnet-facilitator` profile，只加入 data network、无宿主机
-端口、只读文件系统与只读 CSV mount；自动支付默认关闭。
+端口、只读文件系统与只读 CSV mount；自动支付默认关闭。Hosted profile 同时支持
+单机 AES-GCM ciphertext vault，并在 master-key 文件、数据库角色与真实 Provider
+配置验收后显式启用；腾讯 SSM 保留为可选高安全后端。
 
 云端启用前必须：
 

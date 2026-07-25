@@ -141,6 +141,7 @@ hosted_worker_database_password="$(openssl rand -hex 32)"
 arena_core_database_password="$(openssl rand -hex 32)"
 credential_controller_database_password="$(openssl rand -hex 32)"
 hosted_fingerprint_pepper_b64="$(openssl rand -base64 48 | tr -d '\n')"
+hosted_secret_dir="${repo_dir}/deploy/secrets"
 session_secret="$(openssl rand -hex 48)"
 bootstrap_invite="$(openssl rand -hex 20)"
 bootstrap_invite_hash="$(
@@ -184,6 +185,10 @@ umask 077
   printf 'ADX_HOSTED_WORKER_TASK_CONCURRENCY=5\n'
   printf 'ADX_HOSTED_FINGERPRINT_PEPPER_B64=%s\n' "${hosted_fingerprint_pepper_b64}"
   printf 'ADX_HOSTED_FINGERPRINT_PEPPER_VERSION=1\n'
+  printf 'ADX_HOSTED_SECRET_BACKEND=postgres_aesgcm\n'
+  printf 'ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED=false\n'
+  printf 'ADX_HOSTED_SECRET_DIR_HOST_PATH=%s\n' "${hosted_secret_dir}"
+  printf 'ADX_HOSTED_MASTER_KEY_VERSION=1\n'
   printf 'ADX_TENCENT_SSM_REGION=ap-guangzhou\n'
   printf 'ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS=0\n'
   printf 'ADX_TENCENT_SSM_IAM_VERIFIED=false\n'
@@ -217,6 +222,7 @@ chmod 600 "${env_file}"
 
 echo "Created ${env_file} with mode ${tls_mode}."
 echo "Long-lived secrets were written only to that chmod 600 file."
+echo "Hosted Agents remain disabled until a separate master-key file is provisioned."
 if [ -n "${invite_output_file}" ]; then
   printf '%s\n' "${bootstrap_invite}" > "${invite_output_file}"
   chmod 600 "${invite_output_file}"

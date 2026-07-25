@@ -20,9 +20,9 @@
 - [x] Milestone 5 foundation: separate Hosted Worker, Credential Controller,
   Arena Coordinator/Deadline Finalizer/settlement recovery process,
   least-privilege database logins, fail-closed profiles, and operator runbook.
-- [ ] Milestone 5 live acceptance: real Tencent CAM/SSM identities, real
+- [ ] Milestone 5 live acceptance: single-host AES-GCM credential vault, real
   Provider credential, server restart/offline continuity, and permission-denial
-  evidence.
+  evidence. Tencent CAM/SSM remains an optional higher-security acceptance.
 - [x] Milestone 6: durable backend-only N-round orchestration, one event per
   round, automatic Hosted/rule execution, four-good FCFS pools, pairing-group
   concurrency, settlement-gated round close, per-round portfolio snapshots,
@@ -215,7 +215,8 @@ create game
       时 route 保持 `provisioning`。
 - [x] 通用 Join API 在同一事务内写入 Runtime/config 冻结记录与
       `arena402.game_participants`、20 gold 初始组合和公开 joined event。
-- [ ] 生产 Tencent CAM/SSM 三身份、真实 Provider Key 与服务器离线连续性尚未实机验收。
+- [ ] 公网单机加密 vault、真实 Provider Key 与服务器离线连续性尚未实机验收；
+      腾讯 CAM/SSM 三身份保留为可选高安全验收。
 - [ ] Connector 尚未适配 `arena.decide` / `arena.negotiate`。
 - [ ] Connector 尚未返回与 dispatch ACK 分离的唯一 typed AgentTaskResult。
 - [ ] PaymentMandate 的额度、期限、范围、撤销和
@@ -275,7 +276,7 @@ create game
    SecretStore port。
 - [ ] 接入并真实验证 Tencent Secret Manager/KMS，以及不同 CAM 身份。
 - [x] 建立 server-side Provider/immutable Model/thinking capability registry。
-- [ ] 完成跨 HTTP/DB/日志/Trace/真实 SSM 的原 Key 泄漏验证；当前单元测试已覆盖
+- [ ] 完成跨 HTTP/DB/日志/Trace/公网 encrypted vault 的原 Key 泄漏验证；当前单元测试已覆盖
       secret handle、配置快照、Result/Event 和生产 Memory backend 禁用。Secret backend
    故障时 fail closed。
 
@@ -301,8 +302,8 @@ create game
 - [x] 用户可在一个最小 `/agents` 表单一次提交两个幂等 API；原 Key 不回显、不进
       React state/storage，Local Connector 入口保留，Hosted-only 用户可不填
       Connector code 直接登录。
-- [x] 实现生产 PostgreSQL control repository 与 Tencent SSM Secret Writer
-      组合；真实 CAM/SSM 与刷新/重启验收仍待部署执行。
+- [x] 实现生产 PostgreSQL control repository、单机 AES-GCM ciphertext vault
+      与可选 Tencent SSM 组合；公网真实 Key 与刷新/重启验收仍待执行。
 - [x] 实现 owner-scoped、同 Provider 的 Hosted Agent Runtime `PATCH`：
       复用已验证 Credential，候选配置先经 durable validation，成功后原子切换，
       失败时保留旧配置与可用 Credential；活动 Game 继续使用 join 时冻结的快照。

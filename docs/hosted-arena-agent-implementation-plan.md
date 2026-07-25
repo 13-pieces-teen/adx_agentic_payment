@@ -553,14 +553,19 @@ class SecretController(Protocol):
 实现：
 
 - `MemorySecretStore`：测试；
+- `PostgresEncryptedSecretWriter/Reader/Controller`：单机 beta，数据库仅存
+  AES-256-GCM ciphertext，master key 使用独立只读主机文件；
 - `TencentSecretWriter`：API 使用；
 - `TencentSecretReader`：Worker 使用；
 - `TencentSecretController`：Credential Controller 使用。
 
-### 9.2 Tencent Cloud
+### 9.2 单机 encrypted vault 与 Tencent Cloud
 
 工作项：
 
+- 单机 beta 通过 role-specific `SECURITY DEFINER` 函数分离 write/read/lifecycle；
+- master key 不进 PostgreSQL、`.env`、Compose 或仓库，只读挂载给 API/Worker；
+- ciphertext 绑定 `secret_ref + key_version`，nonce 每次随机生成；
 - 确认部署地域与 Secret 命名规则；
 - 使用不含 user email/用户名的 opaque Secret name；
 - 建立 API Writer、Worker Reader、Credential Controller 三个 CAM policy；
@@ -598,7 +603,7 @@ UI 不自己维护独立 Provider 列表。
 
 ### 9.4 安全测试
 
-- 原 Key 不在 DB dump；
+- 原 Key 不在 DB dump；单机 beta dump 中只能出现 ciphertext/nonce/version；
 - 原 Key 不在 application/access/error log；
 - 原 Key 不在 Pydantic repr、Caddy/APM/OpenTelemetry 或 HTTP debug log；
 - 原 Key 不在 HTTP response；
@@ -616,8 +621,9 @@ UI 不自己维护独立 Provider 列表。
 
 ### 9.5 退出门槛
 
-- [ ] 使用临时测试 Key 完成一次真实 SSM
-      create/read/replacement-row-CAS/revoke/delete；
+- [ ] 使用临时测试 Key 在公网单机 vault 完成
+      create/read/replacement-row-CAS/revoke/delete 与重启恢复；
+- [ ] 可选：使用腾讯 SSM 完成同一 contract；
 - [ ] 扫描 DB、日志和响应均无原 Key；
 - [ ] 三个 IAM 身份的越权操作均失败；
 - [ ] capability API 只返回启用的安全字段。
@@ -745,13 +751,15 @@ Credential validation 状态机：
   `ADX_HOSTED_AGENTS_ENABLED=true`，在生产依赖尚未组成时也会启动失败，而不会
   回退到 Memory/Fake。
 
-2026-07-25 更新：生产 PostgreSQL control repository、Tencent SSM
-Writer/Reader/Controller adapter、DeepSeek/OpenAI-compatible Provider、durable
+2026-07-25 更新：生产 PostgreSQL control repository、单机 AES-GCM ciphertext
+vault、可选 Tencent SSM Writer/Reader/Controller adapter、
+DeepSeek/OpenAI-compatible Provider、durable
 validation/Task Worker、独立 Credential Controller、Arena Coordinator/Finalizer 与
 确认恢复 Worker 已落地。生产 Compose 默认关闭这些 profile，并在 IAM 未明确验证时
 fail closed。双 Hosted Agent 已在本地 PostgreSQL 开发栈完成 Decide/Negotiate，
-但真实 Tencent CAM/SSM、真实 Provider Key、服务器重启连续性和越权拒绝证据仍需
-部署验收。replace/revoke/revalidate/PATCH/disable 路由和 UI resume 仍未完成。
+但公网真实 Provider Key、服务器重启连续性和越权拒绝证据仍需部署验收；腾讯
+CAM/SSM 是可选的更高安全等级。replace/revoke/revalidate/PATCH/disable 路由和
+UI resume 仍未完成。
 
 ### 11.1 Backend API
 
@@ -1207,7 +1215,7 @@ accepted trade。
 - Arena migration scope；
 - feature flag；
 - Worker queue/concurrency；
-- Tencent SSM region/endpoint/credential injection；
+- Hosted secret backend、master-key file 或 Tencent SSM credential injection；
 - guest signer 与 relay account 的独立 Secret read 配置；
 - Provider allowlist config；
 - health/readiness；
@@ -1316,7 +1324,8 @@ Arena Task queue 与 credential validation queue 使用不同 claim 路径。比
 
 - [ ] 生产镜像与 Compose build 通过；
 - [ ] 真实 PostgreSQL migration/restart 通过；
-- [ ] 真实 Tencent SSM 生命周期通过；
+- [ ] 公网单机 encrypted vault 生命周期与重启恢复通过；
+- [ ] 可选腾讯 SSM 生命周期通过；
 - [ ] 至少一个真实 Provider 的 structured invocation 通过；
 - [ ] guest signer/relay Secret 权限与 Hosted/Arena Worker 隔离；
 - [ ] accepted trade 自动完成当前链路的新鲜 testnet 支付；

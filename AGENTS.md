@@ -107,12 +107,14 @@ Do not request, store, or expose private chain-of-thought, wallet private keys,
 seed phrases, local Runtime credentials, deployment credentials, unrelated
 local files, or full machine activity. A narrowly scoped Hosted-model BYOK
 exception is allowed only through the dedicated write-only credential ingress:
-the raw model API key may be persisted only in the approved external Secret
-Manager and must never enter the business database, AgentTask, logs, traces,
-audit payloads, or frontend responses. Connector-based local credentials remain
-local and must never use this exception. Persist structured actions, sanitized
-public negotiation messages, timestamps, status, safe errors, numeric usage,
-and payment evidence only.
+the raw model API key may be persisted either in the approved external Secret
+Manager or, for the approved single-host beta, as AES-256-GCM ciphertext in the
+dedicated PostgreSQL credential vault with its master key kept in a separate
+read-only host file. Raw plaintext must never enter the business database,
+AgentTask, logs, traces, audit payloads, `.env`, or frontend responses.
+Connector-based local credentials remain local and must never use this
+exception. Persist structured actions, sanitized public negotiation messages,
+timestamps, status, safe errors, numeric usage, and payment evidence only.
 
 For Arena Agent execution:
 
