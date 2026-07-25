@@ -1,0 +1,40 @@
+# 前端独立部署 —— 只有 Next.js web 一个服务。
+# 后端 api + postgres 在队友服务器 (api.arena402.com / 42.193.162.10) 运行，本文件不含它们。
+#
+# 用法：
+#   cd frontend
+#   NEXT_PUBLIC_API_URL=https://api.arena402.com docker compose up -d --build
+#
+# 前后端分离：本容器只跑前端，所有数据请求打到 NEXT_PUBLIC_API_URL。
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* 在 build 期内联，必须在这里传入
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.arena402.com}
+    image: arena402-web:latest
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    stop_grace_period: 30s

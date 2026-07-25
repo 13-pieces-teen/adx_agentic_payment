@@ -1,17 +1,23 @@
 # Arena 402 前端冲刺共识 (SPRINT_CONSENSUS)
 
-> 面向 4 个并行 Claude Code 的唯一事实来源。开工前**必须完整读完本文**。
+> 面向前端开发的唯一事实来源。开工前**必须完整读完本文**。
 > 截稿：距提交约 12 小时（本文写于 2026-07-25 凌晨）。
 > 本文基于对后端 `origin/dev-ly`/`origin/main` 真实代码的逐文件分析，不是推测。
+
+> **2026-07-25 更新（方向调整）**：
+> - Vercel 无法导入团队私有 repo → **不另写 React，直接在 `frontend/` 里 main 已有的 Next.js 15 框架上改写**。
+> - 前端改为**自建 docker 分离部署**（`frontend/Dockerfile` + `frontend/docker-compose.yml`），连 `api.arena402.com`。部署见 `frontend/DEPLOY.md`。
+> - 前端代码就在**团队 repo 的 `frontend/`**（不拷到个人 repo，避免副本分叉）。
 
 ---
 
 ## 0. 一句话目标
 
-在**队友已经连好 API 的 React (Next.js 15) 前端**基础上，做出一个
+在 **main 已有的 Next.js 15 前端**（已连好 API）基础上，做出一个
 **评委现场能看到"真实数据流动"的可跑通 Demo 闭环**：
 `创建 Hosted Agent → 开一局单回合王城典当行 → 看到决策/撮合/协商 → 冻结结算意图`。
 视觉统一到用户现有的**中世纪 + 未来科技风**，杜绝"多次修改痕迹"。
+部署：前端 docker 独立部署连 `api.arena402.com`，后端在队友服务器 `42.193.162.10`（前后端分离）。
 
 ---
 
