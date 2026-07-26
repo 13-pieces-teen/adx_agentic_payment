@@ -5,6 +5,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SQL = (ROOT / "db" / "migrations" / "018_arena_wallet_mandate_x402.sql").read_text(
     encoding="utf-8"
 )
+CLAIM_PRIVILEGE_SQL = (
+    ROOT / "db" / "migrations" / "034_arena_wallet_inventory_claim_privilege.sql"
+).read_text(encoding="utf-8")
 
 
 def test_wallet_binding_is_permanent_and_collision_safe() -> None:
@@ -48,3 +51,10 @@ def test_settlement_intent_freezes_token_eip712_domain() -> None:
     assert "ADD COLUMN token_eip712_name" in SQL
     assert "ADD COLUMN token_eip712_version" in SQL
     assert "settlement_intents_token_domain_pair" in SQL
+
+
+def test_wallet_api_can_lock_and_claim_only_inventory_status() -> None:
+    assert "GRANT UPDATE (status)" in CLAIM_PRIVILEGE_SQL
+    assert "ON arena402.wallet_inventory" in CLAIM_PRIVILEGE_SQL
+    assert "TO adx_arena_api" in CLAIM_PRIVILEGE_SQL
+    assert "GRANT UPDATE ON" not in CLAIM_PRIVILEGE_SQL
