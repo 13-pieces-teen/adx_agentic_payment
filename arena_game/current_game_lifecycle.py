@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from .event_deck import STANDARD_EVENT_DECK_ID, build_event_schedule
 from .postgres import (
     CURRENT_GAME_MAX_PARTICIPANTS,
+    CURRENT_GAME_START_THRESHOLD,
     PostgresPawnhouseRepository,
 )
 from .settlement import SettlementConfig
@@ -22,7 +23,7 @@ class CurrentGameLifecycleWorker:
         repository: PostgresPawnhouseRepository,
         settlement_config: SettlementConfig,
         round_count: int = 5,
-        start_threshold: int = CURRENT_GAME_MAX_PARTICIPANTS,
+        start_threshold: int = CURRENT_GAME_START_THRESHOLD,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
         official_fill_after_seconds: int = 300,
         action_timeout_ms: int = 90_000,

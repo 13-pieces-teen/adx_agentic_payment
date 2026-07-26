@@ -13,6 +13,7 @@ python3 -m compileall -q \
   arena_agent_contracts \
   arena_core \
   arena_game \
+  arena_memorial \
   connector_gateway \
   hosted_agent_control_plane \
   hosted_agent_runtime \

@@ -63,6 +63,12 @@ CURRENT_GAME_CAPACITY_100_SQL_PATH = (
     / "migrations"
     / "032_arena_current_game_capacity_100.sql"
 )
+CURRENT_GAME_CAPACITY_RESTORED_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "036_arena_current_game_capacity_100.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -396,6 +402,9 @@ def test_local_connector_migration_is_selected_by_arena_scope(
     assert CURRENT_GAME_JOIN_SQL_PATH in migrate_module.migration_files(
         "arena"
     )
+    assert CURRENT_GAME_CAPACITY_RESTORED_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
 
 
 def test_current_game_migration_has_single_pointer_and_product_limits():
@@ -413,6 +422,15 @@ def test_current_game_migration_has_single_pointer_and_product_limits():
 
 def test_current_game_capacity_migration_raises_product_limit_to_100():
     sql = CURRENT_GAME_CAPACITY_100_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "current_game_start_threshold_check" in sql
+    assert "start_threshold BETWEEN 2 AND 100" in sql
+    assert "current_game_max_participants_check" in sql
+    assert "max_participants BETWEEN start_threshold AND 100" in sql
+
+
+def test_latest_current_game_capacity_migration_restores_product_limit_to_100():
+    sql = CURRENT_GAME_CAPACITY_RESTORED_SQL_PATH.read_text(encoding="utf-8")
 
     assert "current_game_start_threshold_check" in sql
     assert "start_threshold BETWEEN 2 AND 100" in sql

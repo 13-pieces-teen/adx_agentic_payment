@@ -27,6 +27,7 @@ from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
 from .portfolio import (
     INITIAL_NET_WORTH_ATOMIC,
     Portfolio,
+    default_join_portfolio,
     distribute_balanced_portfolios,
 )
 from .ranking import calculate_rankings
@@ -48,7 +49,8 @@ class PawnhouseRepositoryError(RuntimeError):
 
 
 _INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
-CURRENT_GAME_MAX_PARTICIPANTS = 20
+CURRENT_GAME_START_THRESHOLD = 10
+CURRENT_GAME_MAX_PARTICIPANTS = 100
 
 
 def _json(value: object) -> str:
@@ -204,7 +206,7 @@ class PostgresPawnhouseRepository:
         event_mode: str = "seeded_shuffle",
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
-        start_threshold: int = CURRENT_GAME_MAX_PARTICIPANTS,
+        start_threshold: int = CURRENT_GAME_START_THRESHOLD,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
         official_fill_after_seconds: int = 300,
         settlement_config: SettlementConfig | None = None,
@@ -486,9 +488,9 @@ class PostgresPawnhouseRepository:
         strategy: RuleStrategy,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
-        portfolio = portfolio or Portfolio.initial(
-            cash_atomic=20_000_000,
-            holdings={},
+        portfolio = portfolio or default_join_portfolio(
+            game_id=game_id,
+            agent_id=agent_id,
         )
         # The binding is a game-join snapshot. The same logical Agent may join
         # later games without sharing mutable strategy/configuration state.
@@ -613,9 +615,9 @@ class PostgresPawnhouseRepository:
         official_pool_join: bool = False,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
-        portfolio = portfolio or Portfolio.initial(
-            cash_atomic=20_000_000,
-            holdings={},
+        portfolio = portfolio or default_join_portfolio(
+            game_id=game_id,
+            agent_id=agent_id,
         )
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -998,9 +1000,9 @@ class PostgresPawnhouseRepository:
         settlement_account: SettlementAccount | None = None,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
-        portfolio = portfolio or Portfolio.initial(
-            cash_atomic=20_000_000,
-            holdings={},
+        portfolio = portfolio or default_join_portfolio(
+            game_id=game_id,
+            agent_id=agent_id,
         )
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -4723,6 +4725,10 @@ class PostgresPawnhouseRepository:
 
         assert settlement.chain_id is not None
         assert settlement.token_address is not None
+        default_portfolio = default_join_portfolio(
+            game_id=game_id,
+            agent_id=agent_id,
+        )
         return {
             "gameId": game_id,
             "agentId": agent_id,
@@ -4753,8 +4759,8 @@ class PostgresPawnhouseRepository:
                 },
                 "allowedGoods": list(GOOD_IDS),
                 "defaultPortfolio": {
-                    "cashAtomic": str(INITIAL_NET_WORTH_ATOMIC),
-                    "holdings": {good_id: 0 for good_id in GOOD_IDS},
+                    "cashAtomic": str(default_portfolio.cash_atomic),
+                    "holdings": default_portfolio.holdings,
                 },
             },
             "safeErrorCode": None,

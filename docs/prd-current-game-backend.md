@@ -318,12 +318,12 @@ Content-Type: application/json
     },
     "allowedGoods": ["grain", "iron", "warhorse", "gems"],
     "defaultPortfolio": {
-      "cashAtomic": "20000000",
+      "cashAtomic": "17000000",
       "holdings": {
         "grain": 0,
         "iron": 0,
         "warhorse": 0,
-        "gems": 0
+        "gems": 1
       }
     }
   },
@@ -437,7 +437,8 @@ cashAtomic
 
 `cashAtomic` 使用十进制整数字符串，持仓数量使用非负整数。服务端校验并在 Join
 事务中锁定组合，开赛时不得再次随机分配或覆盖。为兼容尚未升级的客户端，
-`portfolio` 暂时可省略并回退为 20 金全现金；产品前端应始终显式提交用户确认的
+`portfolio` 暂时可省略并回退为基于 `gameId + agentId` 确定生成的一件货物与
+剩余现金等值组合；产品前端应始终显式提交用户确认的
 组合。
 
 ```json

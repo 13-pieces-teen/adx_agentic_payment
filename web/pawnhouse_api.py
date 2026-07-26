@@ -30,6 +30,7 @@ from arena_game import (
     SettlementError,
     STANDARD_EVENT_DECK_ID,
     build_event_schedule,
+    default_join_portfolio,
     gold,
 )
 
@@ -519,9 +520,9 @@ def create_pawnhouse_participation_router(
             ) from None
         try:
             portfolio = (
-                Portfolio.initial(
-                    cash_atomic=INITIAL_NET_WORTH_ATOMIC,
-                    holdings={},
+                default_join_portfolio(
+                    game_id=game_id,
+                    agent_id=body.agent_id,
                 )
                 if body.portfolio is None
                 else Portfolio.initial(

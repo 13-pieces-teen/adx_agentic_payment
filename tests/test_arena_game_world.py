@@ -23,7 +23,10 @@ from arena_game import (
     gold,
     schedule_commitment,
 )
-from arena_game.portfolio import distribute_balanced_portfolios
+from arena_game.portfolio import (
+    default_join_portfolio,
+    distribute_balanced_portfolios,
+)
 
 
 def test_gold_is_fixed_point_and_rejects_float() -> None:
@@ -156,6 +159,22 @@ def test_balanced_auto_portfolios_are_deterministic_and_equal_value() -> None:
         for portfolio in first.values()
     )
     assert all(sum(portfolio.holdings.values()) == 1 for portfolio in first.values())
+
+
+def test_default_join_portfolio_is_deterministic_equal_value_and_sell_capable() -> None:
+    first = default_join_portfolio(
+        game_id="game-current",
+        agent_id="agent-current",
+    )
+    replay = default_join_portfolio(
+        game_id="game-current",
+        agent_id="agent-current",
+    )
+
+    assert first == replay
+    assert first.net_worth(INITIAL_PRICES) == gold("20")
+    assert sum(first.holdings.values()) == 1
+    assert first.cash_atomic < gold("20")
 
 
 def test_game_balanced_auto_mode_assigns_missing_portfolios_at_lock() -> None:

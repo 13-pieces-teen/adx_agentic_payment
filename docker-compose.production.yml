@@ -72,6 +72,7 @@ x-api-environment: &api-environment
   ADX_ARENA_PARTICIPATION_ENABLED: ${ADX_ARENA_PARTICIPATION_ENABLED:-true}
   ADX_ARENA_CORE_ENABLED: ${ADX_ARENA_CORE_ENABLED:-true}
   ADX_ARENA_PAYMENTS_ENABLED: ${ADX_ARENA_PAYMENTS_ENABLED:-true}
+  ADX_ARENA_MEMORIAL_ENABLED: ${ADX_ARENA_MEMORIAL_ENABLED:-false}
   ADX_PUBLIC_API_URL: ${ADX_PUBLIC_API_URL:?Set ADX_PUBLIC_API_URL in deploy/.env}
   ADX_X402_FACILITATOR_ID: ${ADX_X402_FACILITATOR_ID:-}
   ADX_SETTLEMENT_SERVICE_URL: ${ADX_SETTLEMENT_SERVICE_URL:-http://settlement-worker:8790}
@@ -329,6 +330,62 @@ services:
     mem_limit: 192m
     logging: *default-logging
 
+  official-agent-bootstrap:
+    profiles:
+      - ops
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    init: true
+    command:
+      - python
+      - scripts/bootstrap_official_agent_pool.py
+      - --api-key-file
+      - /run/secrets/official/deepseek.key
+      - --count
+      - ${ADX_OFFICIAL_AGENT_COUNT:-20}
+      - --model
+      - ${ADX_OFFICIAL_AGENT_MODEL:-deepseek-v4-flash}
+      - --activate
+      - --replace-enabled-pool
+    environment:
+      ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_OFFICIAL_BOOTSTRAP_DATABASE_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_HOSTED_FINGERPRINT_PEPPER_B64: ${ADX_HOSTED_FINGERPRINT_PEPPER_B64:?Set ADX_HOSTED_FINGERPRINT_PEPPER_B64 in deploy/.env}
+      ADX_HOSTED_FINGERPRINT_PEPPER_VERSION: ${ADX_HOSTED_FINGERPRINT_PEPPER_VERSION:-1}
+      ADX_HOSTED_SECRET_BACKEND: ${ADX_HOSTED_SECRET_BACKEND:-tencent_ssm}
+      ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED: ${ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED:-false}
+      ADX_HOSTED_MASTER_KEY_FILE: /run/secrets/arena402/hosted-master.key
+      ADX_HOSTED_MASTER_KEY_VERSION: ${ADX_HOSTED_MASTER_KEY_VERSION:-1}
+      ADX_TENCENT_SSM_REGION: ${ADX_TENCENT_SSM_REGION:-ap-guangzhou}
+      ADX_TENCENT_SSM_IAM_VERIFIED: ${ADX_TENCENT_SSM_IAM_VERIFIED:-false}
+      TENCENTCLOUD_SECRET_ID: ${ADX_TENCENT_SSM_WRITER_SECRET_ID:-}
+      TENCENTCLOUD_SECRET_KEY: ${ADX_TENCENT_SSM_WRITER_SECRET_KEY:-}
+      TENCENTCLOUD_TOKEN: ${ADX_TENCENT_SSM_WRITER_TOKEN:-}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - data
+    volumes:
+      - type: bind
+        source: ${ADX_HOSTED_SECRET_DIR_HOST_PATH:-./deploy/secrets}
+        target: /run/secrets/arena402
+        read_only: true
+      - type: bind
+        source: ${ADX_OFFICIAL_DEEPSEEK_KEY_FILE_HOST_PATH:-./deploy/secrets/deepseek-official.key}
+        target: /run/secrets/official/deepseek.key
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
   arena-worker:
     profiles:
       - arena
@@ -351,6 +408,7 @@ services:
       ADX_CURRENT_GAME_ROUND_COUNT: ${ADX_CURRENT_GAME_ROUND_COUNT:-5}
       ADX_CURRENT_GAME_START_THRESHOLD: ${ADX_CURRENT_GAME_START_THRESHOLD:-10}
       ADX_CURRENT_GAME_MAX_PARTICIPANTS: ${ADX_CURRENT_GAME_MAX_PARTICIPANTS:-100}
+      ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS: ${ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS:-300}
       ADX_CURRENT_GAME_ACTION_TIMEOUT_MS: ${ADX_CURRENT_GAME_ACTION_TIMEOUT_MS:-90000}
       ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS: ${ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS:-3}
       ADX_CURRENT_GAME_CHAIN_ID: ${ADX_CURRENT_GAME_CHAIN_ID:-1439}

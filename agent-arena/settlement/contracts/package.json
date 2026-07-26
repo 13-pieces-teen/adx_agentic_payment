@@ -8,8 +8,11 @@
     "compile": "hardhat compile",
     "deploy": "tsx scripts/deploy.ts",
     "deploy:tokens": "tsx scripts/deploy-tokens.ts",
+    "deploy:memorial-nft": "tsx scripts/deploy-memorial-nft.ts",
+    "generate:memorial-wallet-csv": "tsx scripts/generate-memorial-wallet-csv.ts",
+    "issue:memorial-nft": "tsx scripts/issue-memorial-nft.ts",
     "node": "hardhat node",
-    "test": "node --test test/tokens.test.mjs"
+    "test": "node --test --test-concurrency=1 test/tokens.test.mjs test/memorial-nft.test.mjs && tsx --test test/memorial-wallets.test.ts"
   },
   "devDependencies": {
     "hardhat": "^2.22.0",

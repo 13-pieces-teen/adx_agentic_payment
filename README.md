@@ -275,6 +275,52 @@ Settlement 的环境、命令、链上部署信息和验证证据见：
 上线自动路径以用户 Join 时确认的受限 PaymentMandate 作为授权，不能增加逐笔确认。
 禁止提交私钥、助记词或真实支付凭据。
 
+### Founding 402 纪念 NFT
+
+纪念 NFT 是独立于 `arena402-g`、游戏钱包和结算的发行系统。Migration `035`
+按持久化 GitHub 用户的 `created_at, user_id` 顺序固化前 402 名：名次
+`1..402` 对应 token ID `0..401`。注册只锁定资格和预生成钱包的公开地址，
+链上 `mintBatch` 由人工复核后的异步批次完成。
+
+```powershell
+# 1. 默认 dry-run：校验外部 CSV，但不写数据库
+python deploy/scripts/import_memorial_wallet_inventory.py `
+  --csv C:\secure\arena402-memorial-wallets.csv
+
+# 2. 明确 apply 后，只导入公开地址并激活前 402 名分配
+python deploy/scripts/import_memorial_wallet_inventory.py `
+  --csv C:\secure\arena402-memorial-wallets.csv `
+  --contract 0xMEMORIAL_NFT_ADDRESS --apply
+
+# 3. 从已锁定资格生成一个不超过 40 个地址的公开铸造批次
+python deploy/scripts/prepare_memorial_mint_batch.py `
+  --start-token-id 0 --batch-size 40 `
+  --out C:\secure\memorial-batch-000.json --apply
+```
+
+人工检查公开 manifest 后，在合约目录用相同文件先 dry-run、再显式
+`--apply` 发起 testnet 交易；Blockscout 确认后再回写业务库：
+
+```powershell
+npm run issue:memorial-nft -- --manifest C:\secure\memorial-batch-000.json
+npm run issue:memorial-nft -- --manifest C:\secure\memorial-batch-000.json --apply
+python deploy/scripts/record_memorial_mint_batch.py `
+  --manifest C:\secure\memorial-batch-000.json --apply
+```
+
+钱包助记词/私钥在仓库外完成人工交付后，只用公开 `wallet_id` 记录交付状态：
+
+```powershell
+python deploy/scripts/mark_memorial_credential_claimed.py `
+  --wallet-id memorial-wallet-0000 --apply
+```
+
+用户态接口为 `GET /api/v1/me/memorial`，公开汇总为
+`GET /api/v1/memorial/stats`；生产环境显式设置
+`ADX_ARENA_MEMORIAL_ENABLED=true` 后挂载。API 和数据库均不保存或返回助记词、
+私钥；三个写库脚本只接受 operator 提供的 `ADX_DATABASE_ADMIN_URL`（或一次性
+`DATABASE_URL`），凭据交付必须走仓库外的人工安全流程。
+
 ## 当前文档
 
 - 游戏机制：[`docs/game-design.md`](docs/game-design.md)

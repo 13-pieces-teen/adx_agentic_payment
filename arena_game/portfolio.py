@@ -44,6 +44,19 @@ def distribute_balanced_portfolios(
     return portfolios
 
 
+def default_join_portfolio(*, game_id: str, agent_id: str) -> "Portfolio":
+    """Build the deterministic equal-value fallback for an omitted portfolio."""
+
+    if not game_id:
+        raise PortfolioError("game id is required for the default portfolio")
+    if not agent_id:
+        raise PortfolioError("agent id is required for the default portfolio")
+    return distribute_balanced_portfolios(
+        (agent_id,),
+        seed=f"current-game-default:{game_id}",
+    )[agent_id]
+
+
 def normalize_holdings(values: Mapping[str, int]) -> dict[GoodId, int]:
     unknown = set(values).difference(GOOD_IDS)
     if unknown:
@@ -102,6 +115,7 @@ __all__ = [
     "INITIAL_NET_WORTH_ATOMIC",
     "Portfolio",
     "PortfolioError",
+    "default_join_portfolio",
     "distribute_balanced_portfolios",
     "normalize_holdings",
     "portfolio_value",

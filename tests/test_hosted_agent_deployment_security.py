@@ -164,17 +164,23 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
     assert "ADX_HOSTED_WORKER_REPLICAS" in deploy
 
 
-def test_hosted_master_key_is_file_mounted_only_into_decryption_processes() -> None:
+def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> None:
     compose = (ROOT / "docker-compose.production.yml").read_text(
         encoding="utf-8"
     )
-    assert compose.count("target: /run/secrets/arena402") == 2
+    assert compose.count("target: /run/secrets/arena402") == 3
     assert compose.count(
         "ADX_HOSTED_MASTER_KEY_FILE: "
         "/run/secrets/arena402/hosted-master.key"
-    ) == 2
-    controller = compose.split("  credential-controller:", 1)[1].split(
+    ) == 3
+    bootstrap = compose.split("  official-agent-bootstrap:", 1)[1].split(
         "\n  arena-worker:", 1
+    )[0]
+    assert "profiles:\n      - ops" in bootstrap
+    assert "target: /run/secrets/arena402" in bootstrap
+    assert "read_only: true" in bootstrap
+    controller = compose.split("  credential-controller:", 1)[1].split(
+        "\n  official-agent-bootstrap:", 1
     )[0]
     assert "ADX_HOSTED_MASTER_KEY_FILE" not in controller
     assert "target: /run/secrets/arena402" not in controller

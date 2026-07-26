@@ -32,6 +32,7 @@ from arena_game import (
     PawnhouseAgentRuntimeCoordinator,
     PostgresPawnhouseRepository,
 )
+from arena_memorial import PostgresMemorialRepository, create_memorial_router
 from arena_payments.api import create_payment_account_router
 from arena_payments.admin_api import create_payment_admin_router
 from arena_payments.coordinator import X402SettlementCoordinator
@@ -180,6 +181,13 @@ def _arena_payments_requested() -> bool:
     ).strip().lower() in {"1", "true", "yes"}
 
 
+def _arena_memorial_requested() -> bool:
+    return os.getenv(
+        "ADX_ARENA_MEMORIAL_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _pawnhouse_dev_requested() -> bool:
     return os.getenv(
         "ADX_ARENA_DEV_CONTROL",
@@ -298,6 +306,25 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 "ADX_ARENA_API_DATABASE_URL is required when payments are enabled"
             )
         payment_repository = PostgresPaymentRepository(payment_dsn)
+
+    memorial_repository: PostgresMemorialRepository | None = None
+    if _arena_memorial_requested():
+        if connector_bundle is None:
+            raise RuntimeError(
+                "Arena memorial requires the authenticated production "
+                "control plane"
+            )
+        memorial_dsn = (
+            os.getenv("ADX_ARENA_API_DATABASE_URL")
+            or os.getenv("ADX_CONNECTOR_DATABASE_URL")
+            or ""
+        ).strip()
+        if not memorial_dsn:
+            raise RuntimeError(
+                "ADX_ARENA_API_DATABASE_URL or ADX_CONNECTOR_DATABASE_URL is "
+                "required when the memorial API is enabled"
+            )
+        memorial_repository = PostgresMemorialRepository(memorial_dsn)
 
     wallet_repository: PostgresWalletRepository | None = None
     wallet_service = None
@@ -453,6 +480,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await arena_participation.initialize()
         if payment_repository is not None:
             await payment_repository.initialize()
+        if memorial_repository is not None:
+            await memorial_repository.initialize()
         if wallet_repository is not None:
             await wallet_repository.initialize()
         if pawnhouse_repository is not None:
@@ -506,6 +535,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 await arena_participation.close()
             if payment_repository is not None:
                 await payment_repository.close()
+            if memorial_repository is not None:
+                await memorial_repository.close()
             if wallet_repository is not None:
                 await wallet_repository.close()
             if hosted_bundle is not None:
@@ -597,6 +628,16 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 auth=connector_bundle.auth,
                 repository=arena_participation,
                 payment_repository=payment_repository,
+            )
+        )
+
+    if memorial_repository is not None:
+        assert connector_bundle is not None
+        app.state.arena_memorial = memorial_repository
+        app.include_router(
+            create_memorial_router(
+                auth=connector_bundle.auth,
+                repository=memorial_repository,
             )
         )
 
@@ -701,6 +742,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "hosted_agent_creation": app.state.hosted_agents_creation_enabled,
             "arena_participation": arena_participation is not None,
             "arena_payments": payment_repository is not None,
+            "arena_memorial": memorial_repository is not None,
             "pawnhouse": app.state.pawnhouse_mode,
         }
 

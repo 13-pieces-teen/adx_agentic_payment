@@ -51,6 +51,14 @@ Arena 402 的对外叙事固定为三层：
   repository-wide upper bound, with
   database enforcement, batch invitation issuance, and 12-agent local Hosted
   execution.
+- [x] Founding 402 backend foundation: isolated soulbound ERC-721 contract,
+  402 pre-generated testnet wallets, deterministic first-402 GitHub
+  registration allocation, public-only inventory import, authenticated user
+  status/public aggregate APIs, and review-gated asynchronous mint manifests.
+- [ ] Founding 402 live acceptance: deploy the new ERC-721, import and activate
+  the reviewed public wallet inventory, mint registered recipients in
+  contiguous batches, record Blockscout-confirmed receipts, and integrate the
+  external frontend. No memorial transaction has been broadcast yet.
 
 The Milestone 2 demonstration is:
 
@@ -251,7 +259,8 @@ create game
 - [x] Current Game Join v2 已支持玩家提交 `cashAtomic` 与四种货物数量；
       Arena 按冻结初始价校验总值严格等于 20 金并在 Join 时锁定。Current Game
       使用 `manual` portfolio mode，开赛不再用 `balanced_auto` 覆盖玩家组合；
-      旧客户端省略组合时兼容为 20 金全现金。
+      旧客户端省略组合时使用 `gameId + agentId` 确定性生成的一件货物与剩余现金
+      等值组合，官方补位 Agent 使用同一兜底，避免默认状态没有卖方流动性。
 - [x] Connector Binding 创建时自动注册 owner-scoped `arena_agents` 与
       `arena_runtime_bindings`，迁移会回填既有 Binding；缺少 Arena 专用 capability
       时 route 保持 `provisioning`。

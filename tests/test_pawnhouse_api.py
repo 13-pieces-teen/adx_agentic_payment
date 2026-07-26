@@ -6,7 +6,7 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from arena_game import PawnhouseRepositoryError
+from arena_game import PawnhouseRepositoryError, default_join_portfolio
 from connector_gateway.auth import AuthPrincipal
 from web.api import create_app
 from web.pawnhouse_api import (
@@ -489,6 +489,10 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
     )
 
     assert response.status_code == 201, response.text
+    expected_portfolio = default_join_portfolio(
+        game_id="game_current",
+        agent_id="agent-current",
+    )
     assert response.json() == {
         "gameId": "game_current",
         "participantId": "gp:game_current:agent-current",
@@ -497,13 +501,8 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
         "readyCount": 1,
         "startThreshold": 2,
         "initialPortfolio": {
-            "cashAtomic": "20000000",
-            "holdings": {
-                "grain": 0,
-                "iron": 0,
-                "warhorse": 0,
-                "gems": 0,
-            },
+            "cashAtomic": str(expected_portfolio.cash_atomic),
+            "holdings": expected_portfolio.holdings,
         },
         "schemaVersion": "arena.game-join.v2",
     }
@@ -511,7 +510,7 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
     assert joined["require_current_game"] is True
     assert joined["payment_mandate_id"] == "mandate-current"
     assert joined["join_authorization_id"] == "ja-current"
-    assert joined["portfolio"].cash_atomic == 20_000_000
+    assert joined["portfolio"] == expected_portfolio
 
 
 def test_current_game_join_accepts_an_exact_twenty_gold_custom_portfolio() -> None:

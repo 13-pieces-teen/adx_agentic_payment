@@ -24,6 +24,7 @@ def test_default_surface_exposes_current_capabilities_and_health(monkeypatch):
     monkeypatch.delenv("ADX_ARENA_PARTICIPATION_ENABLED", raising=False)
     monkeypatch.delenv("ADX_ARENA_CORE_ENABLED", raising=False)
     monkeypatch.delenv("ADX_ARENA_PAYMENTS_ENABLED", raising=False)
+    monkeypatch.delenv("ADX_ARENA_MEMORIAL_ENABLED", raising=False)
     monkeypatch.delenv("ADX_ARENA_DEV_CONTROL", raising=False)
 
     client = TestClient(create_app())
@@ -37,6 +38,7 @@ def test_default_surface_exposes_current_capabilities_and_health(monkeypatch):
         "hosted_agent_creation": False,
         "arena_participation": False,
         "arena_payments": False,
+        "arena_memorial": False,
         "pawnhouse": "off",
     }
     assert client.get("/api/hosted-agents/capabilities").status_code == 200

@@ -248,10 +248,10 @@ async def main() -> None:
         ),
         round_count=int(os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "5")),
         start_threshold=int(
-            os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "20")
+            os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "10")
         ),
         max_participants=int(
-            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "20")
+            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "100")
         ),
         official_fill_after_seconds=int(
             os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "300")
