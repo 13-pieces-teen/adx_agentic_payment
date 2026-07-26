@@ -415,6 +415,9 @@ create game
       test-only 组合下启用，未配置 backend 时 fail closed；生产路径将仓库外 CSV
       逐项核对后一次性导入 AES-256-GCM 信封密文，运行时 signer 不再挂载 CSV。
 - [x] 用户可通过认证 API 为已加入 Game 创建一次受限 Mandate，不做逐笔人工确认。
+- [x] Official filler 钱包通过独立的 `platform_official` authority 接入同一
+      PaymentMandate/x402 路径；不伪造 GitHub subject，Mandate 按 Game、
+      Token、同局动态 payee、单笔/累计额度和 24 小时窗口受限。
 - [x] 冻结 Mandate 的 Game/network/token、单笔/累计额度、Game 到期时间和撤销
       状态；payee 只能是同局 Arena 配对出的 seller。
 - [x] 实现并发 Intent 的幂等 `reserve / consume / release`；PostgreSQL 锁定
@@ -458,7 +461,9 @@ create game
       不增加 Redis/Kafka/Kubernetes。
 - [x] Current Game 代码、数据库新 migration 与生产默认值已把硬上限从 12
       提高到 100；历史 migration 保持不变。
-- [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet E2E。
+- [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet
+      完整 E2E；`039`/`040` 已在腾讯云 PostgreSQL 实机迁移，真实链上广播仍待
+      明确交易摘要确认。
 - [ ] 重新做生产主机容量规划；旧 2C4G/70GB、10/12 Agent 验收只保留为回归基线，
       不能用于证明 100 Agent 容量。按 10/12/25/50/100 Agent 记录 P50/P95/P99、
       queue age、timeout、retry、Token、每轮 wall time 和资源占用。

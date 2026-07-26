@@ -220,6 +220,12 @@ testnet 交易；当前 EIP-3009 单笔人工授权只保留为开发验证路�
 记录 `inventoryCommittedAt`。链上已确认但事务尚未完成时属于
 `chain_confirmed_uncommitted` 可恢复状态，不能向玩家显示为已完成成交。
 
+Official filler 使用平台独立拥有的 testnet 钱包，不伪造 GitHub User 钱包绑定。
+Official Agent 入局时，Arena 在同一事务内签发仅限该 Game、该 Token、同局
+settlement account、单笔 20 gold、累计 `20 gold × roundCount`、24 小时有效的
+平台 Mandate；停用的 Official Agent 不能获得新 Mandate。该 Mandate 仍经过同一
+`reserve / consume / release`、x402、签名器与链上确认路径。
+
 当前实现已校验 PaymentMandate 的 network、Token、Game、payee、单笔/累计额度、
 有效期、撤销和并发 `reserve / consume / release`，并用 x402 V2 header 完成自动
 提交编排。底层 EIP-3009 direct relay 仍是 testnet 原型，标准公共 Facilitator

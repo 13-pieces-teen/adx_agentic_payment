@@ -153,7 +153,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限；`024` 增加单例 Current Game 权威指针和公开 `/api/v1/games/current` 安全投影，Arena Worker 已负责首次创建与终态后原子切换下一局，Join v2/Ready/自动启动仍在实施 |
 | 公开成交账本 | `/api/v1/ledger/trades` 提供跨对局、可过滤、游标分页的逐笔 SettlementIntent 投影，并下发 chain/Explorer 元数据；`/api/v1/ledger/stats` 仅聚合已有链上确认回执的笔数、原子金额和 Agent 数 |
-| 钱包与 PaymentMandate | `018` 已实现 GitHub User 永久绑定平台 testnet 钱包、同局 Participant 钱包快照、Game/chain/token/payee/单笔/累计/期限约束，以及并发安全且幂等的 `reserve / consume / release` 与 revoke |
+| 钱包与 PaymentMandate | `018` 已实现 GitHub User 永久绑定平台 testnet 钱包、同局 Participant 钱包快照、Game/chain/token/payee/单笔/累计/期限约束，以及并发安全且幂等的 `reserve / consume / release` 与 revoke；`040` 为平台 Official filler 建立独立 `platform_official` wallet authority 和同样受限的 Game Mandate，不伪造 GitHub 身份 |
 | 端到端集成 | 12 Hosted Agent 可持续完成 5/10 回合；自动链路已用 Fake 跑通 wallet → Mandate → x402 → facilitator → submitted → 链上恢复边界；新鲜真实 testnet 交易仍未执行 |
 | 标准 HTTP x402 | 已实现 V2 `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`、`eip155:<chainId>`、exact 原子金额、冻结 Intent 绑定，以及隔离的密文钱包 signer 与自建 V2 `/verify`/`/settle` Facilitator；公共 Facilitator 尚未实网验收 |
 
