@@ -339,7 +339,8 @@ services:
     init: true
     command:
       - python
-      - scripts/bootstrap_official_agent_pool.py
+      - -m
+      - scripts.bootstrap_official_agent_pool
       - --api-key-file
       - /run/secrets/official/deepseek.key
       - --count

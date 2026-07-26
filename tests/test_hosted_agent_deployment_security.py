@@ -168,6 +168,9 @@ def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> N
     compose = (ROOT / "docker-compose.production.yml").read_text(
         encoding="utf-8"
     )
+    dockerfile = (
+        ROOT / "deploy" / "docker" / "Dockerfile.api"
+    ).read_text(encoding="utf-8")
     assert compose.count("target: /run/secrets/arena402") == 3
     assert compose.count(
         "ADX_HOSTED_MASTER_KEY_FILE: "
@@ -177,8 +180,13 @@ def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> N
         "\n  arena-worker:", 1
     )[0]
     assert "profiles:\n      - ops" in bootstrap
+    assert "- scripts.bootstrap_official_agent_pool" in bootstrap
     assert "target: /run/secrets/arena402" in bootstrap
     assert "read_only: true" in bootstrap
+    assert (
+        "COPY --chown=adx:adx scripts/bootstrap_official_agent_pool.py "
+        "./scripts/bootstrap_official_agent_pool.py"
+    ) in dockerfile
     controller = compose.split("  credential-controller:", 1)[1].split(
         "\n  official-agent-bootstrap:", 1
     )[0]
