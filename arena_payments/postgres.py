@@ -398,10 +398,13 @@ class PostgresPaymentRepository:
              AND mandate.game_id = intent.game_id
              AND mandate.chain_id = intent.chain_id
              AND mandate.token_address = intent.token_address
-            JOIN arena402.user_wallets AS wallet
-              ON wallet.user_id = mandate.user_id
-             AND wallet.wallet_id = mandate.wallet_id
+            JOIN arena402.payment_wallet_authorities AS authority
+              ON authority.user_id = mandate.user_id
+             AND authority.wallet_id = mandate.wallet_id
+            JOIN arena402.wallet_inventory AS wallet
+              ON wallet.wallet_id = authority.wallet_id
              AND wallet.account_address = intent.buyer_account
+             AND wallet.status <> 'disabled'
             LEFT JOIN arena402.payment_reservations AS reservation
               ON reservation.settlement_intent_id =
                  intent.settlement_intent_id
@@ -453,9 +456,12 @@ class PostgresPaymentRepository:
                     """
                     SELECT mandate.*, wallet.account_address
                     FROM arena402.payment_mandates AS mandate
-                    JOIN arena402.user_wallets AS wallet
-                      ON wallet.user_id = mandate.user_id
-                     AND wallet.wallet_id = mandate.wallet_id
+                    JOIN arena402.payment_wallet_authorities AS authority
+                      ON authority.user_id = mandate.user_id
+                     AND authority.wallet_id = mandate.wallet_id
+                    JOIN arena402.wallet_inventory AS wallet
+                      ON wallet.wallet_id = authority.wallet_id
+                     AND wallet.status <> 'disabled'
                     WHERE mandate.mandate_id = $1
                     FOR UPDATE OF mandate
                     """,

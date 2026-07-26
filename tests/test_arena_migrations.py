@@ -69,6 +69,12 @@ CURRENT_GAME_CAPACITY_RESTORED_SQL_PATH = (
     / "migrations"
     / "036_arena_current_game_capacity_100.sql"
 )
+OFFICIAL_PAYMENT_AUTHORITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "040_arena_official_payment_authority.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -452,6 +458,32 @@ def test_current_game_join_migration_freezes_readiness_and_dynamic_payees():
     assert "payment_mandate_id IS NOT NULL" in sql
     assert "portfolio_locked_at IS NOT NULL" in sql
     assert "GRANT SELECT, INSERT, UPDATE ON" in sql
+
+
+def test_official_payment_authority_keeps_user_and_platform_wallets_distinct():
+    sql = OFFICIAL_PAYMENT_AUTHORITY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE arena402.payment_wallet_authorities" in sql
+    assert "authority_kind IN ('user', 'platform_official')" in sql
+    assert "payment_mandates_wallet_authority_fkey" in sql
+    assert "REFERENCES arena402.payment_wallet_authorities" in sql
+    assert "sync_user_payment_wallet_authority" in sql
+    assert "sync_official_payment_wallet_authority" in sql
+    assert "github_subject" not in sql
+    assert "private_key" not in sql
+
+
+def test_official_payment_authority_is_selected_by_arena_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+
+    assert OFFICIAL_PAYMENT_AUTHORITY_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
 
 
 def test_unbounded_game_capacity_keeps_the_per_game_limit_authoritative():

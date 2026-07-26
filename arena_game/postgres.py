@@ -653,10 +653,12 @@ class PostgresPawnhouseRepository:
                     ):
                         return str(existing_participant["game_participant_id"])
                     raise PawnhouseRepositoryError("user_already_joined")
+                official = None
                 if official_pool_join:
                     official = await connection.fetchrow(
                         """
-                        SELECT inventory.chain_id, inventory.account_address
+                        SELECT inventory.wallet_id, inventory.chain_id,
+                               inventory.account_address
                         FROM arena402.official_agent_pool AS pool_entry
                         JOIN public.arena_agents AS agent
                           ON agent.agent_id = pool_entry.agent_id
@@ -723,6 +725,93 @@ class PostgresPawnhouseRepository:
                     settlement_config.authorization_mode != "none"
                     and settlement_config.token_symbol.lower() == "arena402-g"
                 )
+                if (
+                    official_pool_join
+                    and settlement_config.authorization_mode != "none"
+                ):
+                    assert official is not None
+                    assert settlement_config.chain_id is not None
+                    assert settlement_config.token_address is not None
+                    now = datetime.now(timezone.utc)
+                    mandate_expires_at = now + timedelta(hours=24)
+                    official_join_authorization_id = (
+                        f"official-ja:{participant_id}"
+                    )
+                    official_mandate_id = (
+                        f"official-mandate:{participant_id}"
+                    )
+                    mandate_max_per_payment = int(
+                        game_config.get("initialNetWorthAtomic", "20000000")
+                    )
+                    mandate_max_cumulative = (
+                        mandate_max_per_payment
+                        * int(game_config.get("roundCount", 5))
+                    )
+                    key_digest = sha256_text_identifier(
+                        f"official-join:{participant_id}"
+                    )
+                    request_digest = sha256_identifier(
+                        {
+                            "gameId": game_id,
+                            "agentId": agent_id,
+                            "walletId": str(official["wallet_id"]),
+                            "chainId": settlement_config.chain_id,
+                            "tokenAddress": settlement_config.token_address,
+                            "maxPerPaymentAtomic": mandate_max_per_payment,
+                            "maxCumulativeAtomic": mandate_max_cumulative,
+                        }
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.join_authorizations (
+                            join_authorization_id, user_id, game_id, agent_id,
+                            status, key_digest, request_digest, expires_at
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, 'pending', $5, $6, $7
+                        )
+                        ON CONFLICT (join_authorization_id) DO NOTHING
+                        """,
+                        official_join_authorization_id,
+                        user_id,
+                        game_id,
+                        agent_id,
+                        key_digest,
+                        request_digest,
+                        mandate_expires_at,
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.payment_mandates (
+                            mandate_id, user_id, wallet_id, game_id, chain_id,
+                            token_address, max_per_payment_atomic,
+                            max_cumulative_atomic, allowed_payees, valid_from,
+                            expires_at, join_authorization_id,
+                            allowed_payee_rule
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8,
+                            ARRAY[]::text[], $9, $10, $11,
+                            'same_game_settlement_account'
+                        )
+                        ON CONFLICT (mandate_id) DO NOTHING
+                        """,
+                        official_mandate_id,
+                        user_id,
+                        str(official["wallet_id"]),
+                        game_id,
+                        settlement_config.chain_id,
+                        settlement_config.token_address,
+                        mandate_max_per_payment,
+                        mandate_max_cumulative,
+                        now - timedelta(seconds=5),
+                        mandate_expires_at,
+                        official_join_authorization_id,
+                    )
+                    payment_mandate_id = official_mandate_id
+                    join_authorization_id = (
+                        official_join_authorization_id
+                    )
                 if (
                     payment_mandate_id is not None
                     and settlement_account is None

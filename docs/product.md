@@ -50,7 +50,9 @@ Injective EVM testnet 是 MVP 目标中的真实链上支付层，当前 Game �
 5. `accept` 后冻结价格、双方、货物和结算参数。
 6. 在目标 Hosted 路径中，Settlement 校验用户 Join 时一次确认的该局受限
    PaymentMandate，再由隔离的 guest signer 自动签名并提交 testnet 交易；单笔
-   人工授权只作为开发验证路径。
+   人工授权只作为开发验证路径。平台 Official filler 使用独立
+   `platform_official` wallet authority，在入局事务中取得同样按 Game、Token、
+   动态同局 payee、单笔/累计额度和期限受限的 Mandate，不冒充 GitHub User。
 7. 链上确认后，Arena 才更新现金与货物。
 8. 未配对者不受惩罚；配对后谈崩或超时，双方
    `failedNegotiations + 1`。
@@ -213,3 +215,5 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - [x] PaymentMandate 的 `reserve / consume / release` 与 revoke 已实现；
       unknown 使用 `submitting` ambiguity boundary 停止盲目重试，完整 reorg
       策略仍待验证；
+- [x] Official filler 的平台钱包已接入受限 PaymentMandate；停用 Official
+      Agent 不得获得新 Mandate，Runtime 不接触钱包密钥或任意签名能力；
