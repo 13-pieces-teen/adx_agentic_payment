@@ -234,18 +234,18 @@ class PostgresPaymentRepository:
                             wallet.chain_id AS wallet_chain_id,
                             game.config_snapshot -> 'settlement'
                                 AS settlement_config
-                        FROM arena402.join_authorizations AS authorization
+                        FROM arena402.join_authorizations AS join_auth
                         JOIN arena402.games AS game
-                          ON game.game_id = authorization.game_id
+                          ON game.game_id = join_auth.game_id
                         JOIN arena402.user_wallets AS wallet
-                          ON wallet.user_id = authorization.user_id
+                          ON wallet.user_id = join_auth.user_id
                          AND wallet.wallet_id = $4
-                        WHERE authorization.join_authorization_id = $1
-                          AND authorization.game_id = $2
-                          AND authorization.user_id = $3
-                          AND authorization.status = 'pending'
-                          AND authorization.expires_at > clock_timestamp()
-                        FOR SHARE OF authorization, game, wallet
+                        WHERE join_auth.join_authorization_id = $1
+                          AND join_auth.game_id = $2
+                          AND join_auth.user_id = $3
+                          AND join_auth.status = 'pending'
+                          AND join_auth.expires_at > clock_timestamp()
+                        FOR SHARE OF join_auth, game, wallet
                         """,
                         mandate.join_authorization_id,
                         mandate.game_id,

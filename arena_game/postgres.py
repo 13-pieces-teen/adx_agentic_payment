@@ -763,8 +763,8 @@ class PostgresPawnhouseRepository:
                         """
                         SELECT mandate.mandate_id
                         FROM arena402.payment_mandates AS mandate
-                        JOIN arena402.join_authorizations AS authorization
-                          ON authorization.join_authorization_id =
+                        JOIN arena402.join_authorizations AS join_auth
+                          ON join_auth.join_authorization_id =
                              mandate.join_authorization_id
                         WHERE mandate.mandate_id = $1
                           AND mandate.user_id = $2
@@ -774,13 +774,13 @@ class PostgresPawnhouseRepository:
                           AND mandate.expires_at > clock_timestamp()
                           AND mandate.allowed_payee_rule =
                               'same_game_settlement_account'
-                          AND authorization.join_authorization_id = $4
-                          AND authorization.user_id = $2
-                          AND authorization.game_id = $3
-                          AND authorization.agent_id = $5
-                          AND authorization.status = 'pending'
-                          AND authorization.expires_at > clock_timestamp()
-                        FOR UPDATE OF mandate, authorization
+                          AND join_auth.join_authorization_id = $4
+                          AND join_auth.user_id = $2
+                          AND join_auth.game_id = $3
+                          AND join_auth.agent_id = $5
+                          AND join_auth.status = 'pending'
+                          AND join_auth.expires_at > clock_timestamp()
+                        FOR UPDATE OF mandate, join_auth
                         """,
                         payment_mandate_id,
                         user_id,
