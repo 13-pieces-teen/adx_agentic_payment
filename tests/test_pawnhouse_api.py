@@ -119,7 +119,10 @@ class _Repository:
         return {
             "gameId": values["game_id"],
             "agentId": values["agent_id"],
+            "eligible": True,
+            "readyToJoin": True,
             "joinAuthorizationId": "ja:test",
+            "joinAuthorizationExpiresAt": "2026-07-25T10:10:00+00:00",
             "checks": {
                 "game": "READY",
                 "agent": "READY",
@@ -460,6 +463,11 @@ def test_current_game_join_preflight_is_authenticated_and_idempotent() -> None:
     )
 
     assert response.status_code == 200
+    assert response.json()["eligible"] is True
+    assert response.json()["readyToJoin"] is True
+    assert response.json()["joinAuthorizationExpiresAt"] == (
+        "2026-07-25T10:10:00+00:00"
+    )
     assert response.json()["joinAuthorizationId"] == "ja:test"
     assert response.json()["mandateRequirements"]["allowedPayeeRule"] == (
         "SAME_GAME_SETTLEMENT_ACCOUNT"
