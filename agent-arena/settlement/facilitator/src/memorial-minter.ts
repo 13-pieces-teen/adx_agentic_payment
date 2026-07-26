@@ -10,9 +10,11 @@ import {
   type TransactionSerialized,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { Pool } from "pg";
+import pg from "pg";
 
 import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
+
+const { Pool } = pg;
 
 const CAMPAIGN = "arena402-genesis";
 const MEMORIAL_ABI = [

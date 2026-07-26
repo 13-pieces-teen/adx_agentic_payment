@@ -9,9 +9,11 @@ import {
   type TransactionSerialized,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { Pool } from "pg";
+import pg from "pg";
 
 import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
+
+const { Pool } = pg;
 
 const GAME_COIN_ABI = [
   {
