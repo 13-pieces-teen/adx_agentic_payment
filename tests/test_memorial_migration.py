@@ -18,6 +18,11 @@ def test_memorial_schema_freezes_exactly_402_github_registrations() -> None:
     assert "ORDER BY candidate.created_at, candidate.user_id" in SQL
     assert "FOR UPDATE;" in SQL
     assert "connector_user_memorial_after_insert" in SQL
+    assert (
+        "GRANT SELECT, TRIGGER ON TABLE public.connector_users"
+        in SQL
+    )
+    assert "REVOKE TRIGGER ON TABLE public.connector_users" in SQL
 
 
 def test_memorial_business_schema_never_persists_wallet_secrets() -> None:

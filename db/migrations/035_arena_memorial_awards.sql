@@ -1,5 +1,12 @@
 BEGIN;
 
+-- The NOLOGIN Arena DDL role owns the SECURITY DEFINER reconciliation
+-- functions, so it needs durable read access to the Connector user authority.
+-- TRIGGER is needed only while installing the insert hook and is revoked
+-- before this migration commits.
+GRANT SELECT, TRIGGER ON TABLE public.connector_users
+    TO adx_arena_migration;
+
 SET LOCAL ROLE adx_arena_migration;
 
 CREATE TABLE arena402.memorial_campaigns (
@@ -359,5 +366,8 @@ GRANT EXECUTE ON FUNCTION arena402.reconcile_memorial_awards(TEXT)
     TO adx_arena_api;
 
 RESET ROLE;
+
+REVOKE TRIGGER ON TABLE public.connector_users
+    FROM adx_arena_migration;
 
 COMMIT;
