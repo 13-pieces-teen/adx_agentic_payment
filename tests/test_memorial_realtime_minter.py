@@ -13,7 +13,7 @@ WORKER = (
     / "memorial-minter.ts"
 ).read_text(encoding="utf-8")
 MIGRATION = (
-    ROOT / "db" / "migrations" / "036_memorial_realtime_minter.sql"
+    ROOT / "db" / "migrations" / "037_arena_memorial_realtime_minter.sql"
 ).read_text(encoding="utf-8")
 
 
