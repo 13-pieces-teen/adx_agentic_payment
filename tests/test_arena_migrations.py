@@ -75,6 +75,12 @@ OFFICIAL_PAYMENT_AUTHORITY_SQL_PATH = (
     / "migrations"
     / "040_arena_official_payment_authority.sql"
 )
+LEGACY_CURRENT_GAME_CAPACITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "041_arena_drop_legacy_current_game_capacity_check.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -483,6 +489,24 @@ def test_official_payment_authority_is_selected_by_arena_scope(
 
     assert OFFICIAL_PAYMENT_AUTHORITY_SQL_PATH in migrate_module.migration_files(
         "arena"
+    )
+
+
+def test_latest_current_game_capacity_cleanup_drops_the_legacy_alias(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sql = LEGACY_CURRENT_GAME_CAPACITY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "DROP CONSTRAINT IF EXISTS current_game_check" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        LEGACY_CURRENT_GAME_CAPACITY_SQL_PATH
+        in migrate_module.migration_files("arena")
     )
 
 

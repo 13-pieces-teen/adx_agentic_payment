@@ -460,10 +460,14 @@ create game
       Settlement Worker 以 4 个执行 slot 驱动 4 个独立 EOA Facilitator shard，
       不增加 Redis/Kafka/Kubernetes。
 - [x] Current Game 代码、数据库新 migration 与生产默认值已把硬上限从 12
-      提高到 100；历史 migration 保持不变。
-- [ ] 跑真实 PostgreSQL、Tencent Secret Manager、Provider 和 Injective testnet
-      完整 E2E；`039`/`040` 已在腾讯云 PostgreSQL 实机迁移，真实链上广播仍待
-      明确交易摘要确认。
+      提高到 100；`041` 删除旧部署遗留的 `current_game_check` 容量别名，历史
+      migration 保持不变。
+- [x] 2026-07-26 在腾讯云真实 PostgreSQL 与 Injective EVM testnet 上完成
+      10 Official Agent、五回合生产批次：14 笔 provision 交易确认，一笔
+      accepted trade 经 PaymentMandate、x402 V2、自建 Facilitator、EIP-3009、
+      链上确认和库存提交完成闭环。
+- [ ] Tencent Secret Manager、真实外部 Provider、公共第三方 Facilitator 和
+      100 Agent 容量仍需分别验收；上述批次不证明这些边界。
 - [ ] 重新做生产主机容量规划；旧 2C4G/70GB、10/12 Agent 验收只保留为回归基线，
       不能用于证明 100 Agent 容量。按 10/12/25/50/100 Agent 记录 P50/P95/P99、
       queue age、timeout、retry、Token、每轮 wall time 和资源占用。
@@ -478,8 +482,10 @@ create game
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；
       `submitted_unknown` 不算终态，超时仍无安全证据时 Game 进入
       `settlement_recovery_required`、停止排名并使 MVP 验收失败。
-- [ ] accepted trade 无人工操作自动完成 reserve、签名、提交、确认和库存提交。
-- [ ] 保存脱敏发布证据，并继续准确标注 testnet direct settlement 与 x402 边界。
+- [x] 10 Official Agent 回归批次中的 accepted trade 已在开赛确认后无回合内
+      人工操作地自动完成 reserve、签名、提交、确认和库存提交。
+- [x] 保存本批脱敏交易、确认和库存提交证据，并继续准确标注 testnet direct
+      settlement、自建 Facilitator 与公共 x402 兼容性边界。
 
 ### Phase 9：Post-MVP
 
