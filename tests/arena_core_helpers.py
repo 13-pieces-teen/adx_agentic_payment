@@ -38,6 +38,7 @@ def negotiate_input(
     *,
     deadline=None,
     turn_sequence: int = 1,
+    remaining_turns: int = 2,
 ) -> ArenaNegotiateInputV1:
     return ArenaNegotiateInputV1(
         phase="negotiate",
@@ -56,6 +57,6 @@ def negotiate_input(
             failed_negotiations=0,
         ),
         turn_sequence=turn_sequence,
-        remaining_turns=2,
+        remaining_turns=remaining_turns,
         deadline_at=deadline or NOW + timedelta(seconds=30),
     )

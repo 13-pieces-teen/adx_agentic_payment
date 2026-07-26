@@ -168,6 +168,52 @@ def test_invalid_buyer_opening_action_converges_to_timeout(action):
     asyncio.run(scenario())
 
 
+def test_proposal_on_final_turn_converges_to_timeout():
+    async def scenario():
+        repository = MemoryArenaCoreRepository()
+        task = await ArenaTaskFactory(
+            repository,
+            clock=lambda: NOW,
+        ).create_negotiate_task(
+            game_agent_id="game-agent-1",
+            participant_view=negotiate_input(
+                turn_sequence=3,
+                remaining_turns=1,
+            ),
+            config_snapshot={},
+        )
+        await ArenaResultSink(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=1),
+        ).submit(
+            AgentTaskResultV1(
+                result_id="invalid-final-proposal",
+                task_id=task.task.task_id,
+                schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                status="succeeded",
+                action=ProposeAction(
+                    action="propose",
+                    price="12.500000",
+                    message="One more proposal.",
+                ),
+            )
+        )
+
+        applied = await ArenaResultConsumer(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=2),
+        ).consume_pending()
+        stored = await repository.get_result_for_task(task.task.task_id)
+
+        assert len(applied) == 1
+        assert applied[0].outcome == "negotiation_timeout"
+        assert applied[0].action is None
+        assert stored is not None
+        assert stored.rejection_reason == "final_turn_must_close"
+
+    asyncio.run(scenario())
+
+
 def test_consumer_uses_authoritative_result_not_detached_record():
     async def scenario():
         repository = MemoryArenaCoreRepository()

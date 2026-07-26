@@ -91,7 +91,7 @@ def derive_application(
                 task,
                 reason="counterparty_proposal_required",
             )
-        if task.input.remaining_turns == 0 and isinstance(
+        if task.input.remaining_turns <= 1 and isinstance(
             action, ProposeAction
         ):
             return _default_application(
