@@ -22,11 +22,10 @@ def create_memorial_router(
         principal = await _principal(auth, request)
         if (
             principal.temporary
-            or principal.identity_provider != "github"
-            or not principal.provider_subject
+            or principal.identity_provider not in {"github", "password"}
         ):
             stats = await repository.stats()
-            return _not_eligible(stats, "github_identity_required")
+            return _not_eligible(stats, "account_required")
 
         await repository.reconcile()
         award = await repository.award_for_user(principal.user_id)

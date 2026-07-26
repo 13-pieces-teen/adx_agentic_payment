@@ -7,7 +7,7 @@ SQL = (
 ).read_text(encoding="utf-8")
 
 
-def test_memorial_schema_freezes_exactly_402_github_registrations() -> None:
+def test_memorial_schema_freezes_exactly_402_supported_registrations() -> None:
     assert "CREATE TABLE arena402.memorial_campaigns" in SQL
     assert "CREATE TABLE arena402.memorial_wallet_inventory" in SQL
     assert "CREATE TABLE arena402.memorial_awards" in SQL

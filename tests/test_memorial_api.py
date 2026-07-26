@@ -147,7 +147,7 @@ def test_memorial_stats_are_public_and_do_not_disclose_users() -> None:
     }
 
 
-def test_password_identity_is_not_counted_as_a_founding_registration() -> None:
+def test_password_identity_can_enter_the_founding_registration() -> None:
     client, _, _ = _app()
     client.post(
         "/api/auth/invite",
@@ -162,4 +162,4 @@ def test_password_identity_is_not_counted_as_a_founding_registration() -> None:
 
     assert response.status_code == 200
     assert response.json()["eligible"] is False
-    assert response.json()["reason"] == "github_identity_required"
+    assert response.json()["reason"] == "registration_pending"
