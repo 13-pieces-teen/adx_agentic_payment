@@ -718,6 +718,7 @@ services:
     volumes:
       - ${ADX_FACILITATOR_CSV_HOST_PATH:-./deploy/secrets/arena402-facilitators.csv}:/run/arena402/facilitators.csv:ro
     networks:
+      - edge
       - data
     read_only: true
     tmpfs:
@@ -760,6 +761,7 @@ services:
     volumes:
       - ${ADX_FACILITATOR_CSV_HOST_PATH:-./deploy/secrets/arena402-facilitators.csv}:/run/arena402/facilitators.csv:ro
     networks:
+      - edge
       - data
     read_only: true
     tmpfs:

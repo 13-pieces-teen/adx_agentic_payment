@@ -29,11 +29,15 @@ FACILITATOR = (
 
 
 def test_gamecoin_provisioner_is_opt_in_and_uses_the_reviewed_secret_mount() -> None:
+    service = COMPOSE.split("  gamecoin-provisioner:", 1)[1].split(
+        "\n  memorial-minter:", 1
+    )[0]
     assert "ADX_ENABLE_GAMECOIN_PROVISIONER" in DEPLOY
     assert "profiles:\n      - gamecoin" in COMPOSE
     assert "facilitators.csv:ro" in COMPOSE
     assert "FACILITATOR_PRIVATE_KEY:" not in COMPOSE
     assert "gamecoin-provisioner-ready" in COMPOSE
+    assert "networks:\n      - edge\n      - data" in service
 
 
 def test_gamecoin_provisioner_persists_before_broadcast_and_recovers() -> None:

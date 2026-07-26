@@ -18,11 +18,15 @@ MIGRATION = (
 
 
 def test_memorial_minter_is_explicitly_opt_in_and_uses_read_only_secret_mount() -> None:
+    service = COMPOSE.split("  memorial-minter:", 1)[1].split(
+        "\n  web:", 1
+    )[0]
     assert "ADX_ENABLE_MEMORIAL_MINTER" in DEPLOY
     assert '|| enable_memorial_minter=false' in DEPLOY
     assert "profiles:\n      - memorial" in COMPOSE
     assert "facilitators.csv:ro" in COMPOSE
     assert "FACILITATOR_PRIVATE_KEY:" not in COMPOSE
+    assert "networks:\n      - edge\n      - data" in service
 
 
 def test_memorial_minter_serializes_and_recovers_signed_transactions() -> None:
