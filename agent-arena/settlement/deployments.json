@@ -20,16 +20,17 @@
   },
   "note": "eip712Version 若来自默认值需人工核对；supportsEip3009=false 时切 Permit2",
   "memorial": {
-    "address": "0xE6b9865a5fbbb45bF58b8235D02Ec40d97D58E8d",
-    "symbol": "arena402-m",
-    "decimals": 0,
-    "eip712Name": "Arena 402 Memorial",
-    "eip712Version": "1",
+    "address": "0x17D9Cd66b9BC7b6D12FB3c60cbf81b2f814c2364",
+    "name": "Arena 402 Memorial",
+    "symbol": "arena402",
+    "standard": "ERC-721",
+    "maxSupply": 402,
     "soulbound": true,
-    "whitelistGated": false,
-    "supportsEip3009": false,
-    "image": "TODO_UPLOAD_ICON_URL(assets/token-icons/arena402-m.png)",
-    "deployTx": "0xf9e8271d50c252844df2206dee2070dbc98c439b401af7b8292170967ea30ddc"
+    "soulboundStandard": "ERC-5192",
+    "baseURI": "https://www.arena402.com/api/memorial/metadata/",
+    "image": "https://www.arena402.com/assets/arena402-logo.jpg",
+    "deployTx": "0xb2d8d4f3c4610afe4812377964cc542cecbad646771d84e5c9b5cd494c24f0d2",
+    "deployBlock": 134712796
   },
   "gameCoin": {
     "address": "0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884",
