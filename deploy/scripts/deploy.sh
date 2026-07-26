@@ -24,6 +24,8 @@ hosted_secret_backend="$(env_value ADX_HOSTED_SECRET_BACKEND)"
 [ -n "${hosted_secret_backend}" ] || hosted_secret_backend=tencent_ssm
 enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"
 [ -n "${enable_arena_worker}" ] || enable_arena_worker=false
+enable_memorial_minter="$(env_value ADX_ENABLE_MEMORIAL_MINTER)"
+[ -n "${enable_memorial_minter}" ] || enable_memorial_minter=false
 enable_settlement_worker="$(env_value ADX_ENABLE_SETTLEMENT_WORKER)"
 [ -n "${enable_settlement_worker}" ] || enable_settlement_worker=false
 automatic_payments_enabled="$(env_value ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED)"
@@ -58,6 +60,13 @@ case "${enable_arena_worker}" in
     exit 1
     ;;
 esac
+case "${enable_memorial_minter}" in
+  true|false) ;;
+  *)
+    echo "ADX_ENABLE_MEMORIAL_MINTER must be true or false." >&2
+    exit 1
+    ;;
+esac
 case "${enable_settlement_worker}" in
   true|false) ;;
   *)
@@ -82,6 +91,17 @@ done
 if [ "${enable_arena_worker}" = "true" ]; then
   if [ "$(env_value ADX_ARENA_CORE_ENABLED)" != "true" ]; then
     echo "Arena Worker requires ADX_ARENA_CORE_ENABLED=true." >&2
+    exit 1
+  fi
+fi
+
+if [ "${enable_memorial_minter}" = "true" ]; then
+  if [ "$(env_value ADX_ARENA_MEMORIAL_ENABLED)" != "true" ]; then
+    echo "Memorial minter requires ADX_ARENA_MEMORIAL_ENABLED=true." >&2
+    exit 1
+  fi
+  if [ "${enable_testnet_facilitator}" != "true" ]; then
+    echo "Memorial minter requires the reviewed facilitator wallet mount." >&2
     exit 1
   fi
 fi
@@ -194,6 +214,9 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
     facilitator_index=$((facilitator_index + 1))
   done
 fi
+if [ "${enable_memorial_minter}" = "true" ]; then
+  compose --profile memorial build --pull memorial-minter
+fi
 
 if [ "${enable_hosted_runtime}" = "true" ]; then
   if [ "${hosted_agents_enabled}" != "true" ]; then
@@ -291,6 +314,9 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
     arena-facilitator-1 arena-facilitator-2 \
     arena-facilitator-3 arena-facilitator-4
 fi
+if [ "${enable_memorial_minter}" = "true" ]; then
+  compose --profile memorial build --pull memorial-minter
+fi
 compose up -d postgres
 compose run --rm migrate
 compose up -d api caddy
@@ -305,6 +331,9 @@ if [ "${enable_testnet_signer}" = "true" ]; then
 fi
 if [ "${enable_testnet_facilitator}" = "true" ]; then
   compose --profile testnet-facilitator up -d arena-facilitator-1 arena-facilitator-2 arena-facilitator-3 arena-facilitator-4
+fi
+if [ "${enable_memorial_minter}" = "true" ]; then
+  compose --profile memorial up -d memorial-minter
 fi
 if [ "${enable_settlement_worker}" = "true" ]; then
   compose --profile settlement up -d settlement-worker
