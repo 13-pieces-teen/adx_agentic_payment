@@ -113,6 +113,13 @@ def _strategy(index: int) -> str:
     )
 
 
+def _api_key_slot(*, index: int, count: int, key_count: int) -> int:
+    """Assign contiguous, near-even Agent ranges to the supplied keys."""
+    if not 1 <= index <= count or not 1 <= key_count <= count:
+        raise ValueError("invalid official Agent key distribution")
+    return min(((index - 1) * key_count) // count, key_count - 1)
+
+
 async def _ensure_official_users(
     connection: object,
     *,
@@ -258,7 +265,7 @@ async def _activate_pool(
 async def _provision(args: argparse.Namespace) -> dict[str, object]:
     import asyncpg
 
-    api_key = _load_api_key(args.api_key_file)
+    api_keys = tuple(_load_api_key(path) for path in args.api_key_file)
     control_database_url = _required_environment("ADX_HOSTED_CONTROL_DATABASE_URL")
     operator_database_url = _required_environment("ADX_OFFICIAL_BOOTSTRAP_DATABASE_URL")
 
@@ -294,6 +301,13 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
         provisioned: list[ProvisionedOfficialAgent] = []
         for index in range(1, args.count + 1):
             owner_user_id = _owner_id(index)
+            api_key = api_keys[
+                _api_key_slot(
+                    index=index,
+                    count=args.count,
+                    key_count=len(api_keys),
+                )
+            ]
             credential = await credential_service.create_credential(
                 owner_user_id=owner_user_id,
                 request=CredentialIngressRequest(
@@ -356,12 +370,13 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
             "provider": "deepseek",
             "model": args.model,
             "agentCount": len(provisioned),
+            "credentialKeyCount": len(api_keys),
             "poolActivated": args.activate,
             "replacedEnabledPool": (args.activate and args.replace_enabled_pool),
             "agentIds": [agent.agent_id for agent in provisioned],
         }
     finally:
-        api_key = SecretStr("")
+        api_keys = tuple(SecretStr("") for _ in api_keys)
         await close_secret_port(secret_writer)
         await repository.close()
         await operator_connection.close()
@@ -377,8 +392,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-key-file",
         type=Path,
+        action="append",
         required=True,
-        help="UTF-8 file containing only the DeepSeek API key.",
+        help=(
+            "UTF-8 file containing only one DeepSeek API key. Repeat the "
+            "flag to distribute contiguous Agent ranges across multiple keys."
+        ),
     )
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--model", default="deepseek-v4-flash")
@@ -397,6 +416,8 @@ def main() -> int:
     args = _parser().parse_args()
     if not 1 <= args.count <= 100:
         raise SystemExit("--count must be between 1 and 100")
+    if len(args.api_key_file) > args.count:
+        raise SystemExit("--api-key-file cannot be repeated more than --count")
     if not 30 <= args.validation_timeout_seconds <= 3600:
         raise SystemExit("--validation-timeout-seconds must be between 30 and 3600")
     try:
