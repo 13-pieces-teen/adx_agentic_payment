@@ -4732,7 +4732,10 @@ class PostgresPawnhouseRepository:
         return {
             "gameId": game_id,
             "agentId": agent_id,
+            "eligible": True,
+            "readyToJoin": True,
             "joinAuthorizationId": authorization_id,
+            "joinAuthorizationExpiresAt": expires_at.isoformat(),
             "checks": {
                 "game": "READY",
                 "agent": "READY",

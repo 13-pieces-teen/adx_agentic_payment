@@ -126,6 +126,35 @@ class _CreatePool:
         return _Acquire(self.connection)
 
 
+class _JoinPreflightConnection(_CreateConnection):
+    async def fetchrow(self, query: str, *_: object):
+        self.queries.append(query)
+        if "FROM arena402.current_game" in query:
+            return {
+                "game_id": "game-current",
+                "phase": "portfolio_setup",
+                "config_snapshot": {
+                    "settlement": {
+                        "authorizationMode": "single_eip3009",
+                        "chainId": 1439,
+                        "tokenAddress": "0x" + "11" * 20,
+                        "tokenSymbol": "mUSDC",
+                        "tokenDecimals": 6,
+                        "tokenEip712Name": "Mock USD Coin",
+                        "tokenEip712Version": "1",
+                        "requiredConfirmations": 2,
+                    }
+                },
+            }
+        if "FROM public.arena_agents AS agent" in query:
+            return {"runtime_binding_id": "binding-ready"}
+        if "FROM arena402.user_wallets" in query:
+            return {"wallet_id": "wallet-ready", "chain_id": 1439}
+        if "FROM arena402.join_authorizations" in query:
+            return None
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+
 def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
     pool = _Pool()
     repository = PostgresPawnhouseRepository(
@@ -189,6 +218,37 @@ def test_current_game_reports_blocked_when_official_pool_cannot_fill_deficit() -
     value = asyncio.run(repository.current_game(owner_user_id=None))
 
     assert value["game"]["matchmaking"]["fillStatus"] == "BLOCKED"
+
+
+def test_successful_join_preflight_explicitly_authorizes_frontend_entry() -> None:
+    connection = _JoinPreflightConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    value = asyncio.run(
+        repository.current_game_join_preflight(
+            game_id="game-current",
+            user_id="user-current",
+            agent_id="agent-current",
+            key_digest="key-digest",
+            request_digest="request-digest",
+            now=datetime(2026, 7, 26, 4, tzinfo=timezone.utc),
+        )
+    )
+
+    assert value["eligible"] is True
+    assert value["readyToJoin"] is True
+    assert value["joinAuthorizationExpiresAt"] == "2026-07-26T04:10:00+00:00"
+    assert value["safeErrorCode"] is None
+    assert value["checks"] == {
+        "game": "READY",
+        "agent": "READY",
+        "runtime": "READY",
+        "wallet": "READY",
+        "paymentMandate": "ACTION_REQUIRED",
+    }
 
 
 def test_first_product_sized_game_claims_empty_current_pointer() -> None:
