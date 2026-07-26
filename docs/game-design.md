@@ -31,8 +31,9 @@ Prompt、决策速度和谈判质量。
 
 `Arena 402` 只用于品牌、Logo 和域名；游戏内叙事使用“王城典当行”。
 
-默认模式下，每笔被接受的交易都必须进入一笔点对点的 Injective testnet mock
-USDC（mUSDC）链上结算。平台负责组织回合、配对和记录，不托管用户自带钱包
+默认模式下，每笔被接受的交易都必须进入一笔点对点的 Injective testnet
+`arena402-g` 链上结算。该币只允许已登记参赛钱包间转账；平台负责组织回合、
+配对和记录，不托管用户自带钱包
 或真实资金。当前实现已接入 EIP-3009 direct-relay 基础和确认门控，但新鲜 live
 testnet 交易与生产 Facilitator 兼容性仍未完成验收。
 
@@ -82,8 +83,8 @@ MVP 固定使用四种货物：
 cash + grain*2 + iron*5 + warhorse*8 + gems*3 = 20 gold
 ```
 
-结算货币为 Injective EVM testnet 上的 mock USDC。它是测试资产，不应描述为
-Circle USDC 或生产资金。
+结算货币为 Injective EVM testnet 上的 `arena402-g`。它是白名单受限的测试游戏币，
+不是 Circle USDC 或生产资金；mUSDC 只保留为历史 direct-relay 测试资产。
 
 ## 一局游戏
 
@@ -118,6 +119,11 @@ REGISTRATION
 
 每名玩家在开局价格下自由配置等值 20 金的现金和持仓。Arena 校验组合、锁定
 Portfolio，并冻结进 Game Agent 快照。比赛开始后不能重新配置。
+
+当 Game 使用 `arena402-g` 时，Join 先创建持久化链上准备任务。隔离的 owner
+worker 只在 Game 开始前把 Participant 钱包加入白名单，并按冻结 Portfolio 的
+`cashAtomic` 铸造初始游戏币；交易哈希、nonce、Gas 与确认区块都可恢复。两步都
+确认后 Arena 才把 Participant 从 `PENDING` 提升为 `READY`，达到阈值后再开赛。
 
 产品 Current Game 的 Join v2 使用 `cashAtomic` 十进制整数字符串和四种货物的
 非负整数数量提交初始组合；服务端按公开初始价重新计算，只有总值严格等于

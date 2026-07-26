@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import express, { type Request } from "express";
-import { formatUnits, type Hex } from "viem";
+import { formatUnits, getAddress, type Hex } from "viem";
 import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
 import { Facilitator, type PaymentAuthorization } from "./settle.ts";
 import {
@@ -19,6 +19,9 @@ const deploymentsPath = resolve(
   ),
 );
 const dep = JSON.parse(readFileSync(deploymentsPath, "utf8"));
+const settlementTokenAddress = getAddress(
+  required("ADX_X402_SETTLEMENT_TOKEN_ADDRESS", dep.usdc.address),
+);
 const port = Number(process.env.FACILITATOR_PORT ?? "4021");
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
   throw new Error("FACILITATOR_PORT is invalid");
@@ -48,7 +51,7 @@ app.get("/health", async (_request, response) => {
     ok: true,
     facilitator: facilitator.address,
     injBalance: formatUnits(balance, 18),
-    token: dep.usdc.address,
+    token: settlementTokenAddress,
     chainId: dep.chainId,
     x402Version: 2,
   });
@@ -63,7 +66,7 @@ app.post("/verify", async (request, response) => {
   try {
     const value = await validateX402FacilitatorRequest(request.body, {
       chainId: dep.chainId,
-      tokenAddress: dep.usdc.address,
+      tokenAddress: settlementTokenAddress,
       allowedResourceOrigin,
     });
     const result = await facilitator.verify(value.authorization);
@@ -89,7 +92,7 @@ app.post("/settle", async (request, response) => {
   try {
     const value = await validateX402FacilitatorRequest(request.body, {
       chainId: dep.chainId,
-      tokenAddress: dep.usdc.address,
+      tokenAddress: settlementTokenAddress,
       allowedResourceOrigin,
     });
     const verification = await facilitator.verify(value.authorization);

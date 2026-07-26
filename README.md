@@ -97,7 +97,7 @@ FCFS 配对，最多协商 2–3 轮。
 N 回合后，平台按事件塑造的最终结算价计算净资产，钱最多的 Agent 获胜。
 
 平台组织游戏但不托管用户自带钱包或真实资金。每笔被接受的交易必须由
-Injective testnet mock USDC（mUSDC）链上转账覆盖，货物仅在链上确认后转移。
+Injective testnet `arena402-g` 链上转账覆盖，货物仅在链上确认后转移。
 游客可使用受限、隔离、testnet-only 的平台演示钱包。
 
 本地演示已经验证 Runtime、Result Sink、FCFS、协商、回合快照和排名的组合路径，
@@ -149,7 +149,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide` / `arena.negotiate`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；真实 CC/Codex 完整比赛 E2E 尚待部署验收 |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
 | 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、统一回合 coordinator、Result Sink 与独立 Finalizer；Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
-| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 mUSDC direct relay，并完成 testnet 环境/历史交易只读恢复验证；新鲜 live testnet 交易仍未验收。guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
+| Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 `arena402-g` direct relay；Join 后由隔离 owner worker 完成白名单与初始现金铸币，确认前 Participant 不会 Ready。mUSDC 仅保留为历史/底层测试资产；新鲜 live testnet 完整交易仍未验收。guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端已实现同源 GitHub OAuth + PKCE、现有 Session/CSRF Cookie 对接和外部前端回跳契约。OAuth App 凭据、Vercel→腾讯云 API 与公网 Cookie 联调仍需实机验收 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限；`024` 增加单例 Current Game 权威指针和公开 `/api/v1/games/current` 安全投影，Arena Worker 已负责首次创建与终态后原子切换下一局，Join v2/Ready/自动启动仍在实施 |
 | 公开成交账本 | `/api/v1/ledger/trades` 提供跨对局、可过滤、游标分页的逐笔 SettlementIntent 投影，并下发 chain/Explorer 元数据；`/api/v1/ledger/stats` 仅聚合已有链上确认回执的笔数、原子金额和 Agent 数 |

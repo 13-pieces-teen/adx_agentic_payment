@@ -61,6 +61,13 @@ class CurrentGameLifecycleWorker:
         self._action_timeout_ms = action_timeout_ms
         self._max_negotiation_turns = max_negotiation_turns
 
+    async def activate_confirmed_game_coin_provisions(
+        self,
+    ) -> dict[str, object]:
+        """Make chain-prepared seats ready before considering Game creation."""
+
+        return await self._repository.activate_confirmed_game_coin_provisions()
+
     async def run_once(self) -> dict[str, object]:
         now = datetime.now(timezone.utc)
         suffix = uuid.uuid4().hex[:12]

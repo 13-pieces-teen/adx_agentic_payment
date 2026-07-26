@@ -132,9 +132,10 @@ Settlement ingress；API 不持有 signer token、Facilitator authorization，�
 - signer 只允许配置的 testnet chain，并在每次签名前再次核对数据库地址、
   私钥派生地址和冻结 payer。
 
-Game 启动前，平台为每个 guest wallet 自动准备该局最大初始现金对应的 mUSDC。
+Game 启动前，平台为每个 guest wallet 自动准备冻结 Portfolio 的初始
+`arena402-g` 现金，并完成双向转账所需的白名单登记。
 EIP-3009 的 payer 不需要持有 gas；Facilitator relay account 负责 testnet
-gas。首发使用一个 testnet-only treasury/relay account 同时负责初始 mUSDC 分发和
+gas。首发使用一个 testnet-only owner/relay account 负责初始 `arena402-g` 铸造和
 relay gas；它与每个 Participant 的 guest wallet 分离。首发不实现赛后自动 sweep，
 过期 Game 的测试钱包由运维批次清理。
 
@@ -173,7 +174,7 @@ Allocator 只有在前一个 nonce 已获得明确的 RPC send 结果或已恢�
 Game start 只接受 funding receipt 已达到两个确认、且 token `Transfer` event 完全
 匹配的 `ready` account。结果未知时不创建第二个钱包，也不分配新的 relay nonce。
 首发不做在线 signer 轮换；signer 不可用时禁止启动新 Game。启动前只检查
-treasury 的 mUSDC 与 relay gas 是否足以覆盖该局，不实现自动充值。
+owner 的权限与 relay gas 是否足以覆盖该局，不实现主网充值。
 
 ### 4.2 一次性 Mandate
 

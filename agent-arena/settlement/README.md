@@ -16,7 +16,9 @@ x402's EVM `exact` scheme:
 1. a buyer signs an EIP-712 `TransferWithAuthorization` message offline;
 2. a relay submits that authorization to an EIP-3009 token contract;
 3. the relay pays INJ gas;
-4. the token contract transfers mUSDC and rejects reuse of the same nonce.
+4. the frozen token contract transfers `arena402-g` for current Games and
+   rejects reuse of the same nonce. The mUSDC deployment remains a legacy
+   compatibility fixture.
 
 The guest-wallet signing seam accepts a stable wallet ID, the public address
 frozen by Arena, and the exact EIP-3009 fields. It returns only a public address
@@ -75,7 +77,7 @@ Custom Express relay
 MockStablecoin.transferWithAuthorization()
   │  verifies the EIP-712 signature and consumes the nonce
   ▼
-Full authorized mUSDC amount reaches auth.to
+Full authorized frozen-token amount reaches auth.to
 ```
 
 `refund()` is currently an in-memory status change only. There is no on-chain
@@ -93,12 +95,14 @@ The machine-readable authority is [`deployments.json`](deployments.json).
 | Chain ID | `1439` |
 | RPC | `https://k8s.testnet.json-rpc.injective.network/` |
 | Explorer | `https://testnet.blockscout.injective.network/` |
-| Token | mUSDC, 6 decimals |
-| Token address | `0x06D223D12774386A96D33863D9106A800e52BDeD` |
-| EIP-712 domain | name `Mock USD Coin`, version `1` |
+| Current Game token | `arena402-g`, 6 decimals |
+| Current Game token address | `0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884` |
+| Current Game EIP-712 domain | name `Arena 402 Gold`, version `1` |
+| Legacy test token | mUSDC at `0x06D223D12774386A96D33863D9106A800e52BDeD` |
 
-The token is a test-only contract with an unrestricted public faucet. It is not
-Circle USDC and must not be represented as a production asset.
+Both tokens are test-only. `arena402-g` is whitelist-gated and has no public
+faucet; a separate owner worker prepares participant wallets before Game start.
+Neither token is Circle USDC or a production asset.
 
 ## Repository structure
 
