@@ -113,6 +113,10 @@ def test_production_uses_four_independent_facilitator_shards() -> None:
     assert "Facilitator bearer tokens must be unique." in deploy
     assert "Facilitator wallet indices must be unique." in deploy
     assert (
+        "ADX_X402_FACILITATOR_SHARD_COUNT must be an integer."
+        in deploy
+    )
+    assert (
         "Facilitator CSV must contain exactly one row for wallet index"
         in deploy
     )

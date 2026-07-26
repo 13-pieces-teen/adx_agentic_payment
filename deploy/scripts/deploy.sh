@@ -36,6 +36,8 @@ enable_testnet_signer="$(env_value ADX_ENABLE_TESTNET_SIGNER)"
 [ -n "${enable_testnet_signer}" ] || enable_testnet_signer=false
 enable_testnet_facilitator="$(env_value ADX_ENABLE_TESTNET_FACILITATOR)"
 [ -n "${enable_testnet_facilitator}" ] || enable_testnet_facilitator=false
+facilitator_shard_count="$(env_value ADX_X402_FACILITATOR_SHARD_COUNT)"
+[ -n "${facilitator_shard_count}" ] || facilitator_shard_count=4
 
 case "${enable_hosted_runtime}" in
   true|false) ;;
@@ -96,6 +98,17 @@ do
       ;;
   esac
 done
+case "${facilitator_shard_count}" in
+  *[!0-9]*|"")
+    echo "ADX_X402_FACILITATOR_SHARD_COUNT must be an integer." >&2
+    exit 1
+    ;;
+esac
+if [ "${facilitator_shard_count}" -lt 1 ] || \
+   [ "${facilitator_shard_count}" -gt 64 ]; then
+  echo "ADX_X402_FACILITATOR_SHARD_COUNT must be between 1 and 64." >&2
+  exit 1
+fi
 
 if [ "${enable_arena_worker}" = "true" ]; then
   if [ "$(env_value ADX_ARENA_CORE_ENABLED)" != "true" ]; then

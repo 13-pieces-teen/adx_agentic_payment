@@ -5,9 +5,11 @@ import pytest
 
 from arena_agent_contracts import (
     AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+    AcceptAction,
     AgentTaskResultV1,
     BuyAction,
     ProposeAction,
+    RejectAction,
     SellAction,
 )
 from arena_core.models import ResultApplyStatus, SubmissionDisposition
@@ -116,6 +118,52 @@ def test_wrong_kind_candidate_converges_to_one_negotiation_timeout():
         assert stored is not None
         assert stored.apply_status == ResultApplyStatus.APPLIED
         assert stored.rejection_reason == "action_kind_mismatch"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        AcceptAction(action="accept"),
+        RejectAction(action="reject", message="No opening offer."),
+    ],
+)
+def test_invalid_buyer_opening_action_converges_to_timeout(action):
+    async def scenario():
+        repository = MemoryArenaCoreRepository()
+        task = await ArenaTaskFactory(
+            repository,
+            clock=lambda: NOW,
+        ).create_negotiate_task(
+            game_agent_id="game-agent-1",
+            participant_view=negotiate_input(turn_sequence=1),
+            config_snapshot={},
+        )
+        await ArenaResultSink(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=1),
+        ).submit(
+            AgentTaskResultV1(
+                result_id=f"invalid-opening-{action.action}",
+                task_id=task.task.task_id,
+                schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                status="succeeded",
+                action=action,
+            )
+        )
+
+        applied = await ArenaResultConsumer(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=2),
+        ).consume_pending()
+        stored = await repository.get_result_for_task(task.task.task_id)
+
+        assert len(applied) == 1
+        assert applied[0].outcome == "negotiation_timeout"
+        assert applied[0].action is None
+        assert stored is not None
+        assert stored.rejection_reason == "buyer_opening_proposal_required"
 
     asyncio.run(scenario())
 
