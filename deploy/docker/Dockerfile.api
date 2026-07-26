@@ -20,6 +20,7 @@ COPY --chown=adx:adx connector_gateway ./connector_gateway
 COPY --chown=adx:adx arena_agent_contracts ./arena_agent_contracts
 COPY --chown=adx:adx arena_core ./arena_core
 COPY --chown=adx:adx arena_game ./arena_game
+COPY --chown=adx:adx arena_memorial ./arena_memorial
 COPY --chown=adx:adx arena_payments ./arena_payments
 COPY --chown=adx:adx arena_wallets ./arena_wallets
 COPY --chown=adx:adx hosted_agent_control_plane ./hosted_agent_control_plane

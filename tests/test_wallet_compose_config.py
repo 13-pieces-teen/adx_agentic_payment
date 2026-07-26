@@ -72,3 +72,4 @@ def test_api_image_contains_wallet_runtime_package() -> None:
     ).read_text(encoding="utf-8")
 
     assert "COPY --chown=adx:adx arena_wallets ./arena_wallets" in dockerfile
+    assert "COPY --chown=adx:adx arena_memorial ./arena_memorial" in dockerfile
