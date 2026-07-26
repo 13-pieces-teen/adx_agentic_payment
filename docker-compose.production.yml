@@ -688,6 +688,48 @@ services:
       FACILITATOR_PORT: "4021"
       TZ: ${TZ:-Asia/Shanghai}
 
+  memorial-minter:
+    profiles:
+      - memorial
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.facilitator
+    restart: unless-stopped
+    init: true
+    command: ["npm", "run", "start:memorial-minter"]
+    environment:
+      ADX_MEMORIAL_MINTER_DATABASE_URL: postgresql://adx_arena_core_login:${ADX_ARENA_CORE_DATABASE_PASSWORD:?Set ADX_ARENA_CORE_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_ARENA_SETTLEMENT_RPC_URL: ${ADX_ARENA_SETTLEMENT_RPC_URL:?Set ADX_ARENA_SETTLEMENT_RPC_URL in deploy/.env}
+      ADX_CURRENT_GAME_CHAIN_ID: ${ADX_CURRENT_GAME_CHAIN_ID:-1439}
+      ADX_MEMORIAL_CONTRACT_ADDRESS: ${ADX_MEMORIAL_CONTRACT_ADDRESS:-0x17d9cd66b9bc7b6d12fb3c60cbf81b2f814c2364}
+      ADX_MEMORIAL_MINTER_POLL_SECONDS: ${ADX_MEMORIAL_MINTER_POLL_SECONDS:-2}
+      ADX_MEMORIAL_MINTER_BATCH_SIZE: ${ADX_MEMORIAL_MINTER_BATCH_SIZE:-1}
+      ADX_FACILITATOR_CSV_PATH: /run/arena402/facilitators.csv
+      ADX_FACILITATOR_WALLET_INDEX: ${ADX_FACILITATOR_1_WALLET_INDEX:-1}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    volumes:
+      - ${ADX_FACILITATOR_CSV_HOST_PATH:-./deploy/secrets/arena402-facilitators.csv}:/run/arena402/facilitators.csv:ro
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/memorial-minter-ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 30s
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
   web:
     profiles:
       - legacy-web

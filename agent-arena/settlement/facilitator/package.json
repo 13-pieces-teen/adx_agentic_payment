@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "start:memorial-minter": "tsx src/memorial-minter.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit --allowImportingTsExtensions --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop --skipLibCheck src/*.ts test/*.ts"
   },
@@ -13,10 +14,12 @@
     "@x402/core": "2.19.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
+    "pg": "^8.13.1",
     "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "@types/pg": "^8.11.10",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }

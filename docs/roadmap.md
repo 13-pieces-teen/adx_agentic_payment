@@ -55,10 +55,14 @@ Arena 402 的对外叙事固定为三层：
   402 pre-generated testnet wallets, deterministic first-402 GitHub
   registration allocation, public-only inventory import, authenticated user
   status/public aggregate APIs, and review-gated asynchronous mint manifests.
-- [ ] Founding 402 live acceptance: deploy the new ERC-721, import and activate
-  the reviewed public wallet inventory, mint registered recipients in
-  contiguous batches, record Blockscout-confirmed receipts, and integrate the
-  external frontend. No memorial transaction has been broadcast yet.
+- [x] Founding 402 claim launch: the soulbound ERC-721 is deployed on Injective
+  EVM testnet, all 402 public wallet addresses are active, GitHub registrations
+  allocate ranks and token IDs, and the external claim/status UI is live.
+- [ ] Founding 402 mint acceptance: the opt-in real-time minter is implemented
+  with an isolated read-only owner-key mount, a single-process advisory lock,
+  deterministic signed-transaction recovery, and automatic receipt recording.
+  Production enablement and the first mint transaction still require explicit
+  human approval; no memorial NFT has been minted yet.
 
 The Milestone 2 demonstration is:
 
