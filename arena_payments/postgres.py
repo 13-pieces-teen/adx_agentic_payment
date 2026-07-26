@@ -298,6 +298,20 @@ class PostgresPaymentRepository:
                     )
                     if invalid_payee:
                         raise MandateRejected("mandate_payee_not_in_game")
+                await connection.execute(
+                    """
+                    UPDATE arena402.payment_mandates
+                    SET revoked_at = clock_timestamp()
+                    WHERE user_id = $1
+                      AND game_id = $2
+                      AND mandate_id <> $3
+                      AND revoked_at IS NULL
+                      AND expires_at <= clock_timestamp()
+                    """,
+                    mandate.user_id,
+                    mandate.game_id,
+                    mandate.mandate_id,
+                )
                 try:
                     row = await connection.fetchrow(
                         """

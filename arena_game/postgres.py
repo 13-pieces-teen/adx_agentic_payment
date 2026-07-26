@@ -4376,7 +4376,44 @@ class PostgresPawnhouseRepository:
         elif fill_at is not None and server_time < fill_at:
             fill_status = "COLLECTING"
         else:
-            fill_status = "FILLING"
+            has_eligible_official = bool(
+                await pool.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM arena402.official_agent_pool AS official
+                        JOIN public.arena_agents AS agent
+                          ON agent.agent_id = official.agent_id
+                         AND agent.status = 'active'
+                        JOIN public.arena_runtime_bindings AS binding
+                          ON binding.agent_id = official.agent_id
+                         AND binding.runtime_kind = 'hosted'
+                         AND binding.route_status = 'ready'
+                         AND binding.disabled_at IS NULL
+                        JOIN public.arena_hosted_configs AS hosted
+                          ON hosted.hosted_config_id = binding.hosted_config_id
+                         AND hosted.agent_id = official.agent_id
+                         AND hosted.status = 'ready'
+                        JOIN public.arena_model_credentials AS credential
+                          ON credential.credential_id = hosted.credential_id
+                         AND credential.status = 'valid'
+                        JOIN arena402.wallet_inventory AS wallet
+                          ON wallet.wallet_id = official.wallet_id
+                         AND wallet.status <> 'disabled'
+                        WHERE official.enabled
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM arena402.game_participants AS participant
+                              WHERE participant.game_id = $1
+                                AND participant.agent_id = official.agent_id
+                                AND participant.readiness <> 'withdrawn'
+                          )
+                    )
+                    """,
+                    game["game_id"],
+                )
+            )
+            fill_status = "FILLING" if has_eligible_official else "BLOCKED"
         return {
             "game": {
                 "gameId": str(game["game_id"]),

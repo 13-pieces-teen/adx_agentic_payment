@@ -12,8 +12,9 @@ from arena_game.postgres import (
 
 
 class _Pool:
-    def __init__(self) -> None:
+    def __init__(self, *, eligible_officials: int = 19) -> None:
         self.queries: list[str] = []
+        self.eligible_officials = eligible_officials
 
     async def fetchrow(self, query: str, *_: object):
         self.queries.append(query)
@@ -57,6 +58,10 @@ class _Pool:
                 ),
             }
         ]
+
+    async def fetchval(self, query: str, *_: object):
+        self.queries.append(query)
+        return self.eligible_officials
 
 
 class _Transaction:
@@ -173,6 +178,17 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
         "user_id" not in participant
         for participant in value["game"]["participants"]
     )
+
+
+def test_current_game_reports_blocked_when_official_pool_cannot_fill_deficit() -> None:
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_Pool(eligible_officials=0),
+    )
+
+    value = asyncio.run(repository.current_game(owner_user_id=None))
+
+    assert value["game"]["matchmaking"]["fillStatus"] == "BLOCKED"
 
 
 def test_first_product_sized_game_claims_empty_current_pointer() -> None:

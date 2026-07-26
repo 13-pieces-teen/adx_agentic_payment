@@ -7,7 +7,7 @@ import copy
 import hashlib
 import json
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Protocol
 
 from .models import (
@@ -163,6 +163,19 @@ class InMemoryPaymentRepository:
             current = self.mandates.get(mandate.mandate_id)
             if current is not None and current != mandate:
                 raise MandateRejected("mandate_conflict")
+            observed_at = datetime.now(timezone.utc)
+            for mandate_id, value in tuple(self.mandates.items()):
+                if (
+                    value.user_id == mandate.user_id
+                    and value.game_id == mandate.game_id
+                    and value.revoked_at is None
+                    and value.expires_at <= observed_at
+                    and value.mandate_id != mandate.mandate_id
+                ):
+                    self.mandates[mandate_id] = replace(
+                        value,
+                        revoked_at=observed_at,
+                    )
             for value in self.mandates.values():
                 if (
                     value.user_id == mandate.user_id

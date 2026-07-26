@@ -196,6 +196,33 @@ def test_concurrent_login_creates_exactly_one_wallet_binding() -> None:
     assert len(repository.wallet_bindings) == 1
 
 
+def test_new_mandate_replaces_an_expired_unrevoked_mandate() -> None:
+    repository = InMemoryPaymentRepository()
+    observed_at = datetime.now(timezone.utc)
+    expired = _mandate(
+        valid_from=observed_at - timedelta(hours=2),
+        expires_at=observed_at - timedelta(hours=1),
+    )
+    replacement = _mandate(
+        mandate_id="mandate-2",
+        valid_from=observed_at - timedelta(seconds=5),
+        expires_at=observed_at + timedelta(hours=1),
+    )
+
+    asyncio.run(repository.create_mandate(expired))
+    created = asyncio.run(repository.create_mandate(replacement))
+
+    assert created.mandate_id == "mandate-2"
+    assert repository.mandates["mandate-1"].revoked_at is not None
+    assert asyncio.run(
+        repository.active_mandate(
+            user_id="user-1",
+            game_id="game-1",
+            now=observed_at,
+        )
+    ) == replacement
+
+
 def test_mandate_reservations_are_atomic_bounded_and_idempotent() -> None:
     async def reserve_concurrently():
         repository = InMemoryPaymentRepository()
