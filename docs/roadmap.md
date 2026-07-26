@@ -216,8 +216,8 @@ create game
 - [x] Injective EVM testnet 环境验证。
 - [x] EIP-3009-compatible mock stablecoin。
 - [x] SettlementSDK mock/real adapter。
-- [x] 买方授权、项目 Facilitator、nonce replay protection 和 direct mUSDC
-      testnet transfer。
+- [x] 买方授权、项目 Facilitator、nonce replay protection 和 direct
+      `arena402-g` testnet transfer；mUSDC 路径保留为历史兼容验证。
 - [x] 本仓库 Compose 过渡壳具备登录/配对、Hosted/Local Agent 管理、Game
       Lobby、Game View、时间线和 Result 页面；旧市场/ELO URL 只保留到 `/game`
       的兼容重定向。

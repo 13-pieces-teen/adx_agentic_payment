@@ -26,6 +26,8 @@ enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"
 [ -n "${enable_arena_worker}" ] || enable_arena_worker=false
 enable_memorial_minter="$(env_value ADX_ENABLE_MEMORIAL_MINTER)"
 [ -n "${enable_memorial_minter}" ] || enable_memorial_minter=false
+enable_gamecoin_provisioner="$(env_value ADX_ENABLE_GAMECOIN_PROVISIONER)"
+[ -n "${enable_gamecoin_provisioner}" ] || enable_gamecoin_provisioner=false
 enable_settlement_worker="$(env_value ADX_ENABLE_SETTLEMENT_WORKER)"
 [ -n "${enable_settlement_worker}" ] || enable_settlement_worker=false
 automatic_payments_enabled="$(env_value ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED)"
@@ -64,6 +66,13 @@ case "${enable_memorial_minter}" in
   true|false) ;;
   *)
     echo "ADX_ENABLE_MEMORIAL_MINTER must be true or false." >&2
+    exit 1
+    ;;
+esac
+case "${enable_gamecoin_provisioner}" in
+  true|false) ;;
+  *)
+    echo "ADX_ENABLE_GAMECOIN_PROVISIONER must be true or false." >&2
     exit 1
     ;;
 esac
@@ -106,6 +115,23 @@ if [ "${enable_memorial_minter}" = "true" ]; then
   fi
 fi
 
+if [ "${enable_gamecoin_provisioner}" = "true" ]; then
+  if [ "${enable_testnet_facilitator}" != "true" ]; then
+    echo "Game-coin provisioner requires the reviewed facilitator wallet mount." >&2
+    exit 1
+  fi
+  if [ "$(env_value ADX_CURRENT_GAME_TOKEN_SYMBOL)" != "arena402-g" ]; then
+    echo "Game-coin provisioner requires ADX_CURRENT_GAME_TOKEN_SYMBOL=arena402-g." >&2
+    exit 1
+  fi
+fi
+
+if [ "${enable_memorial_minter}" = "true" ] && \
+   [ "${enable_gamecoin_provisioner}" = "true" ]; then
+  echo "Memorial minter and game-coin provisioner share one owner nonce; enable only one." >&2
+  exit 1
+fi
+
 if [ "${automatic_payments_enabled}" = "true" ]; then
   if [ "${enable_arena_worker}" != "true" ]; then
     echo "Automatic payments require ADX_ENABLE_ARENA_WORKER=true." >&2
@@ -117,6 +143,11 @@ if [ "${automatic_payments_enabled}" = "true" ]; then
   fi
   if [ "${enable_testnet_signer}" != "true" ]; then
     echo "Automatic payments require ADX_ENABLE_TESTNET_SIGNER=true." >&2
+    exit 1
+  fi
+  if [ "$(env_value ADX_CURRENT_GAME_TOKEN_SYMBOL)" = "arena402-g" ] && \
+     [ "${enable_gamecoin_provisioner}" != "true" ]; then
+    echo "arena402-g automatic payments require ADX_ENABLE_GAMECOIN_PROVISIONER=true." >&2
     exit 1
   fi
 fi
@@ -216,6 +247,9 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
 fi
 if [ "${enable_memorial_minter}" = "true" ]; then
   compose --profile memorial build --pull memorial-minter
+fi
+if [ "${enable_gamecoin_provisioner}" = "true" ]; then
+  compose --profile gamecoin build --pull gamecoin-provisioner
 fi
 
 if [ "${enable_hosted_runtime}" = "true" ]; then
@@ -317,6 +351,9 @@ fi
 if [ "${enable_memorial_minter}" = "true" ]; then
   compose --profile memorial build --pull memorial-minter
 fi
+if [ "${enable_gamecoin_provisioner}" = "true" ]; then
+  compose --profile gamecoin build --pull gamecoin-provisioner
+fi
 compose up -d postgres
 compose run --rm migrate
 compose up -d api caddy
@@ -334,6 +371,9 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
 fi
 if [ "${enable_memorial_minter}" = "true" ]; then
   compose --profile memorial up -d memorial-minter
+fi
+if [ "${enable_gamecoin_provisioner}" = "true" ]; then
+  compose --profile gamecoin up -d gamecoin-provisioner
 fi
 if [ "${enable_settlement_worker}" = "true" ]; then
   compose --profile settlement up -d settlement-worker

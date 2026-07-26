@@ -554,10 +554,20 @@ def create_pawnhouse_participation_router(
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
         game = current["game"]
+        readiness = "READY"
+        if game is not None:
+            readiness = next(
+                (
+                    str(participant["readiness"])
+                    for participant in game["participants"]
+                    if participant["participantId"] == participant_id
+                ),
+                readiness,
+            )
         return {
             "gameId": game_id,
             "participantId": participant_id,
-            "readiness": "READY",
+            "readiness": readiness,
             "status": game["status"] if game is not None else "WAITING",
             "readyCount": game["readyCount"] if game is not None else 0,
             "startThreshold": game["startThreshold"] if game is not None else 0,

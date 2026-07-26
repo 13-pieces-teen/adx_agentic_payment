@@ -18,6 +18,15 @@ class _Repository:
             "previousGameId": "game-completed",
         }
 
+    async def activate_confirmed_game_coin_provisions(
+        self,
+    ) -> dict[str, object]:
+        return {
+            "activatedCount": 2,
+            "participantIds": ["gp:1", "gp:2"],
+            "startedGameId": "game-current",
+        }
+
 
 def test_lifecycle_creates_product_sized_seeded_game() -> None:
     repository = _Repository()
@@ -47,6 +56,19 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     assert call["event_mode"] == "seeded_shuffle"
     assert call["settlement_config"] is settlement
     assert len(call["events"]) == 5  # type: ignore[arg-type]
+
+
+def test_lifecycle_activates_only_confirmed_gamecoin_seats() -> None:
+    repository = _Repository()
+    worker = CurrentGameLifecycleWorker(
+        repository=repository,  # type: ignore[arg-type]
+        settlement_config=SettlementConfig(),
+    )
+
+    result = asyncio.run(worker.activate_confirmed_game_coin_provisions())
+
+    assert result["activatedCount"] == 2
+    assert result["startedGameId"] == "game-current"
 
 
 def test_lifecycle_rejects_capacity_below_start_threshold() -> None:

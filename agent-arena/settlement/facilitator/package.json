@@ -7,6 +7,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "start:memorial-minter": "tsx src/memorial-minter.ts",
+    "start:gamecoin-provisioner": "tsx src/gamecoin-provisioner.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit --allowImportingTsExtensions --module NodeNext --moduleResolution NodeNext --target ES2022 --esModuleInterop --skipLibCheck src/*.ts test/*.ts"
   },

@@ -719,6 +719,10 @@ class PostgresPawnhouseRepository:
                     else dict(phase["config_snapshot"])
                 )
                 settlement_config = self._settlement_config(game_config)
+                requires_game_coin_provision = (
+                    settlement_config.authorization_mode != "none"
+                    and settlement_config.token_symbol.lower() == "arena402-g"
+                )
                 if (
                     payment_mandate_id is not None
                     and settlement_account is None
@@ -854,9 +858,15 @@ class PostgresPawnhouseRepository:
                     VALUES (
                         $1, $2, $3, $4, $5, 'hosted', clock_timestamp(),
                         $6::text,
-                        CASE WHEN $6::text IS NULL AND NOT $7::boolean
+                        CASE WHEN (
+                            ($6::text IS NULL AND NOT $7::boolean)
+                            OR $8::boolean
+                        )
                             THEN 'pending' ELSE 'ready' END,
-                        CASE WHEN $6::text IS NULL AND NOT $7::boolean
+                        CASE WHEN (
+                            ($6::text IS NULL AND NOT $7::boolean)
+                            OR $8::boolean
+                        )
                             THEN NULL ELSE clock_timestamp() END
                     )
                     """,
@@ -867,6 +877,7 @@ class PostgresPawnhouseRepository:
                     hosted["runtime_binding_id"],
                     payment_mandate_id,
                     official_pool_join,
+                    requires_game_coin_provision,
                 )
                 await connection.execute(
                     """
@@ -929,6 +940,27 @@ class PostgresPawnhouseRepository:
                         settlement_account.address,
                         settlement_account.custody_mode,
                     )
+                    if requires_game_coin_provision:
+                        assert settlement_config.chain_id is not None
+                        assert settlement_config.token_address is not None
+                        await connection.execute(
+                            """
+                            INSERT INTO arena402.game_coin_provisions (
+                                provision_id, game_id, game_participant_id,
+                                chain_id, token_address, account_address,
+                                amount_atomic
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            ON CONFLICT (game_participant_id) DO NOTHING
+                            """,
+                            f"gcp:{participant_id}",
+                            game_id,
+                            participant_id,
+                            settlement_config.chain_id,
+                            settlement_config.token_address,
+                            settlement_account.address,
+                            portfolio.cash_atomic,
+                        )
                 await connection.execute(
                     """
                     UPDATE arena402.games
@@ -960,7 +992,10 @@ class PostgresPawnhouseRepository:
                     )
                     if consumed != "UPDATE 1":
                         raise PawnhouseRepositoryError("mandate_not_ready")
-                if payment_mandate_id is not None or official_pool_join:
+                if (
+                    not requires_game_coin_provision
+                    and (payment_mandate_id is not None or official_pool_join)
+                ):
                     ready_count = int(
                         await connection.fetchval(
                             """
@@ -976,6 +1011,106 @@ class PostgresPawnhouseRepository:
                             game_id=game_id,
                         )
         return participant_id
+
+    async def activate_confirmed_game_coin_provisions(
+        self,
+        *,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        """Promote only chain-prepared participants and start at the threshold."""
+
+        if not 1 <= limit <= 500:
+            raise ValueError("game_coin_activation_limit_invalid")
+        pool = self._require_pool()
+        activated: list[str] = []
+        started_game_id: str | None = None
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    """
+                    SELECT participant.game_participant_id, participant.game_id
+                    FROM arena402.game_coin_provisions AS provision
+                    JOIN arena402.game_participants AS participant
+                      ON participant.game_participant_id =
+                         provision.game_participant_id
+                    JOIN arena402.current_game AS pointer
+                      ON pointer.singleton
+                     AND pointer.game_id = participant.game_id
+                    JOIN arena402.games AS game
+                      ON game.game_id = participant.game_id
+                    WHERE provision.status = 'confirmed'
+                      AND participant.readiness = 'pending'
+                      AND participant.status <> 'cancelled'
+                      AND game.phase IN ('registration', 'portfolio_setup')
+                    ORDER BY provision.confirmed_at, provision.provision_id
+                    LIMIT $1
+                    FOR UPDATE OF participant, game SKIP LOCKED
+                    """,
+                    limit,
+                )
+                for row in rows:
+                    participant_id = str(row["game_participant_id"])
+                    game_id = str(row["game_id"])
+                    changed = await connection.execute(
+                        """
+                        UPDATE arena402.game_participants
+                        SET readiness = 'ready', ready_at = clock_timestamp()
+                        WHERE game_participant_id = $1
+                          AND readiness = 'pending'
+                        """,
+                        participant_id,
+                    )
+                    if changed != "UPDATE 1":
+                        continue
+                    activated.append(participant_id)
+                    await self._event(
+                        connection,
+                        game_id=game_id,
+                        event_type="participant.settlement_ready",
+                        source_key=f"{game_id}:{participant_id}:settlement-ready",
+                        public_payload={"participantId": participant_id},
+                    )
+
+                game_ids = sorted({str(row["game_id"]) for row in rows})
+                for game_id in game_ids:
+                    game = await connection.fetchrow(
+                        """
+                        SELECT phase, min_participants
+                        FROM arena402.games
+                        WHERE game_id = $1
+                        FOR UPDATE
+                        """,
+                        game_id,
+                    )
+                    if (
+                        game is None
+                        or game["phase"] != "portfolio_setup"
+                    ):
+                        continue
+                    ready_count = int(
+                        await connection.fetchval(
+                            """
+                            SELECT count(*)
+                            FROM arena402.game_participants
+                            WHERE game_id = $1
+                              AND readiness = 'ready'
+                              AND portfolio_locked_at IS NOT NULL
+                            """,
+                            game_id,
+                        )
+                    )
+                    if ready_count >= int(game["min_participants"]):
+                        await self._start_game_locked(
+                            connection,
+                            game_id=game_id,
+                        )
+                        started_game_id = game_id
+                        break
+        return {
+            "activatedCount": len(activated),
+            "participantIds": activated,
+            "startedGameId": started_game_id,
+        }
 
     async def add_official_hosted_participant(
         self,

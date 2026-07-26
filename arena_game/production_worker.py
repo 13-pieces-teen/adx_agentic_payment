@@ -147,6 +147,17 @@ class ArenaProductionWorker:
     async def _current_game_loop(self) -> None:
         while not self._stopping.is_set():
             try:
+                activation = (
+                    await self._current_game_lifecycle
+                    .activate_confirmed_game_coin_provisions()
+                )
+                if int(activation.get("activatedCount", 0)) > 0:
+                    _LOGGER.info(
+                        "arena_game_coin_participants_activated count=%s "
+                        "started_game_id=%s",
+                        activation.get("activatedCount"),
+                        activation.get("startedGameId"),
+                    )
                 result = await self._current_game_lifecycle.run_once()
                 if result.get("created"):
                     _LOGGER.info(
@@ -225,25 +236,25 @@ async def main() -> None:
             chain_id=int(os.getenv("ADX_CURRENT_GAME_CHAIN_ID", "1439")),
             token_address=os.getenv(
                 "ADX_CURRENT_GAME_TOKEN_ADDRESS",
-                "0x06D223D12774386A96D33863D9106A800e52BDeD",
+                "0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884",
             ),
             token_symbol=os.getenv(
                 "ADX_CURRENT_GAME_TOKEN_SYMBOL",
-                "mUSDC",
+                "arena402-g",
             ),
             token_decimals=int(
                 os.getenv("ADX_CURRENT_GAME_TOKEN_DECIMALS", "6")
             ),
             token_eip712_name=os.getenv(
                 "ADX_CURRENT_GAME_TOKEN_EIP712_NAME",
-                "Mock USD Coin",
+                "Arena 402 Gold",
             ),
             token_eip712_version=os.getenv(
                 "ADX_CURRENT_GAME_TOKEN_EIP712_VERSION",
                 "1",
             ),
             required_confirmations=int(
-                os.getenv("ADX_CURRENT_GAME_REQUIRED_CONFIRMATIONS", "1")
+                os.getenv("ADX_CURRENT_GAME_REQUIRED_CONFIRMATIONS", "2")
             ),
         ),
         round_count=int(os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "5")),

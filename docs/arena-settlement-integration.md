@@ -122,7 +122,7 @@ remains authoritative.
 
 - EIP-3009/EIP-712 买方离线授权；
 - 项目自建 Facilitator 的验证与提交；
-- Injective EVM testnet 上 mUSDC 的点对点转账；
+- Injective EVM testnet 上 `arena402-g` 的点对点转账；mUSDC 仅作为历史兼容测试资产；
 - nonce 重放保护；
 - mock/real SettlementSDK 适配器；
 - accepted negotiation 到不可变 SettlementIntent 的持久化适配；

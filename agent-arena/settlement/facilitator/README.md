@@ -1,8 +1,9 @@
 # Custom EIP-3009 Relay (SETTLE-004)
 
 This Express service accepts a buyer's offline EIP-3009 authorization and uses
-the relay wallet to submit `mUSDC.transferWithAuthorization` on Injective EVM
-testnet. The relay pays INJ gas; buyer and payee do not submit transactions.
+the relay wallet to submit `transferWithAuthorization` on the frozen Current
+Game token (`arena402-g` in production) on Injective EVM testnet. The relay
+pays INJ gas; buyer and payee do not submit transactions.
 
 ## Protocol boundary
 

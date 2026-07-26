@@ -46,7 +46,11 @@ def test_generated_production_env_contains_wallet_configuration() -> None:
         ROOT / "deploy" / "scripts" / "generate-env.sh"
     ).read_text(encoding="utf-8")
     assert "ADX_WALLET_RPC_URL=https://k8s.testnet.json-rpc.injective.network/" in generator
-    assert "ADX_ARENA402_G_TOKEN_ADDRESS=\\n" in generator
+    assert (
+        "ADX_ARENA402_G_TOKEN_ADDRESS="
+        "0xBF7B7268CE82d92BaC7a95a741F4003FE84e1884\\n"
+        in generator
+    )
     assert "ADX_ARENA402_M_TOKEN_ADDRESS=\\n" in generator
 
 
