@@ -264,7 +264,7 @@ umask 077
   printf 'ADX_WALLET_SECRET_DIR_HOST_PATH=/etc/arena402/wallet-secrets\n'
   printf 'ADX_WALLET_MASTER_KEY_VERSION=1\n'
   printf 'ADX_ARENA_SETTLEMENT_RPC_URL=https://k8s.testnet.json-rpc.injective.network/\n'
-  printf 'ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL=https://testnet.blockscout.injective.network/api/v2\n'
+  printf 'ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL=https://testnet.blockscout-api.injective.network/api/v2\n'
   printf 'ADX_WALLET_RPC_URL=https://k8s.testnet.json-rpc.injective.network/\n'
   printf 'ADX_WALLET_EXPLORER_URL=https://testnet.blockscout.injective.network\n'
   printf 'ADX_ARENA_EXPLORER_TX_URL_TEMPLATE=https://testnet.blockscout.injective.network/tx/{txHash}\n'

@@ -12,6 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import pg from "pg";
 
 import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
+import { waitViaBlockscout } from "./lib-tx.ts";
 
 const { Pool } = pg;
 
@@ -294,15 +295,33 @@ async function reconcileSubmitted(
   kind: SubmittedKind,
 ): Promise<void> {
   const submitted = submittedFields(provision, kind);
-  let receipt;
+  let receipt: { status: "success" | "reverted"; blockNumber: bigint };
   try {
-    receipt = await publicClient.getTransactionReceipt({
+    const rpcReceipt = await publicClient.getTransactionReceipt({
       hash: submitted.hash,
     });
+    receipt = {
+      status: rpcReceipt.status,
+      blockNumber: rpcReceipt.blockNumber,
+    };
   } catch {
-    const serialized = await recreateTransaction(provision, kind, submitted);
-    await broadcast(serialized, submitted.hash);
-    return;
+    const indexed = await waitViaBlockscout(submitted.hash, 15_000);
+    if (indexed.status === "pending") {
+      const serialized = await recreateTransaction(
+        provision,
+        kind,
+        submitted,
+      );
+      await broadcast(serialized, submitted.hash);
+      return;
+    }
+    if (indexed.blockNumber === undefined) {
+      throw new Error(`gamecoin_${kind}_block_number_missing`);
+    }
+    receipt = {
+      status: indexed.status === "success" ? "success" : "reverted",
+      blockNumber: BigInt(indexed.blockNumber),
+    };
   }
   if (receipt.status !== "success") {
     await failProvision(provision.provision_id, `${kind}_transaction_reverted`);

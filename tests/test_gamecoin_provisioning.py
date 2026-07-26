@@ -4,6 +4,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
 DEPLOY = (ROOT / "deploy" / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+ENV_EXAMPLE = (ROOT / "deploy" / "env.production.example").read_text(
+    encoding="utf-8"
+)
+GENERATE_ENV = (ROOT / "deploy" / "scripts" / "generate-env.sh").read_text(
+    encoding="utf-8"
+)
 WORKER = (
     ROOT
     / "agent-arena"
@@ -47,6 +53,7 @@ def test_gamecoin_provisioner_persists_before_broadcast_and_recovers() -> None:
     assert "account.signTransaction" in WORKER
     assert "keccak256(serialized)" in WORKER
     assert "getTransactionReceipt" in WORKER
+    assert "waitViaBlockscout" in WORKER
     assert "sendRawTransaction" in WORKER
     assert "requiredConfirmations" in WORKER
     assert "game.phase IN ('registration', 'portfolio_setup')" in WORKER
@@ -71,3 +78,9 @@ def test_facilitator_validates_the_configured_frozen_game_token() -> None:
         "ADX_X402_SETTLEMENT_TOKEN_ADDRESS: "
         "${ADX_CURRENT_GAME_TOKEN_ADDRESS" in COMPOSE
     )
+
+
+def test_settlement_recovery_uses_the_blockscout_api_origin() -> None:
+    expected = "https://testnet.blockscout-api.injective.network/api/v2"
+    assert f"ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL={expected}" in ENV_EXAMPLE
+    assert f"ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL={expected}" in GENERATE_ENV

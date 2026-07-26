@@ -36,6 +36,7 @@ def test_memorial_minter_serializes_and_recovers_signed_transactions() -> None:
     assert "gas_price_wei" in WORKER
     assert "sendRawTransaction" in WORKER
     assert "getTransactionReceipt" in WORKER
+    assert "waitViaBlockscout" in WORKER
 
 
 def test_memorial_minter_database_access_is_scoped_to_memorial_records() -> None:

@@ -13,6 +13,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import pg from "pg";
 
 import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
+import { waitViaBlockscout } from "./lib-tx.ts";
 
 const { Pool } = pg;
 
@@ -271,29 +272,46 @@ async function reconcileSubmitted(
   ) {
     throw new Error("memorial_submitted_transaction_incomplete");
   }
-  let receipt;
+  let receipt: { status: "success" | "reverted"; blockNumber: bigint };
   try {
-    receipt = await publicClient.getTransactionReceipt({ hash: batch.tx_hash });
+    const rpcReceipt = await publicClient.getTransactionReceipt({
+      hash: batch.tx_hash,
+    });
+    receipt = {
+      status: rpcReceipt.status,
+      blockNumber: rpcReceipt.blockNumber,
+    };
   } catch {
-    const data = encodeFunctionData({
-      abi: MEMORIAL_ABI,
-      functionName: "mintBatch",
-      args: [awards.map((row) => getAddress(row.wallet_address))],
-    });
-    const serialized = await account.signTransaction({
-      chainId,
-      to: contract,
-      data,
-      gas: BigInt(batch.gas_limit),
-      gasPrice: BigInt(batch.gas_price_wei),
-      nonce: Number(batch.tx_nonce),
-      type: "legacy",
-    });
-    if (keccak256(serialized) !== batch.tx_hash) {
-      throw new Error("memorial_transaction_hash_mismatch");
+    const indexed = await waitViaBlockscout(batch.tx_hash, 15_000);
+    if (indexed.status !== "pending") {
+      if (indexed.blockNumber === undefined) {
+        throw new Error("memorial_block_number_missing");
+      }
+      receipt = {
+        status: indexed.status === "success" ? "success" : "reverted",
+        blockNumber: BigInt(indexed.blockNumber),
+      };
+    } else {
+      const data = encodeFunctionData({
+        abi: MEMORIAL_ABI,
+        functionName: "mintBatch",
+        args: [awards.map((row) => getAddress(row.wallet_address))],
+      });
+      const serialized = await account.signTransaction({
+        chainId,
+        to: contract,
+        data,
+        gas: BigInt(batch.gas_limit),
+        gasPrice: BigInt(batch.gas_price_wei),
+        nonce: Number(batch.tx_nonce),
+        type: "legacy",
+      });
+      if (keccak256(serialized) !== batch.tx_hash) {
+        throw new Error("memorial_transaction_hash_mismatch");
+      }
+      await broadcast(serialized, batch.tx_hash);
+      return;
     }
-    await broadcast(serialized, batch.tx_hash);
-    return;
   }
   if (receipt.status !== "success") {
     await resetFailedBatch(batch, "transaction_reverted");
