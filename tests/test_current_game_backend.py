@@ -4,8 +4,11 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from arena_game import build_event_schedule
 from arena_game.postgres import (
+    PawnhouseRepositoryError,
     PostgresPawnhouseRepository,
     _should_assign_balanced_portfolios,
 )
@@ -127,12 +130,16 @@ class _CreatePool:
 
 
 class _JoinPreflightConnection(_CreateConnection):
+    participant_count = 0
+    existing_participant = None
+
     async def fetchrow(self, query: str, *_: object):
         self.queries.append(query)
         if "FROM arena402.current_game" in query:
             return {
                 "game_id": "game-current",
                 "phase": "portfolio_setup",
+                "max_participants": 100,
                 "config_snapshot": {
                     "settlement": {
                         "authorizationMode": "single_eip3009",
@@ -146,6 +153,8 @@ class _JoinPreflightConnection(_CreateConnection):
                     }
                 },
             }
+        if "FROM arena402.game_participants" in query:
+            return self.existing_participant
         if "FROM public.arena_agents AS agent" in query:
             return {"runtime_binding_id": "binding-ready"}
         if "FROM arena402.user_wallets" in query:
@@ -153,6 +162,14 @@ class _JoinPreflightConnection(_CreateConnection):
         if "FROM arena402.join_authorizations" in query:
             return None
         raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+    async def fetchval(self, query: str, *_: object):
+        self.queries.append(query)
+        if "pg_advisory_xact_lock" in query:
+            return None
+        if "count(*)" in query:
+            return self.participant_count
+        raise AssertionError(f"Unexpected fetchval query: {query}")
 
 
 def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
@@ -249,6 +266,61 @@ def test_successful_join_preflight_explicitly_authorizes_frontend_entry() -> Non
         "wallet": "READY",
         "paymentMandate": "ACTION_REQUIRED",
     }
+    assert any(
+        "pg_advisory_xact_lock" in query
+        for query in connection.queries
+    )
+    supersede = next(
+        query
+        for query in connection.queries
+        if "UPDATE arena402.join_authorizations" in query
+    )
+    assert "expires_at <=" not in supersede
+
+
+def test_join_preflight_rejects_an_existing_user_seat_before_new_authorization() -> None:
+    connection = _JoinPreflightConnection()
+    connection.existing_participant = {
+        "game_participant_id": "gp:game-current:agent-current"
+    }
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    with pytest.raises(PawnhouseRepositoryError, match="user_already_joined"):
+        asyncio.run(
+            repository.current_game_join_preflight(
+                game_id="game-current",
+                user_id="user-current",
+                agent_id="agent-current",
+                key_digest="key-digest",
+                request_digest="request-digest",
+            )
+        )
+
+
+def test_join_preflight_rejects_a_full_current_game() -> None:
+    connection = _JoinPreflightConnection()
+    connection.participant_count = 100
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    with pytest.raises(
+        PawnhouseRepositoryError,
+        match="game_participant_limit_reached",
+    ):
+        asyncio.run(
+            repository.current_game_join_preflight(
+                game_id="game-current",
+                user_id="user-current",
+                agent_id="agent-current",
+                key_digest="key-digest",
+                request_digest="request-digest",
+            )
+        )
 
 
 def test_first_product_sized_game_claims_empty_current_pointer() -> None:

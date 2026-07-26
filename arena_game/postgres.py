@@ -636,6 +636,23 @@ class PostgresPawnhouseRepository:
                     raise PawnhouseRepositoryError("game_not_found")
                 if phase["phase"] not in ("registration", "portfolio_setup"):
                     raise PawnhouseRepositoryError("game_not_joinable")
+                existing_participant = await connection.fetchrow(
+                    """
+                    SELECT game_participant_id, agent_id, readiness
+                    FROM arena402.game_participants
+                    WHERE game_id = $1 AND user_id = $2
+                    FOR SHARE
+                    """,
+                    game_id,
+                    user_id,
+                )
+                if existing_participant is not None:
+                    if (
+                        existing_participant["agent_id"] == agent_id
+                        and existing_participant["readiness"] != "withdrawn"
+                    ):
+                        return str(existing_participant["game_participant_id"])
+                    raise PawnhouseRepositoryError("user_already_joined")
                 if official_pool_join:
                     official = await connection.fetchrow(
                         """
@@ -4605,9 +4622,16 @@ class PostgresPawnhouseRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                await connection.fetchval(
+                    """
+                    SELECT pg_advisory_xact_lock(hashtext($1))
+                    """,
+                    f"arena402.join-preflight:{user_id}:{game_id}",
+                )
                 game = await connection.fetchrow(
                     """
-                    SELECT g.game_id, g.phase, g.config_snapshot
+                    SELECT g.game_id, g.phase, g.config_snapshot,
+                           g.max_participants
                     FROM arena402.current_game AS pointer
                     JOIN arena402.games AS g ON g.game_id = pointer.game_id
                     WHERE pointer.singleton = TRUE
@@ -4620,6 +4644,34 @@ class PostgresPawnhouseRepository:
                     raise PawnhouseRepositoryError("game_not_current")
                 if game["phase"] not in {"registration", "portfolio_setup"}:
                     raise PawnhouseRepositoryError("game_already_started")
+
+                existing_participant = await connection.fetchrow(
+                    """
+                    SELECT game_participant_id
+                    FROM arena402.game_participants
+                    WHERE game_id = $1 AND user_id = $2
+                    FOR SHARE
+                    """,
+                    game_id,
+                    user_id,
+                )
+                if existing_participant is not None:
+                    raise PawnhouseRepositoryError("user_already_joined")
+                participant_count = int(
+                    await connection.fetchval(
+                        """
+                        SELECT count(*)
+                        FROM arena402.game_participants
+                        WHERE game_id = $1
+                          AND readiness <> 'withdrawn'
+                        """,
+                        game_id,
+                    )
+                )
+                if participant_count >= int(game["max_participants"]):
+                    raise PawnhouseRepositoryError(
+                        "game_participant_limit_reached"
+                    )
 
                 runtime = await connection.fetchrow(
                     """
@@ -4699,11 +4751,9 @@ class PostgresPawnhouseRepository:
                         WHERE user_id = $1
                           AND game_id = $2
                           AND status = 'pending'
-                          AND expires_at <= $3
                         """,
                         user_id,
                         game_id,
-                        issued_at,
                     )
                     authorization_id = f"ja:{uuid.uuid4().hex}"
                     await connection.execute(
