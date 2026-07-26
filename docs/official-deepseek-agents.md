@@ -47,6 +47,11 @@ python scripts/bootstrap_official_agent_pool.py \
   --replace-enabled-pool
 ```
 
+Repeat `--api-key-file` to distribute contiguous, near-even Agent ranges
+across multiple operator keys. For example, three key files with `--count 20`
+assign Agents 1–7, 8–14, and 15–20 to the three keys respectively. Re-running
+with the same ordered files preserves the stable credential idempotency keys.
+
 Required environment:
 
 ```text
