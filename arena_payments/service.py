@@ -17,7 +17,7 @@ class ArenaPaymentService:
     def __init__(self, *, repository: PaymentRepository) -> None:
         self.repository = repository
 
-    async def get_or_bind_github_wallet(
+    async def get_or_bind_platform_wallet(
         self,
         *,
         user_id: str,

@@ -99,6 +99,9 @@ SETTLEMENT_FENCING_SQL_PATH = (
     / "migrations"
     / "044_arena_settlement_audit_and_facilitator_fencing.sql"
 )
+PLATFORM_ACCOUNT_WALLETS_SQL_PATH = (
+    ROOT / "db" / "migrations" / "045_arena_platform_account_wallets.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -495,6 +498,26 @@ def test_official_payment_authority_keeps_user_and_platform_wallets_distinct():
     assert "sync_official_payment_wallet_authority" in sql
     assert "github_subject" not in sql
     assert "private_key" not in sql
+
+
+def test_platform_account_wallet_migration_removes_github_as_a_requirement():
+    sql = PLATFORM_ACCOUNT_WALLETS_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "ALTER COLUMN github_subject DROP NOT NULL" in sql
+    assert "user_id is the platform wallet authority" in sql
+    assert "private_key" not in sql.lower()
+
+
+def test_platform_account_wallet_migration_is_selected_by_arena_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+
+    assert PLATFORM_ACCOUNT_WALLETS_SQL_PATH in migrate_module.migration_files("arena")
 
 
 def test_official_payment_authority_is_selected_by_arena_scope(

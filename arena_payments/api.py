@@ -100,7 +100,7 @@ def create_payment_account_router(
     async def my_wallet(request: Request) -> dict[str, object]:
         user = await principal(request)
         try:
-            wallet = await service.get_or_bind_github_wallet(
+            wallet = await service.get_or_bind_platform_wallet(
                 user_id=user.user_id,
                 identity_provider=user.identity_provider,
                 provider_subject=user.provider_subject,
@@ -120,7 +120,7 @@ def create_payment_account_router(
             )
         user = await principal(request)
         try:
-            wallet = await service.get_or_bind_github_wallet(
+            wallet = await service.get_or_bind_platform_wallet(
                 user_id=user.user_id,
                 identity_provider=user.identity_provider,
                 provider_subject=user.provider_subject,

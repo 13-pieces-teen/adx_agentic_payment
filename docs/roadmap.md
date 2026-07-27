@@ -289,14 +289,17 @@ create game
       并保存断线重连、deadline default 与 Result replay 证据。
 - [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
       `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
-- [x] GitHub User 永久绑定 platform-managed testnet guest wallet，一局一次
+- [x] 平台 `user_id` 永久绑定 platform-managed testnet guest wallet；`045`
+      允许密码账号不依赖 GitHub subject，一局一次
       Mandate 授权后，每笔 accepted trade 自动结算；逐笔人工确认 bridge 仅保留
       为开发验证工具。
 - [x] 当前自动完整链路已在显式确认和单 Intent Worker 约束下执行一笔新鲜
       Injective testnet 交易，并完成链上确认与库存提交；公共 Facilitator
       兼容性和完整生产验收仍须单独通过。
-- [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
-      不可变 GitHub subject 身份、现有 Session/CSRF Cookie 和安全回跳。
+- [x] 后端已实现用户名/密码平台注册登录，以及可选 GitHub OAuth
+      authorization-code + PKCE；两者使用现有 Session/CSRF Cookie，业务所有权
+      统一使用内部 `user_id`。公共注册由
+      `ADX_PUBLIC_REGISTRATION_ENABLED` 显式启用，默认 fail closed。
 - [x] 外部前端已完成 Next.js 仓库升级和当前 Arena API 迁移；Vercel→腾讯云
       OAuth 跳转、Cookie/CORS 公网基础联调已通过。
 - [ ] 公开 Game Event SSE 与前端轮询降级代码已完成本地回归，尚待腾讯云和

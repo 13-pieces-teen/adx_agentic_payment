@@ -113,17 +113,24 @@ class InMemoryPaymentRepository:
         provider_subject: str | None,
         now: datetime,
     ) -> UserWalletBinding:
-        if identity_provider != "github" or not provider_subject:
-            raise WalletUnavailable("github_identity_required")
+        if identity_provider == "github":
+            if not provider_subject:
+                raise WalletUnavailable("platform_identity_required")
+        elif identity_provider == "password":
+            if provider_subject is not None:
+                raise WalletUnavailable("platform_identity_conflict")
+        else:
+            raise WalletUnavailable("platform_identity_required")
         async with self._lock:
             existing = self.wallet_bindings.get(user_id)
             if existing is not None:
                 if existing.github_subject != provider_subject:
-                    raise WalletUnavailable("github_identity_conflict")
+                    raise WalletUnavailable("platform_identity_conflict")
                 return copy.deepcopy(existing)
-            subject_user = self._bindings_by_subject.get(provider_subject)
-            if subject_user is not None and subject_user != user_id:
-                raise WalletUnavailable("github_identity_conflict")
+            if provider_subject is not None:
+                subject_user = self._bindings_by_subject.get(provider_subject)
+                if subject_user is not None and subject_user != user_id:
+                    raise WalletUnavailable("platform_identity_conflict")
             available = sorted(
                 (
                     item
@@ -151,7 +158,8 @@ class InMemoryPaymentRepository:
                 status="bound",
             )
             self.wallet_bindings[user_id] = binding
-            self._bindings_by_subject[provider_subject] = user_id
+            if provider_subject is not None:
+                self._bindings_by_subject[provider_subject] = user_id
             return copy.deepcopy(binding)
 
     async def wallet_for_user(self, *, user_id: str) -> UserWalletBinding | None:

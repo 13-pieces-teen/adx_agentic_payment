@@ -24,6 +24,20 @@ def _positive_int(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    raise ConnectorConfigurationError(
+        f"{name} must be one of true, false, 1, 0, yes or no"
+    )
+
+
 @dataclass(frozen=True)
 class ConnectorGatewayConfig:
     database_url: str
@@ -40,6 +54,7 @@ class ConnectorGatewayConfig:
     session_ttl_seconds: int = 7 * 24 * 60 * 60
     cookie_secure: bool = True
     bootstrap_invite_hash: str | None = None
+    public_registration_enabled: bool = False
     auth_rate_limit_attempts: int = 10
     pairing_rate_limit_attempts: int = 60
     rate_limit_window_seconds: int = 60
@@ -66,6 +81,10 @@ class ConnectorGatewayConfig:
         environment = os.getenv("ADX_ENV", "production").strip().lower()
         cookie_secure_raw = os.getenv("ADX_CONNECTOR_COOKIE_SECURE", "true")
         cookie_secure = cookie_secure_raw.strip().lower() in {"1", "true", "yes"}
+        public_registration_enabled = _boolean(
+            "ADX_PUBLIC_REGISTRATION_ENABLED",
+            False,
+        )
 
         if not database_url:
             raise ConnectorConfigurationError(
@@ -141,9 +160,10 @@ class ConnectorGatewayConfig:
                 raise ConnectorConfigurationError(
                     "ADX_BOOTSTRAP_INVITE_HASH must be a SHA-256 hex digest"
                 )
-        elif environment == "production":
+        elif environment == "production" and not public_registration_enabled:
             raise ConnectorConfigurationError(
-                "ADX_BOOTSTRAP_INVITE_HASH is required for the beta deployment"
+                "ADX_BOOTSTRAP_INVITE_HASH is required when public registration "
+                "is disabled"
             )
 
         return cls(
@@ -172,6 +192,7 @@ class ConnectorGatewayConfig:
             ),
             cookie_secure=cookie_secure,
             bootstrap_invite_hash=bootstrap_invite_hash,
+            public_registration_enabled=public_registration_enabled,
             auth_rate_limit_attempts=_positive_int(
                 "ADX_CONNECTOR_AUTH_RATE_LIMIT_ATTEMPTS", 10, 1, 1000
             ),

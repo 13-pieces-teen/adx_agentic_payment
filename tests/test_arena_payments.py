@@ -117,7 +117,7 @@ def _terms(intent_id: str = "intent-1", amount: int = 40) -> SettlementTerms:
     )
 
 
-def test_github_user_keeps_the_same_wallet_across_logins_and_games() -> None:
+def test_platform_user_keeps_the_same_wallet_across_logins_and_games() -> None:
     repository = InMemoryPaymentRepository([_wallet(1), _wallet(2)])
 
     first = asyncio.run(
@@ -143,24 +143,31 @@ def test_github_user_keeps_the_same_wallet_across_logins_and_games() -> None:
     assert len(repository.wallet_bindings) == 1
 
 
-def test_wallet_binding_is_github_only_and_never_reassigns_an_address() -> None:
+def test_password_account_gets_a_wallet_without_a_github_subject() -> None:
     repository = InMemoryPaymentRepository([_wallet(1)])
 
-    with pytest.raises(WalletUnavailable, match="github_identity_required"):
-        asyncio.run(
-            repository.get_or_bind_wallet(
-                user_id="password-user",
-                identity_provider="password",
-                provider_subject=None,
-                now=NOW,
-            )
+    binding = asyncio.run(
+        repository.get_or_bind_wallet(
+            user_id="password-user",
+            identity_provider="password",
+            provider_subject=None,
+            now=NOW,
         )
+    )
+
+    assert binding.user_id == "password-user"
+    assert binding.github_subject is None
+    assert binding.wallet_id == "agent-wallet-0001"
+
+
+def test_wallet_binding_never_reassigns_an_address() -> None:
+    repository = InMemoryPaymentRepository([_wallet(1)])
 
     asyncio.run(
         repository.get_or_bind_wallet(
-            user_id="user-1",
-            identity_provider="github",
-            provider_subject="123",
+            user_id="password-user",
+            identity_provider="password",
+            provider_subject=None,
             now=NOW,
         )
     )
@@ -168,8 +175,8 @@ def test_wallet_binding_is_github_only_and_never_reassigns_an_address() -> None:
         asyncio.run(
             repository.get_or_bind_wallet(
                 user_id="user-2",
-                identity_provider="github",
-                provider_subject="456",
+                identity_provider="password",
+                provider_subject=None,
                 now=NOW,
             )
         )
