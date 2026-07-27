@@ -94,6 +94,10 @@ jobs:
       - name: Install locked Node.js dependencies
         working-directory: ${{ matrix.directory }}
         run: npm ci --no-audit --no-fund
+      - name: Install locked Settlement SDK dependencies for contract wallet tests
+        if: matrix.needs_rpc
+        working-directory: agent-arena/settlement/sdk
+        run: npm ci --no-audit --no-fund
       - name: Run component tests
         if: ${{ ! matrix.needs_rpc }}
         working-directory: ${{ matrix.directory }}
@@ -103,6 +107,7 @@ jobs:
         working-directory: ${{ matrix.directory }}
         run: |
           set -euo pipefail
+          npm run compile
           npm run node > "${RUNNER_TEMP}/arena402-hardhat.log" 2>&1 &
           hardhat_pid=$!
           trap 'kill "${hardhat_pid}" 2>/dev/null || true' EXIT
