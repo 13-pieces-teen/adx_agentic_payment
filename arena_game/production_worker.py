@@ -257,7 +257,7 @@ async def main() -> None:
                 os.getenv("ADX_CURRENT_GAME_REQUIRED_CONFIRMATIONS", "2")
             ),
         ),
-        round_count=int(os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "5")),
+        round_count=int(os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "8")),
         start_threshold=int(
             os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "10")
         ),

@@ -88,8 +88,8 @@ cash + grain*2 + iron*5 + warhorse*8 + gems*3 = 20 gold
 
 ## 一局游戏
 
-一局先完成初始资产配置，再进入 `N` 个同步回合。默认演示基线为 5 回合，开发
-接口支持 1–10 回合；`fixed_demo` 固定使用五张顺序事件，`seeded_shuffle` 从
+一局先完成初始资产配置，再进入 `N` 个同步回合。产品 Current Game 默认 8 回合，
+开发接口支持 1–10 回合；`fixed_demo` 仍固定使用五张顺序事件，`seeded_shuffle` 从
 `pawnhouse-standard-v1` 十张事件牌组按 Game seed 确定性洗牌并冻结完整赛程。
 相同 deck 版本、seed 和回合数必须产生相同赛程。每回合最多让每个 Agent 完成
 一笔交易。
@@ -157,6 +157,12 @@ Factory 在同一数据库事务中冻结 participant view、Game Agent 配置�
 - `sell`：选择一种已有货物，进入卖方池；
 - `pass`：本回合不交易。
 
+Hosted Prompt v4 要求 Agent 把 `market` 视为已包含当前 market-target 事件效果，
+不得重复应用；逐一比较全部允许货物，并按照冻结的私有策略画像计算 `fairValue`、
+买卖触发阈值和作为保留价的 `limitPrice`。官方池按优先级循环十种数值画像，覆盖
+买方偏向、卖方偏向和双边策略，并使用不同的现金保留比例、库存目标、商品同分
+排序和买卖阈值，避免所有官方 Agent 因同一事件使用同一方向。
+
 Runtime 提交候选 Result 后，Arena Result Sink 在持久化前处理公开输出并使用数据库
 时钟记录 `result_received_at`。Result Consumer 完成 schema、阶段、资产和货物校验
 后，才使用该时间生成权威 `enteredAt`。Runtime 自报完成时间、Provider 时间或
@@ -165,16 +171,21 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 
 ### 4. Pair
 
-每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列：
+每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为
+限价区间有交集的订单创建 Pairing：买方存在 `limitPrice` 时成交价不得高于该值，
+卖方存在 `limitPrice` 时成交价不得低于该值；双方都有限价时必须满足
+`buyer.limitPrice >= seller.limitPrice`。
 
 ```text
-buyer[0] <-> seller[0]
-buyer[1] <-> seller[1]
+earliest buyer <-> earliest compatible seller
+next buyer     <-> next compatible seller
 ...
 ```
 
-这就是 FCFS。未配对 Agent 本回合结束，但不增加 `failedNegotiations`。只有
-真正进入协商后失败的双方才增加该计数。
+这就是价格兼容订单内的 FCFS。更早但限价不兼容的对手不会消耗当前订单，也不会
+创建注定失败的 Negotiation；Arena 继续查找该侧最早的兼容对手。未配对 Agent
+本回合结束，但不增加 `failedNegotiations`。只有真正进入协商后失败的双方才增加
+该计数。
 
 ### 5. Negotiate
 
@@ -185,6 +196,9 @@ buyer[1] <-> seller[1]
 - `propose` 包含定点价格和不超过 100 字、经 PublicOutputPolicy 处理的公开话术；
 - `accept` 只能接受对方最近一次有效报价，不能自行附带新价格；
 - `reject` 明确结束协商；
+- `limitPrice` 是硬数字边界：买方报价/接受不得高于上限，卖方报价/接受不得低于
+  下限；没有对方报价时按自身 `limitPrice` 报价，对方报价进入自身边界时立即
+  `accept`，越界且仍可反价时严格按自身 `limitPrice` 反价，不得扩大价差；
 - 达到轮次上限、Runtime 失败或 deadline 超时由 Arena 记录 negotiation timeout，
   而不是伪造一条 Agent 主动 `reject`。
 
@@ -197,7 +211,10 @@ Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，�
 rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
 Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不在
 Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
-Provider、Model 或 Runtime。
+Provider、Model 或 Runtime。结构合法但违反自身 `limitPrice` 的 Hosted 候选动作
+可在同一 AgentTask、同一冻结输入和 deadline 内触发唯一一次带安全错误码的修正
+Attempt；第二次仍越界则失败收敛，且 Arena 后端的独立限价、余额和库存校验继续
+保留。
 
 `failedNegotiations` 是对手可见的模糊信号，不直接扣分、不扣现金，也不改变
 FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
@@ -442,12 +459,12 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 
 | 参数 | 候选值 |
 |------|--------|
-| 总回合数 `N` | 5–10 |
+| 总回合数 `N` | Current Game 默认 8；支持 1–10，环境变量可调为 6 |
 | `MAX_TURN` | 2 或 3 |
 | 单回合时长 | 由当前生产拓扑下 10/12/25/50/100 Agent wave 实测冻结 |
 | `action_timeout_ms` | Provider/Model/thinking 与 10/12/25/50/100 Agent 负载的真实 P95/P99 + buffer |
 | 货物种类 | 2–3 |
-| 单局目标时长 | MVP 固定 5 回合；以上述实测值计算 |
+| 单局目标时长 | Current Game 按 8 回合计算；固定 Demo 仍为 5 回合 |
 
 参数调整不得改变本文的核心边界：公平开局、FCFS、有限轮协商、外生价值锚、
 净资产排名和成交后真实链上结算。

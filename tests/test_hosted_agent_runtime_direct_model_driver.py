@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -209,6 +211,47 @@ def test_transient_or_invalid_output_retries_once_then_succeeds(
         assert result.action.action == "pass"
         assert len(fake.requests) == 2
         assert [record.attempt_number for record in recorder.records] == [1, 2]
+        assert [record.status for record in recorder.records] == [
+            "failed",
+            "succeeded",
+        ]
+
+    asyncio.run(scenario_run())
+
+
+def test_limit_violating_negotiation_action_gets_one_bounded_correction() -> None:
+    async def scenario_run() -> None:
+        task = _task(negotiate=True)
+        task_input = task.input.model_copy(
+            update={"limit_price": Decimal("10.000000")}
+        )
+        task = task.model_copy(
+            update={
+                "input": task_input,
+                "input_hash": sha256_identifier(task_input),
+            }
+        )
+        driver, fake, recorder, _, _ = await _build_driver(
+            [
+                FakeProviderScenario.PROPOSE,
+                FakeProviderScenario.PROPOSE_AT_LIMIT,
+            ]
+        )
+
+        result = await driver.execute(task, task.deadline_at)
+
+        assert result.status == "succeeded"
+        assert result.action is not None
+        assert result.action.action == "propose"
+        assert str(result.action.price) == "10.000000"
+        assert len(fake.requests) == 2
+        correction = json.loads(fake.requests[1].input_json)[
+            "boundedCorrection"
+        ]
+        assert correction == {
+            "attempt": 2,
+            "code": "limit_price_violation",
+        }
         assert [record.status for record in recorder.records] == [
             "failed",
             "succeeded",

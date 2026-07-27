@@ -22,6 +22,7 @@ class FakeProviderScenario(str, Enum):
     SELL = "sell"
     PASS = "pass"
     PROPOSE = "propose"
+    PROPOSE_AT_LIMIT = "propose_at_limit"
     ACCEPT = "accept"
     REJECT = "reject"
     RATE_LIMITED = "rate_limited"
@@ -171,6 +172,12 @@ class FakeProvider:
                 "action": "propose",
                 "price": "12.500000",
                 "message": "A deterministic public proposal.",
+            }
+        if scenario is FakeProviderScenario.PROPOSE_AT_LIMIT:
+            return {
+                "action": "propose",
+                "price": "10.000000",
+                "message": "A corrected proposal at the hard limit.",
             }
         if scenario is FakeProviderScenario.ACCEPT:
             return {"action": "accept"}

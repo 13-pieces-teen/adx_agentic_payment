@@ -74,6 +74,35 @@ def test_fcfs_pairs_quantity_and_preserves_both_limit_prices() -> None:
     assert pairing.seller_limit_price_atomic == gold("6")
 
 
+def test_fcfs_does_not_pair_orders_without_a_shared_price_interval() -> None:
+    buyer = _entry("buyer", "buyer", "buy", 0)
+    seller = _entry("seller", "seller", "sell", 1)
+    object.__setattr__(buyer, "limit_price_atomic", gold("1.425"))
+    object.__setattr__(seller, "limit_price_atomic", gold("1.440"))
+
+    assert fcfs_pair((buyer, seller)) == ()
+
+
+def test_fcfs_uses_the_earliest_price_compatible_counterparty() -> None:
+    buyer = _entry("buyer", "buyer", "buy", 0, good="grain")
+    early_seller = _entry(
+        "seller_early", "seller_early", "sell", 1, good="grain"
+    )
+    compatible_seller = _entry(
+        "seller_compatible", "seller_compatible", "sell", 2, good="grain"
+    )
+    object.__setattr__(buyer, "limit_price_atomic", gold("1.425"))
+    object.__setattr__(early_seller, "limit_price_atomic", gold("1.440"))
+    object.__setattr__(
+        compatible_seller, "limit_price_atomic", gold("1.424")
+    )
+
+    pairings = fcfs_pair((buyer, early_seller, compatible_seller))
+
+    assert len(pairings) == 1
+    assert pairings[0].seller_participant_id == "seller_compatible"
+
+
 def test_fcfs_rejects_cross_round_and_self_pairing() -> None:
     cross_round = _entry("seller", "seller", "sell", 1)
     object.__setattr__(cross_round, "round_id", "round_2")

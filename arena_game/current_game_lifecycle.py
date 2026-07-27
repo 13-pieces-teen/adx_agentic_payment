@@ -22,7 +22,7 @@ class CurrentGameLifecycleWorker:
         *,
         repository: PostgresPawnhouseRepository,
         settlement_config: SettlementConfig,
-        round_count: int = 5,
+        round_count: int = 8,
         start_threshold: int = CURRENT_GAME_START_THRESHOLD,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
         official_fill_after_seconds: int = 300,

@@ -93,45 +93,147 @@ def _username(index: int) -> str:
     return f"official-deepseek-{index:03d}"
 
 
+_OFFICIAL_STRATEGY_PROFILES = (
+    (
+        "Deep Value Buyer",
+        "BUY_BIASED",
+        35,
+        "2 units per good",
+        "grain > iron > warhorse > gems",
+        "buy when marketPrice <= 0.90 * fairValue and set buyer limitPrice "
+        "to 0.94 * fairValue; sell only when marketPrice >= 1.12 * "
+        "fairValue and set seller limitPrice to 1.08 * fairValue",
+    ),
+    (
+        "Opportunistic Accumulator",
+        "BUY_BIASED",
+        20,
+        "3 units in the strongest two goods",
+        "iron > gems > grain > warhorse",
+        "buy when marketPrice <= 0.97 * fairValue and set buyer limitPrice "
+        "to 0.99 * fairValue; sell when marketPrice >= 1.08 * fairValue "
+        "and set seller limitPrice to 1.04 * fairValue",
+    ),
+    (
+        "Defensive Seller",
+        "SELL_BIASED",
+        65,
+        "at most 1 unit per good",
+        "gems > warhorse > iron > grain",
+        "sell when marketPrice >= 0.96 * fairValue and set seller "
+        "limitPrice to 0.94 * fairValue; buy only when marketPrice <= "
+        "0.82 * fairValue and set buyer limitPrice to 0.85 * fairValue",
+    ),
+    (
+        "Fast Liquidator",
+        "SELL_BIASED",
+        75,
+        "0 units except the strongest final-value good",
+        "warhorse > gems > iron > grain",
+        "sell when marketPrice >= 0.90 * fairValue and set seller "
+        "limitPrice to 0.88 * fairValue; buy only when marketPrice <= "
+        "0.75 * fairValue and set buyer limitPrice to 0.78 * fairValue",
+    ),
+    (
+        "Tight Market Maker",
+        "TWO_SIDED",
+        40,
+        "1 unit per good",
+        "grain > warhorse > iron > gems",
+        "buy when marketPrice <= 0.99 * fairValue and set buyer limitPrice "
+        "to 1.00 * fairValue; sell when marketPrice >= 1.01 * fairValue "
+        "and set seller limitPrice to 1.00 * fairValue",
+    ),
+    (
+        "Wide Market Maker",
+        "TWO_SIDED",
+        45,
+        "1 unit per good",
+        "gems > grain > warhorse > iron",
+        "buy when marketPrice <= 0.96 * fairValue and set buyer limitPrice "
+        "to 0.98 * fairValue; sell when marketPrice >= 1.04 * fairValue "
+        "and set seller limitPrice to 1.02 * fairValue",
+    ),
+    (
+        "Final-Event Momentum Trader",
+        "TWO_SIDED",
+        30,
+        "2 units in goods with positive active final effects",
+        "iron > warhorse > gems > grain",
+        "buy when marketPrice <= 0.98 * fairValue and set buyer limitPrice "
+        "to 1.01 * fairValue; sell when marketPrice >= 1.02 * fairValue "
+        "and set seller limitPrice to 0.99 * fairValue",
+    ),
+    (
+        "Market-Effect Contrarian",
+        "TWO_SIDED",
+        50,
+        "1 unit per good",
+        "grain > gems > iron > warhorse",
+        "buy when marketPrice <= 0.92 * fairValue and set buyer limitPrice "
+        "to 0.95 * fairValue; sell when marketPrice >= 1.08 * fairValue "
+        "and set seller limitPrice to 1.05 * fairValue",
+    ),
+    (
+        "Diversified Rebalancer",
+        "TWO_SIDED",
+        45,
+        "1 unit in every good before adding a second",
+        "warhorse > iron > grain > gems",
+        "buy when marketPrice <= 0.97 * fairValue and set buyer limitPrice "
+        "to 0.99 * fairValue; sell when marketPrice >= 1.03 * fairValue "
+        "and set seller limitPrice to 1.01 * fairValue",
+    ),
+    (
+        "Late-Game Closer",
+        "TWO_SIDED",
+        25,
+        "2 units early, then 0 speculative units in the final 2 rounds",
+        "gems > iron > grain > warhorse",
+        "buy when marketPrice <= 1.00 * fairValue and set buyer limitPrice "
+        "to 1.02 * fairValue; sell when marketPrice >= 0.99 * fairValue "
+        "and set seller limitPrice to 0.98 * fairValue",
+    ),
+)
+
+
 def _strategy(index: int) -> str:
-    role = (index - 1) % 5
-    preferences = (
-        (
-            "Act as a value buyer. Prefer buying assets whose current market "
-            "price is below your event-adjusted estimate of final value, "
-            "while preserving enough cash for later rounds."
-        ),
-        (
-            "Act as an inventory seller. Reduce concentrated holdings when "
-            "the current executable price is at or above your event-adjusted "
-            "estimate, but do not anchor to a past round."
-        ),
-        (
-            "Act as a two-sided market maker. Prefer an executable buy or "
-            "sell near the current market when inventory and cash permit, "
-            "and negotiate toward a mutually acceptable price."
-        ),
-        (
-            "Act as an event trader. Use only effects that are active in the "
-            "current round, distinguish market effects from final-value "
-            "effects, and reposition before the signal expires."
-        ),
-        (
-            "Act as a portfolio allocator. Diversify final-value exposure, "
-            "rebalance away from weak assets, and avoid leaving all capital "
-            "idle when a positive risk-adjusted trade is available."
-        ),
-    )
-    preference = preferences[role]
+    if index < 1:
+        raise ValueError("official Agent index must be positive")
+    (
+        profile_name,
+        side_bias,
+        cash_reserve_percent,
+        inventory_target,
+        good_order,
+        numeric_policy,
+    ) = _OFFICIAL_STRATEGY_PROFILES[
+        (index - 1) % len(_OFFICIAL_STRATEGY_PROFILES)
+    ]
     return (
-        "You are an official Arena 402 market participant. "
-        f"{preference} "
+        "You are an official Arena 402 market participant. Follow this "
+        f"stable profile: {profile_name}; side bias {side_bias}; cash reserve "
+        f"{cash_reserve_percent}% of current marked net worth; inventory "
+        f"target {inventory_target}; deterministic equal-signal good order "
+        f"{good_order}. Estimate fairValue for final settlement from current "
+        "state and active event effects. The market field already includes "
+        "current market-target effects, so never apply those effects twice. "
+        f"Numeric decision policy: {numeric_policy}. "
+        "When both a valid buy and sell qualify, follow the side bias first, "
+        "then choose the largest absolute percentage gap to fairValue, then "
+        "the stated good order. Submit quantity 1 unless the inventory target "
+        "requires less. "
         "Re-evaluate every round and never reuse an expired event price. "
-        "Use the current market as the quote anchor, obey quantity and "
-        "limit-price constraints, prefer executable good-faith trades, and "
-        "close the final negotiation turn with accept or reject. Pass only "
-        "when no positive risk-adjusted action exists. Never disclose "
-        "credentials or private reasoning."
+        "Respect the cash reserve after a buy and the inventory target before "
+        "a sell. Use the current market as the quote anchor, obey quantity "
+        "and limit-price constraints, and prefer executable good-faith trades. "
+        "A buyer never quotes above its limitPrice; a seller never quotes "
+        "below its limitPrice. When the latest quote is outside that boundary, "
+        "counter exactly at the boundary rather than widening the gap. Accept "
+        "immediately when the latest quote is within the boundary. Close the "
+        "final negotiation turn with accept or reject. Pass only when neither "
+        "numeric trigger is satisfied or constraints make all qualifying "
+        "actions illegal. Never disclose credentials or private reasoning."
     )
 
 

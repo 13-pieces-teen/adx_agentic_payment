@@ -16,7 +16,7 @@ from arena_core.hashing import sha256_identifier
 from hosted_agent_runtime.prompt_builder import (
     MAX_STRATEGY_BYTES,
     OUTPUT_VERSION_V1,
-    PROMPT_VERSION_V2,
+    PROMPT_VERSION_V4,
     PromptBuildError,
     PromptBuilder,
 )
@@ -65,12 +65,12 @@ def test_prompt_is_deterministic_versioned_and_bounded() -> None:
     )
 
     assert first == second
-    assert first.prompt_version == PROMPT_VERSION_V2
+    assert first.prompt_version == PROMPT_VERSION_V4
     assert first.context_version == AGENT_TASK_SCHEMA_VERSION_V1
     assert first.output_version == OUTPUT_VERSION_V1
     assert first.size_bytes > 0
     envelope = json.loads(first.input_json)
-    assert envelope["promptVersion"] == PROMPT_VERSION_V2
+    assert envelope["promptVersion"] == PROMPT_VERSION_V4
     assert envelope["contextVersion"] == AGENT_TASK_SCHEMA_VERSION_V1
     assert envelope["outputVersion"] == OUTPUT_VERSION_V1
     assert envelope["task"]["taskId"] == "task-1"
@@ -142,6 +142,43 @@ def test_empty_private_strategy_receives_a_bounded_market_default() -> None:
     assert "Re-evaluate every round" in strategy
     assert "expired event price" in strategy
     assert "executable" in strategy
+
+
+def test_decision_prompt_prevents_event_double_counting_and_herding() -> None:
+    built = PromptBuilder().build(
+        _task(),
+        strategy_instructions="Use the supplied numeric profile.",
+    )
+
+    assert "market prices already include active market-target effects" in (
+        built.system_instructions
+    )
+    assert "never apply a market-target effect twice" in built.system_instructions
+    assert "compare every allowed good" in built.system_instructions
+    assert "privateStrategyInstructions" in built.system_instructions
+    assert "limitPrice is your reservation boundary" in built.system_instructions
+    assert "marketPrice = untrustedArenaData.market[good]" in (
+        built.system_instructions
+    )
+    assert "never a formula" in built.system_instructions
+    assert "Pass only when no legal action satisfies" in built.system_instructions
+
+
+def test_negotiation_prompt_defines_numeric_limit_and_convergence_rules() -> None:
+    built = PromptBuilder().build(
+        _task(negotiate=True),
+        strategy_instructions="Negotiate for positive value.",
+    )
+
+    assert "buyer" in built.system_instructions
+    assert "at or below limitPrice" in built.system_instructions
+    assert "seller" in built.system_instructions
+    assert "at or above limitPrice" in built.system_instructions
+    assert "propose exactly your own limitPrice" in built.system_instructions
+    assert "accept immediately" in built.system_instructions
+    assert "counter exactly at your own limitPrice" in built.system_instructions
+    assert "never widen the gap" in built.system_instructions
+    assert "remainingTurns is 0" in built.system_instructions
 
 
 @pytest.mark.parametrize(

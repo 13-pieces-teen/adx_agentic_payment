@@ -14,11 +14,14 @@ from pydantic import TypeAdapter, ValidationError
 
 from arena_agent_contracts import (
     AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+    AcceptAction,
     AgentActionV1,
     AgentTaskResultV1,
     ArenaAgentTaskV1,
+    ArenaNegotiateInputV1,
     DecideActionV1,
     NegotiateActionV1,
+    ProposeAction,
 )
 from arena_core.hashing import sha256_identifier
 
@@ -81,6 +84,33 @@ def _require_aware(value: datetime, *, label: str) -> datetime:
     ):
         raise ValueError(f"{label} must be an aware datetime")
     return value
+
+
+def _violates_negotiation_limit(
+    task: ArenaAgentTaskV1,
+    action: AgentActionV1,
+) -> bool:
+    task_input = task.input
+    if (
+        not isinstance(task_input, ArenaNegotiateInputV1)
+        or task_input.limit_price is None
+    ):
+        return False
+    price = None
+    if isinstance(action, ProposeAction):
+        price = action.price
+    elif (
+        isinstance(action, AcceptAction)
+        and task_input.latest_counterparty_quote is not None
+    ):
+        price = task_input.latest_counterparty_quote.price
+    if price is None:
+        return False
+    return (
+        task_input.role == "buyer" and price > task_input.limit_price
+    ) or (
+        task_input.role == "seller" and price < task_input.limit_price
+    )
 
 
 class DirectModelInfrastructureError(RuntimeError):
@@ -471,6 +501,7 @@ class DirectModelDriver:
         except PromptBuildError:
             return self._result(task_snapshot, status="failed")
 
+        correction_code: Literal["limit_price_violation"] | None = None
         for attempt_number in range(
             first_attempt_number,
             MAX_PROVIDER_ATTEMPTS + 1,
@@ -483,6 +514,18 @@ class DirectModelDriver:
                         "timed_out" if remaining_ms <= 0 else "failed"
                     ),
                 )
+
+            try:
+                attempt_prompt = (
+                    prompt
+                    if correction_code is None
+                    else self._prompt_builder.with_bounded_correction(
+                        prompt,
+                        code=correction_code,
+                    )
+                )
+            except PromptBuildError:
+                return self._result(task_snapshot, status="failed")
 
             try:
                 resolved = self._registry.resolve(
@@ -553,7 +596,7 @@ class DirectModelDriver:
                     task=task_snapshot,
                     attempt_id=attempt_id,
                     resolved=resolved,
-                    prompt=prompt,
+                    prompt=attempt_prompt,
                     remaining_ms=remaining_ms,
                 )
                 await asyncio.wait_for(
@@ -582,7 +625,7 @@ class DirectModelDriver:
                     task=task_snapshot,
                     attempt_id=attempt_id,
                     resolved=resolved,
-                    prompt=prompt,
+                    prompt=attempt_prompt,
                     remaining_ms=remaining_ms,
                 )
                 await asyncio.wait_for(
@@ -621,7 +664,7 @@ class DirectModelDriver:
                 task=task_snapshot,
                 attempt_id=attempt_id,
                 resolved=resolved,
-                prompt=prompt,
+                prompt=attempt_prompt,
                 remaining_ms=remaining_ms,
             )
 
@@ -698,6 +741,24 @@ class DirectModelDriver:
                     provider_request_id=response.provider_request_id,
                 )
                 if should_retry:
+                    continue
+                return self._terminal_after_failure(task_snapshot, budget)
+
+            if _violates_negotiation_limit(task_snapshot, action):
+                validation_error = ProviderInvocationError(
+                    "invalid_structured_output"
+                )
+                should_retry = await self._record_failure(
+                    attempt_id=attempt_id,
+                    started_monotonic=attempt_started_monotonic,
+                    error=validation_error,
+                    budget=budget,
+                    attempt_number=attempt_number,
+                    usage=response.usage,
+                    provider_request_id=response.provider_request_id,
+                )
+                if should_retry:
+                    correction_code = "limit_price_violation"
                     continue
                 return self._terminal_after_failure(task_snapshot, budget)
 

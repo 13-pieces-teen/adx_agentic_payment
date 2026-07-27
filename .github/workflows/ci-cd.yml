@@ -1,0 +1,308 @@
+name: Arena 402 CI/CD
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/ci.txt
+      - name: Install hash-locked dependencies
+        run: >-
+          python -m pip install
+          --require-hashes
+          --requirement requirements/ci.txt
+      - name: Compile maintained Python packages
+        run: >-
+          python -m compileall -q
+          arena_agent_contracts
+          arena_core
+          arena_game
+          arena_memorial
+          arena_payments
+          arena_wallets
+          connector_gateway
+          hosted_agent_control_plane
+          hosted_agent_runtime
+          web
+      - name: Run the Python suite
+        run: python -m pytest -q -p no:cacheprovider
+
+  connector:
+    name: Connector tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: connector/go.mod
+          cache-dependency-path: connector/go.sum
+      - name: Test the Connector
+        working-directory: connector
+        run: go test ./...
+
+  settlement:
+    name: Settlement tests (${{ matrix.component }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: facilitator
+            directory: agent-arena/settlement/facilitator
+            typecheck: true
+            needs_rpc: false
+          - component: sdk
+            directory: agent-arena/settlement/sdk
+            typecheck: false
+            needs_rpc: false
+          - component: contracts
+            directory: agent-arena/settlement/contracts
+            typecheck: false
+            needs_rpc: true
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+          cache: npm
+          package-manager-cache: false
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - name: Install locked Node.js dependencies
+        working-directory: ${{ matrix.directory }}
+        run: npm ci --no-audit --no-fund
+      - name: Run component tests
+        if: ${{ ! matrix.needs_rpc }}
+        working-directory: ${{ matrix.directory }}
+        run: npm test
+      - name: Run contract tests against an isolated Hardhat node
+        if: matrix.needs_rpc
+        working-directory: ${{ matrix.directory }}
+        run: |
+          set -euo pipefail
+          npm run node > "${RUNNER_TEMP}/arena402-hardhat.log" 2>&1 &
+          hardhat_pid=$!
+          trap 'kill "${hardhat_pid}" 2>/dev/null || true' EXIT
+          rpc_ready=false
+          for attempt in $(seq 1 30); do
+            if curl \
+              --silent \
+              --show-error \
+              --fail \
+              --header 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+              http://127.0.0.1:8545/ \
+              | grep -q '"result"'; then
+              rpc_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "${rpc_ready}" != "true" ]]; then
+            cat "${RUNNER_TEMP}/arena402-hardhat.log"
+            exit 1
+          fi
+          npm test
+      - name: Type-check the Facilitator
+        if: matrix.typecheck
+        working-directory: ${{ matrix.directory }}
+        run: npm run typecheck
+
+  production-images:
+    name: Production image build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs:
+      - python
+      - connector
+      - settlement
+    env:
+      DOCKER_BUILDKIT: "1"
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Generate an isolated Compose validation environment
+        run: |
+          set -euo pipefail
+          sh deploy/scripts/generate-env.sh \
+            --app-url https://www.example.test \
+            --invite-output-file /tmp/arena402-ci-invite \
+            api.example.test
+          docker compose \
+            --env-file deploy/.env \
+            --file docker-compose.production.yml \
+            config --quiet
+          rm -f -- deploy/.env /tmp/arena402-ci-invite
+      - name: Build the production API image
+        run: >-
+          docker build
+          --file deploy/docker/Dockerfile.api
+          --tag arena402-api:${GITHUB_SHA}
+          .
+      - name: Build the production Facilitator image
+        run: >-
+          docker build
+          --file deploy/docker/Dockerfile.facilitator
+          --tag arena402-facilitator:${GITHUB_SHA}
+          .
+      - name: Build the production wallet signer image
+        run: >-
+          docker build
+          --file deploy/docker/Dockerfile.wallet-signer
+          --tag arena402-wallet-signer:${GITHUB_SHA}
+          .
+
+  deploy-production:
+    name: Deploy production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs:
+      - python
+      - connector
+      - settlement
+      - production-images
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://api.arena402.com/api/health
+    concurrency:
+      group: arena402-production
+      cancel-in-progress: false
+    env:
+      PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT || '22' }}
+      PROD_RELEASE_DIR: ${{ vars.PROD_RELEASE_DIR || '/home/ubuntu/adx_agentic_payment' }}
+      PROD_EXPECTED_PUBLIC_IP: ${{ vars.PROD_EXPECTED_PUBLIC_IP }}
+      PROD_CURRENT_GAME_ROUND_COUNT: ${{ vars.PROD_CURRENT_GAME_ROUND_COUNT || '8' }}
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Validate the protected deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${PROD_SSH_HOST}"
+          test -n "${PROD_SSH_USER}"
+          test -n "${PROD_SSH_PRIVATE_KEY}"
+          test -n "${PROD_SSH_KNOWN_HOSTS}"
+          [[ "${PROD_SSH_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "${PROD_SSH_USER}" =~ ^[A-Za-z0-9._-]+$ ]]
+          [[ "${PROD_SSH_PORT}" =~ ^[0-9]+$ ]]
+          [[ "${PROD_CURRENT_GAME_ROUND_COUNT}" =~ ^[0-9]+$ ]]
+          (( PROD_CURRENT_GAME_ROUND_COUNT >= 1 ))
+          (( PROD_CURRENT_GAME_ROUND_COUNT <= 10 ))
+          [[ "${PROD_RELEASE_DIR}" == /* ]]
+          [[ "${PROD_RELEASE_DIR}" != *".."* ]]
+          [[ "${PROD_RELEASE_DIR}" != *"'"* ]]
+          if [[ -n "${PROD_EXPECTED_PUBLIC_IP}" ]]; then
+            [[ "${PROD_EXPECTED_PUBLIC_IP}" =~ ^[0-9.]+$ ]]
+          fi
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Create the exact source archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/arena402-${GITHUB_SHA}.tar"
+          git archive --format=tar --output="${archive}" "${GITHUB_SHA}"
+          checksum="$(sha256sum "${archive}" | awk '{print $1}')"
+          tar -tf "${archive}" | grep -Fx 'deploy/scripts/deploy.sh'
+          tar -tf "${archive}" | grep -Fx 'docker-compose.production.yml'
+          if tar -tf "${archive}" | grep -Eq '(^|/)\.env($|\.)|\.pem$|\.key$'; then
+            echo "Release archive contains a forbidden secret-shaped path." >&2
+            exit 1
+          fi
+          printf 'archive=%s\n' "${archive}" >> "${GITHUB_OUTPUT}"
+          printf 'checksum=%s\n' "${checksum}" >> "${GITHUB_OUTPUT}"
+      - name: Configure pinned SSH trust
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0700 -d "${HOME}/.ssh"
+          printf '%s\n' "${PROD_SSH_PRIVATE_KEY}" > "${HOME}/.ssh/arena402_deploy"
+          printf '%s\n' "${PROD_SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 0600 "${HOME}/.ssh/arena402_deploy" "${HOME}/.ssh/known_hosts"
+      - name: Transfer and deploy the verified release
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${PROD_SSH_USER}@${PROD_SSH_HOST}"
+          remote_archive="/tmp/arena402-${GITHUB_SHA}.tar"
+          remote_script="/tmp/arena402-release-${GITHUB_SHA}.sh"
+          ssh_options=(
+            -i "${HOME}/.ssh/arena402_deploy"
+            -p "${PROD_SSH_PORT}"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+          )
+          scp_options=(
+            -i "${HOME}/.ssh/arena402_deploy"
+            -P "${PROD_SSH_PORT}"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=15
+          )
+          ssh "${ssh_options[@]}" "${target}" \
+            "test \"\$(hostname)\" != \"\" && test -d '${PROD_RELEASE_DIR}'"
+          scp "${scp_options[@]}" \
+            "${{ steps.package.outputs.archive }}" \
+            "${target}:${remote_archive}"
+          scp "${scp_options[@]}" \
+            deploy/scripts/release.sh \
+            "${target}:${remote_script}"
+          printf -v remote_command \
+            'sudo -n sh %q --archive %q --commit %q --checksum %q --release-dir %q' \
+            "${remote_script}" \
+            "${remote_archive}" \
+            "${GITHUB_SHA}" \
+            "${{ steps.package.outputs.checksum }}" \
+            "${PROD_RELEASE_DIR}"
+          printf -v remote_command \
+            '%s --current-game-round-count %q --refresh-official-strategies true' \
+            "${remote_command}" \
+            "${PROD_CURRENT_GAME_ROUND_COUNT}"
+          if [[ -n "${PROD_EXPECTED_PUBLIC_IP}" ]]; then
+            printf -v remote_command \
+              '%s --expected-public-ip %q' \
+              "${remote_command}" \
+              "${PROD_EXPECTED_PUBLIC_IP}"
+          fi
+          ssh "${ssh_options[@]}" "${target}" "${remote_command}"
+      - name: Remove the ephemeral SSH key
+        if: always()
+        shell: bash
+        run: rm -f -- "${HOME}/.ssh/arena402_deploy"

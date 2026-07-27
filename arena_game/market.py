@@ -57,8 +57,16 @@ class Pairing:
             raise MarketError("pairing quantity must be positive")
 
 
+def _limits_overlap(buyer: PoolEntry, seller: PoolEntry) -> bool:
+    return (
+        buyer.limit_price_atomic is None
+        or seller.limit_price_atomic is None
+        or buyer.limit_price_atomic >= seller.limit_price_atomic
+    )
+
+
 def fcfs_pair(entries: Iterable[PoolEntry]) -> tuple[Pairing, ...]:
-    """Pair buyers and sellers by authoritative receive time, per good."""
+    """Pair price-compatible buyers and sellers by receive time, per good."""
 
     materialized = tuple(entries)
     if len({entry.pool_entry_id for entry in materialized}) != len(materialized):
@@ -94,16 +102,27 @@ def fcfs_pair(entries: Iterable[PoolEntry]) -> tuple[Pairing, ...]:
                 entry.pool_entry_id,
             ),
         )
-        for index, (buyer, seller) in enumerate(
-            zip(buyers, sellers, strict=False),
-            start=1,
-        ):
+        unmatched_sellers = list(sellers)
+        sequence = 0
+        for buyer in buyers:
+            compatible_index = next(
+                (
+                    index
+                    for index, seller in enumerate(unmatched_sellers)
+                    if _limits_overlap(buyer, seller)
+                ),
+                None,
+            )
+            if compatible_index is None:
+                continue
+            seller = unmatched_sellers.pop(compatible_index)
             if buyer.participant_id == seller.participant_id:
                 raise MarketError("a participant cannot trade with itself")
+            sequence += 1
             output.append(
                 Pairing(
                     pairing_id=(
-                        f"pair:{buyer.game_id}:{buyer.round_id}:{good}:{index}"
+                        f"pair:{buyer.game_id}:{buyer.round_id}:{good}:{sequence}"
                     ),
                     game_id=buyer.game_id,
                     round_id=buyer.round_id,
@@ -112,7 +131,7 @@ def fcfs_pair(entries: Iterable[PoolEntry]) -> tuple[Pairing, ...]:
                     seller_entry_id=seller.pool_entry_id,
                     buyer_participant_id=buyer.participant_id,
                     seller_participant_id=seller.participant_id,
-                    sequence=index,
+                    sequence=sequence,
                     quantity=min(buyer.quantity, seller.quantity),
                     buyer_limit_price_atomic=buyer.limit_price_atomic,
                     seller_limit_price_atomic=seller.limit_price_atomic,

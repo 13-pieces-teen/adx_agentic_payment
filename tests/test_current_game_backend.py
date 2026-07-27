@@ -129,6 +129,71 @@ class _CreatePool:
         return _Acquire(self.connection)
 
 
+class _HistoricalGameStateConnection(_CreateConnection):
+    async def fetchrow(self, query: str, *_: object):
+        self.queries.append(query)
+        if "FROM arena402.games" in query:
+            return {
+                "game_id": "game-completed",
+                "phase": "completed",
+                "round_count": 1,
+                "current_round": 1,
+                "event_schedule_commitment": "sha256:" + "0" * 64,
+                "event_seed": "historical-seed",
+                "event_seed_revealed_at": datetime(
+                    2026, 7, 27, 12, tzinfo=timezone.utc
+                ),
+                "started_at": datetime(
+                    2026, 7, 27, 11, tzinfo=timezone.utc
+                ),
+                "completed_at": datetime(
+                    2026, 7, 27, 12, tzinfo=timezone.utc
+                ),
+            }
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+    async def fetch(self, query: str, *_: object):
+        self.queries.append(query)
+        if "FROM arena402.game_participants" in query:
+            return [
+                {
+                    "game_participant_id": "gp:game-completed:agent-random",
+                    "agent_id": "agent_random0123456789",
+                    "display_name": "Player Merchant",
+                    "runtime_kind": "hosted",
+                    "status": "completed",
+                }
+            ]
+        if "FROM arena402.rounds" in query:
+            return [
+                {
+                    "round_id": "round:game-completed:1",
+                    "round_index": 1,
+                    "phase": "closed",
+                    "phase_deadline_at": None,
+                }
+            ]
+        if "FROM arena402.rankings" in query:
+            return [
+                {
+                    "rank": 1,
+                    "game_participant_id": (
+                        "gp:game-completed:agent-random"
+                    ),
+                    "agent_id": "agent_random0123456789",
+                    "display_name": "Player Merchant",
+                    "net_worth_atomic": 20_000_000,
+                    "tier": "公爵",
+                    "calculated_at": datetime(
+                        2026, 7, 27, 12, tzinfo=timezone.utc
+                    ),
+                }
+            ]
+        if "FROM arena402.final_settlement_prices" in query:
+            return []
+        raise AssertionError(f"Unexpected fetch query: {query}")
+
+
 class _JoinPreflightConnection(_CreateConnection):
     participant_count = 0
     existing_participant = None
@@ -224,6 +289,28 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
         "user_id" not in participant
         for participant in value["game"]["participants"]
     )
+
+
+def test_historical_game_state_exposes_agent_identity_without_owner_data() -> None:
+    connection = _HistoricalGameStateConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    value = asyncio.run(repository.game_state("game-completed"))
+
+    assert value["participants"] == [
+        {
+            "gameParticipantId": "gp:game-completed:agent-random",
+            "agentId": "agent_random0123456789",
+            "displayName": "Player Merchant",
+            "runtimeKind": "hosted",
+            "status": "completed",
+        }
+    ]
+    assert value["rankings"][0]["displayName"] == "Player Merchant"
+    assert "userId" not in json.dumps(value)
 
 
 def test_current_game_reports_blocked_when_official_pool_cannot_fill_deficit() -> None:

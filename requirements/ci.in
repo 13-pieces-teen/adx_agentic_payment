@@ -1,0 +1,4 @@
+# CI dependencies. Keep production dependencies and test tooling in one
+# hash-locked environment so GitHub Actions exercises the deployed stack.
+-r production.txt
+pytest>=7.4,<9

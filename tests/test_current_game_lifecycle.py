@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from arena_game.current_game_lifecycle import CurrentGameLifecycleWorker
 from arena_game.settlement import SettlementConfig
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Repository:
@@ -55,7 +59,7 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     assert call["official_fill_after_seconds"] == 300
     assert call["event_mode"] == "seeded_shuffle"
     assert call["settlement_config"] is settlement
-    assert len(call["events"]) == 5  # type: ignore[arg-type]
+    assert len(call["events"]) == 8  # type: ignore[arg-type]
 
 
 def test_lifecycle_activates_only_confirmed_gamecoin_seats() -> None:
@@ -69,6 +73,28 @@ def test_lifecycle_activates_only_confirmed_gamecoin_seats() -> None:
 
     assert result["activatedCount"] == 2
     assert result["startedGameId"] == "game-current"
+
+
+def test_production_current_game_defaults_to_eight_rounds_everywhere() -> None:
+    worker = (ROOT / "arena_game" / "production_worker.py").read_text(
+        encoding="utf-8"
+    )
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    example = (ROOT / "deploy" / "env.production.example").read_text(
+        encoding="utf-8"
+    )
+    generator = (ROOT / "deploy" / "scripts" / "generate-env.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'os.getenv("ADX_CURRENT_GAME_ROUND_COUNT", "8")' in worker
+    assert "ADX_CURRENT_GAME_ROUND_COUNT: ${ADX_CURRENT_GAME_ROUND_COUNT:-8}" in (
+        compose
+    )
+    assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in example
+    assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in generator
 
 
 def test_lifecycle_rejects_capacity_below_start_threshold() -> None:

@@ -890,6 +890,7 @@ class PostgresPawnhouseRepository:
                     """
                     SELECT
                         a.agent_id,
+                        a.name AS display_name,
                         b.runtime_binding_id,
                         hc.credential_id,
                         hc.provider,
@@ -925,6 +926,9 @@ class PostgresPawnhouseRepository:
                 if hosted is None:
                     raise PawnhouseRepositoryError("hosted_agent_not_ready")
                 config_snapshot = {
+                    "display_name": str(
+                        hosted.get("display_name") or agent_id
+                    ),
                     "provider_id": hosted["provider"],
                     "model_id": hosted["model"],
                     "credential_id": hosted["credential_id"],
@@ -1301,6 +1305,7 @@ class PostgresPawnhouseRepository:
                     """
                     SELECT
                         a.agent_id,
+                        a.name AS display_name,
                         b.runtime_binding_id,
                         b.connector_binding_id,
                         b.connector_binding_epoch
@@ -1328,6 +1333,9 @@ class PostgresPawnhouseRepository:
                         "connector_agent_not_ready"
                     )
                 config_snapshot = {
+                    "display_name": str(
+                        connector.get("display_name") or agent_id
+                    ),
                     "runtime_kind": "connector",
                     "credential_id": None,
                     "connector_binding_id": connector[
@@ -5119,10 +5127,25 @@ class PostgresPawnhouseRepository:
             participants = await connection.fetch(
                 """
                 SELECT
-                    game_participant_id, agent_id, runtime_kind, status
-                FROM arena402.game_participants
-                WHERE game_id = $1
-                ORDER BY joined_at, game_participant_id
+                    participant.game_participant_id,
+                    participant.agent_id,
+                    coalesce(
+                        game_agent.config_snapshot ->> 'display_name',
+                        agent.name,
+                        participant.agent_id
+                    ) AS display_name,
+                    participant.runtime_kind,
+                    participant.status
+                FROM arena402.game_participants AS participant
+                LEFT JOIN public.game_agents AS game_agent
+                  ON game_agent.game_agent_id =
+                     participant.game_participant_id
+                LEFT JOIN public.arena_agents AS agent
+                  ON agent.agent_id = participant.agent_id
+                WHERE participant.game_id = $1
+                ORDER BY
+                    participant.joined_at,
+                    participant.game_participant_id
                 """,
                 game_id,
             )
@@ -5139,10 +5162,19 @@ class PostgresPawnhouseRepository:
                 """
                 SELECT
                     r.rank, r.game_participant_id, p.agent_id,
+                    coalesce(
+                        game_agent.config_snapshot ->> 'display_name',
+                        agent.name,
+                        p.agent_id
+                    ) AS display_name,
                     r.net_worth_atomic, r.tier, r.calculated_at
                 FROM arena402.rankings AS r
                 JOIN arena402.game_participants AS p
                   ON p.game_participant_id = r.game_participant_id
+                LEFT JOIN public.game_agents AS game_agent
+                  ON game_agent.game_agent_id = p.game_participant_id
+                LEFT JOIN public.arena_agents AS agent
+                  ON agent.agent_id = p.agent_id
                 WHERE r.game_id = $1
                 ORDER BY r.rank
                 """,
@@ -5168,7 +5200,16 @@ class PostgresPawnhouseRepository:
                 if game["event_seed_revealed_at"] is not None
                 else None
             ),
-            "participants": [dict(row) for row in participants],
+            "participants": [
+                {
+                    "gameParticipantId": str(row["game_participant_id"]),
+                    "agentId": str(row["agent_id"]),
+                    "displayName": str(row["display_name"]),
+                    "runtimeKind": str(row["runtime_kind"]),
+                    "status": str(row["status"]),
+                }
+                for row in participants
+            ],
             "rounds": [dict(row) for row in rounds],
             "finalPrices": {
                 str(row["good_id"]): str(int(row["price_atomic"]))
@@ -5179,6 +5220,7 @@ class PostgresPawnhouseRepository:
                     "rank": int(row["rank"]),
                     "participantId": str(row["game_participant_id"]),
                     "agentId": str(row["agent_id"]),
+                    "displayName": str(row["display_name"]),
                     "netWorthAtomic": str(int(row["net_worth_atomic"])),
                     "tier": str(row["tier"]),
                     "calculatedAt": row["calculated_at"].isoformat(),
