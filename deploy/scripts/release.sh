@@ -247,6 +247,14 @@ for runtime_dir in artifacts secrets; do
       "${staging_dir}/deploy/${runtime_dir}/"
   fi
 done
+for runtime_dir in artifacts secrets; do
+  if [ -d "${release_dir}/${runtime_dir}" ]; then
+    mkdir -p -- "${staging_dir}/${runtime_dir}"
+    cp -a -- \
+      "${release_dir}/${runtime_dir}/." \
+      "${staging_dir}/${runtime_dir}/"
+  fi
+done
 
 backup_output="$(
   CDPATH='' cd -- "${release_dir}" \

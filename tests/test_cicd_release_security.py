@@ -66,6 +66,9 @@ def test_release_verifies_identity_before_activation_and_marks_after_health() ->
 def test_release_preserves_server_only_state_and_refuses_automatic_db_rollback() -> None:
     assert 'cp -p -- "${release_dir}/deploy/.env"' in RELEASE
     assert "for runtime_dir in artifacts secrets" in RELEASE
+    assert '"${release_dir}/deploy/${runtime_dir}"' in RELEASE
+    assert '"${release_dir}/${runtime_dir}"' in RELEASE
+    assert '"${staging_dir}/${runtime_dir}/"' in RELEASE
     assert "Automatic rollback is disabled because migrations may have started." in RELEASE
     assert "compose run --rm migrate" in RELEASE
     assert 'build-connector-artifacts.sh" --verify-only' in RELEASE
