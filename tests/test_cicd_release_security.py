@@ -96,6 +96,9 @@ def test_release_checks_runtime_and_public_boundaries() -> None:
         "DEPLOYED_ARCHIVE_SHA256",
     ):
         assert evidence in RELEASE
+    assert 'body.get("gameId")' in RELEASE
+    assert 'game.get("gameId")' in RELEASE
+    assert '-C\n            -o BatchMode=yes' in WORKFLOW
 
 
 def test_release_applies_the_frozen_current_game_round_count() -> None:

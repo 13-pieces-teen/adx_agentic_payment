@@ -442,7 +442,7 @@ case "${current_status}" in
   200)
     current_game_id="$(
       python3 -c \
-        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["gameId"])' \
+        'import json,sys; body=json.load(open(sys.argv[1], encoding="utf-8")); game=body.get("game"); print(body.get("gameId") or (game.get("gameId") if isinstance(game, dict) else ""))' \
         "${current_body}"
     )"
     case "${current_game_id}" in
