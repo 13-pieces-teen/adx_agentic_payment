@@ -626,6 +626,57 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 完成 wallet、Mandate、signer 权限和自动交易验收后，再设置为 `true` 并重新部署。
 该 flag 关闭时不得启动需要链上结算的新 Game；不能退回逐笔人工批准。
 
+### 7.1 GitHub Actions CI/CD
+
+仓库的 `.github/workflows/ci-cd.yml` 是 `main` 的持续交付入口：
+
+1. Pull Request 和 `main` push 均运行完整 Python suite、Connector Go
+   tests、Settlement/Facilitator/contract tests，以及三个生产 Docker 镜像构建。
+2. 只有 `refs/heads/main` 的全部 CI job 成功后才进入 GitHub
+   `production` Environment；`workflow_dispatch` 只允许从 `main` 重跑。
+3. workflow 使用完整 commit SHA 创建 `git archive` 和 SHA-256，不上传
+   worktree、`.env`、wallet key、Facilitator CSV 或 Hosted credential。
+4. 远端 `deploy/scripts/release.sh` 先校验归档，再调用 `backup.sh`，保存
+   timestamped rollback directory，继承服务器本地 `deploy/.env`、
+   `deploy/secrets/` 和已验证 Connector artifacts，最后调用
+   `deploy.sh`。
+5. release wrapper 将受保护变量 `PROD_CURRENT_GAME_ROUND_COUNT`（默认 8）
+   写入新 release 的 server-only `.env`，并在 Runtime 启动后幂等刷新
+   `market-v4` 官方策略；不重新读取 Provider key，也不广播链上交易。
+6. migration checksum、Connector artifact、预期容器、公开 `/api/health`、
+   未认证受保护接口 `401`、Current Game 与可用时的 SSE content type 全部
+   通过后，才写 `DEPLOYED_GIT_SHA` 和 `DEPLOYED_ARCHIVE_SHA256`。
+
+GitHub `production` Environment 需要配置以下 secrets：
+
+```text
+PROD_SSH_HOST
+PROD_SSH_USER
+PROD_SSH_PRIVATE_KEY
+PROD_SSH_KNOWN_HOSTS
+```
+
+以及以下非 secret variables：
+
+```text
+PROD_SSH_PORT=22
+PROD_RELEASE_DIR=/home/ubuntu/adx_agentic_payment
+PROD_EXPECTED_PUBLIC_IP=<optional expected IPv4>
+PROD_CURRENT_GAME_ROUND_COUNT=8
+```
+
+`PROD_SSH_KNOWN_HOSTS` 必须从独立可信通道核对服务器 host key；workflow
+不会用 `ssh-keyscan` 在首次连接时自动信任网络返回值。部署 SSH 用户需要能够
+以 `sudo -n` 执行 release wrapper、访问既有 root-only `deploy/.env`，并调用
+Docker Compose。生产 Environment 应启用 required reviewer；这样合并后的
+CI 和发布准备是自动的，但实际重启 signer/Facilitator/Settlement Worker 前仍有
+一次明确的人类确认。若关闭 required reviewer，则变为零点击发布，但 workflow
+仍不会改变服务器现有的自动支付开关或任何凭据。
+
+部署失败时保留新目录、数据库备份和旧版本 rollback directory，不自动恢复
+数据库。原因是失败前可能已有 forward-only migration 成功；操作者必须先确认
+schema 兼容性，再决定只回滚代码还是按备份恢复数据。
+
 ## 8. 上线验收
 
 ### 8.1 必须通过

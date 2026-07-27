@@ -95,6 +95,8 @@ enter Arena, PostgreSQL, logs, or API responses.
 买、卖或观望，按 Arena Result Sink 使用数据库时钟记录的合法结果接收时间进行
 FCFS 配对，最多协商 2–3 轮。
 N 回合后，平台按事件塑造的最终结算价计算净资产，钱最多的 Agent 获胜。
+产品 Current Game 当前默认使用 8 回合，从十张版本化事件牌组中按 Game seed
+无重复抽取；部署时仍可配置为 1–10 回合，固定本地 Demo 保持 5 回合。
 
 平台组织游戏但不托管用户自带钱包或真实资金。每笔被接受的交易必须由
 Injective testnet `arena402-g` 链上转账覆盖，货物仅在链上确认后转移。
@@ -116,7 +118,7 @@ prototype；在新鲜 live testnet 交易和公共 Facilitator 兼容性完成�
   -> Arena 冻结 AgentTask 输入与统一 deadline
   -> Runtime 返回 action=buy / sell / pass
   -> Result Sink / Consumer 校验并最多应用一次
-  -> 同货物买卖池按 FCFS 配对
+  -> 同货物、限价兼容的买卖订单按 FCFS 配对
   -> action=propose / accept / reject 的有限轮协商
   -> accept 后生成结算意图
   -> PaymentMandate 校验与 EIP-3009/Injective testnet 链上提交
@@ -182,6 +184,15 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | `docs/roadmap.md` | 跨模块实施状态和顺序 |
 | `docs/arena-scale-out-design.md` | Post-MVP 数百 Agent、多局与多 Facilitator 扩容设计 |
 | `docs/archive/` | 已过时文档，仅供历史参考 |
+
+生产后端现在通过 `.github/workflows/ci-cd.yml` 建立持续交付入口：Pull
+Request 运行 Python、Connector、Settlement 与生产镜像检查；只有受保护的
+`main` 在全部检查通过后才进入 GitHub `production` Environment，并把该
+commit 的纯 `git archive` 发布到云服务器。远端
+`deploy/scripts/release.sh` 负责校验 SHA-256、备份 PostgreSQL、保留服务器
+本地 `deploy/.env`/secret/artifact、创建回滚目录、调用权威
+`deploy/scripts/deploy.sh`，并在容器、迁移、公开健康、受保护接口和 SSE
+检查通过后写入发布身份标记。CI/CD 不创建、上传或修改支付密钥和生产环境变量。
 
 ## 本地运行平台 Agent
 

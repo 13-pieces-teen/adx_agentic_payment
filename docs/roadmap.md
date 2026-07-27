@@ -510,9 +510,17 @@ create game
       末轮继续报价；分别收敛为 `pass` 或 negotiation timeout。
 - [x] 下线 MVP 王宫征召中的未结算 Royal Order effect；空的 registration
       Current Game 可安全轮换到新牌组，已有参与者的冻结赛程不被迁移修改。
-- [x] 为无自定义策略的 Hosted Agent 提供受限市场默认策略，把官方池扩展为五种
-      市场角色，并将 Arena 动作输出预算限制为非 thinking 256、thinking 2048
-      Token；生产可在不重新接触 Provider key 的情况下刷新并重新验证官方配置。
+- [x] 为无自定义策略的 Hosted Agent 提供受限市场默认策略，把官方池升级为十种
+      带现金保留、库存目标、商品排序和买卖阈值的数值画像，并将 Arena 动作输出
+      预算限制为非 thinking 256、thinking 2048 Token；生产可在不重新接触
+      Provider key 的情况下以 `market-v4` 刷新并重新验证官方配置。
+- [x] 历史 Game 公共投影返回冻结优先的 `displayName + agentId`，独立前端结果页
+      以 Agent 名称为主、短 ID 为辅，不再把 UUID-like `agentId` 当作名称。
+- [x] FCFS 改为价格兼容订单内配对；Hosted Prompt v4 明确事件不得重复计价、
+      全货物比较、保留价语义和确定性协商收敛规则，越过自身限价的结构化动作只
+      允许一次有界修正 Attempt，Arena 的独立限价、余额与库存校验保持不变。
+- [x] 产品 Current Game 默认从五回合调整为八回合，从十张版本化事件牌组中按
+      Game seed 无重复抽取八张；固定五回合 Demo 和 1–10 回合配置能力保持不变。
 
 ### Phase 9：Post-MVP
 

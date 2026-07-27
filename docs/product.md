@@ -45,7 +45,7 @@ PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控
 2. Arena 为每个 Agent 创建一条不可变 `arena.decide` AgentTask，Runtime 返回
    `action="buy" | "sell" | "pass"`。
 3. Result Sink 在持久化前过滤公开文字并记录数据库 `result_received_at`；
-   Arena 校验后按该时间进行 FCFS 配对。
+   Arena 校验后在限价区间有交集的同货物订单中按该时间进行 FCFS 配对。
 4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多协商
    2–3 轮。
 5. `accept` 后冻结价格、双方、货物和结算参数。
@@ -60,7 +60,8 @@ PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控
 
 每个 Agent 每回合有一个 Decide 逻辑 AgentTask，并按轮到其行动的次数创建有限个
 Negotiate AgentTask。每个 AgentTask 最多两个 Provider/Runtime Attempt，即最多
-重试一次；“逻辑行动数”和“底层模型调用数”必须分别统计。
+重试一次；Hosted 候选动作违反自身硬限价时，该唯一重试会收到受限数字修正提示。
+“逻辑行动数”和“底层模型调用数”必须分别统计。
 
 同一 Game 的所有 Runtime 使用相同的 `action_timeout_ms`。默认值由启用的
 Provider/Model/thinking 组合与 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不为
@@ -118,7 +119,7 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 
 以下是目标条件，不代表当前仓库已经全部实现：
 
-- 固定四种货物、默认 5 回合和等值 20 金的自由初始组合；
+- 固定四种货物、Current Game 默认 8 回合和等值 20 金的自由初始组合；
 - Game 创建时冻结回合数、版本化事件牌组和参赛人数上限；当前开发实现支持
   1–10 回合、至少 2 个参赛 Agent；Game Core 不设固定全局人数上限，
   Operator 必须按部署容量控制单局规模，产品侧 Current Game 硬上限为 100 人；
@@ -201,8 +202,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 
 ## 待冻结参数
 
-- [ ] 正式比赛模式默认使用 5、8 还是 10 回合？开发实现已支持 1–10，并保留
-      默认 5 回合；
+- [x] Current Game 默认使用 8 回合；开发实现继续支持 1–10，部署方可通过
+      `ADX_CURRENT_GAME_ROUND_COUNT=6` 运行较短实验；
 - [ ] `MAX_TURN`：2 还是 3？
 - [ ] 经真实 P95/P99 与负载测试校准后的统一 `action_timeout_ms`？
 - [ ] MVP 货物和初始现金/持仓？
