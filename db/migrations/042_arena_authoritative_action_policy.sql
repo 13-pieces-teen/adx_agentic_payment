@@ -1,5 +1,11 @@
 BEGIN;
 
+-- The original SECURITY DEFINER function is owned by the isolated function
+-- owner. The admin migration connection lends ownership to the migration role
+-- only for this transaction; any failure rolls the ownership change back.
+ALTER FUNCTION apply_arena_agent_task_result(TEXT)
+    OWNER TO adx_arena_migration;
+
 SET LOCAL ROLE adx_arena_migration;
 
 -- Keep the PostgreSQL CAS projection aligned with the Python application
@@ -194,12 +200,12 @@ BEGIN
 END
 $apply_task_result$;
 
+RESET ROLE;
+
 ALTER FUNCTION apply_arena_agent_task_result(TEXT)
-    OWNER TO adx_arena_core;
+    OWNER TO adx_arena_function_owner;
 REVOKE ALL ON FUNCTION apply_arena_agent_task_result(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION apply_arena_agent_task_result(TEXT)
     TO adx_arena_core;
-
-RESET ROLE;
 
 COMMIT;

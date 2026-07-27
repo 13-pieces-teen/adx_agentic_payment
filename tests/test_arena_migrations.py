@@ -545,6 +545,8 @@ def test_authoritative_action_policy_migration_converges_sql_with_python():
     assert "buyer_opening_proposal_required" in sql
     assert "counterparty_proposal_required" in sql
     assert "final_turn_must_close" in sql
+    assert "OWNER TO adx_arena_migration" in sql
+    assert "OWNER TO adx_arena_function_owner" in sql
     assert "insufficient_inventory" in sql
 
 
