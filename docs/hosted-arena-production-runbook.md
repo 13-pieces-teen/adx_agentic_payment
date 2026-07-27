@@ -5,7 +5,7 @@
 > 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排，
 > 并已把生产 Current Game 硬上限配置为 100、Hosted Worker 配置为
 > 4 副本 × 25 task slot、Facilitator 配置为 4 个独立 EOA shard。
-> GitHub User 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
+> 平台 `user_id` 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
 > 隔离的 PostgreSQL 密文 signer、自动提交编排、只读链上确认和确认后库存提交。
 > 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自动链路已通过
 > Fake E2E；100 Agent、四 shard live testnet、公共 Facilitator、新鲜 testnet
@@ -145,11 +145,11 @@ Wallet binding 使用 `wallet_inventory` 与 `user_wallets`：
 validate external CSV without printing keys
   -> envelope-encrypt each key and import public identity + ciphertext
   -> remove CSV from the runtime host path after verification
-  -> first GitHub user access atomically binds one available row
+  -> first durable platform user access atomically binds one available row
   -> join freezes the same address into participant_settlement_accounts
 ```
 
-绑定以 `user_id`、不可变 GitHub numeric subject、`wallet_id` 和
+绑定以内部 `user_id`、可选 legacy GitHub numeric subject、`wallet_id` 和
 `(chain_id,address)` 唯一约束为幂等边界；并发登录使用 PostgreSQL row lock 与
 `SKIP LOCKED`。CSV 不复制进仓库、镜像、长期容器或日志；数据库只保存 AES-GCM
 密文。KEK 轮换只解包/重包每个 DEK，不改钱包地址或私钥密文，并用旧 version
@@ -341,7 +341,7 @@ lock 中完成。自动循环使用 `x402_settlement_attempts` 的 `FOR UPDATE S
 
 修改 `arena_game/postgres.py`：
 
-- Hosted Participant 加入时引用 GitHub User 永久绑定钱包并冻结 settlement account；
+- Hosted Participant 加入时引用平台 User 永久绑定钱包并冻结 settlement account；
 - 用户通过 Session + CSRF API 显式创建或撤销 Game-scoped Mandate；
 - negotiation apply 校验冻结的 `max_trade_price_atomic` 和 buyer 当前 cash；
 - accept 时在同一事务冻结 Intent；
