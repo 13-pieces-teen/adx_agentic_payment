@@ -101,14 +101,15 @@ if [ "${http_only}" = "true" ]; then
 fi
 
 if [ "${tls_mode}" = "http" ]; then
-  public_url="http://${public_host}"
+  public_api_url="http://${public_host}"
   adx_environment=development
   cookie_secure=false
 else
-  public_url="https://${public_host}"
+  public_api_url="https://${public_host}"
   adx_environment=production
   cookie_secure=true
 fi
+public_url="${public_api_url}"
 if [ -n "${app_url}" ]; then
   public_url="${app_url}"
 fi
@@ -162,6 +163,7 @@ umask 077
   printf 'ADX_TLS_MODE=%s\n' "${tls_mode}"
   printf 'ADX_PUBLIC_HOST=%s\n' "${public_host}"
   printf 'ADX_PUBLIC_APP_URL=%s\n' "${public_url}"
+  printf 'ADX_PUBLIC_API_URL=%s\n' "${public_api_url}"
   printf 'ADX_CADDY_CONFIG=%s\n' "${caddy_config}"
   printf '\n'
   printf 'POSTGRES_DB=adx\n'

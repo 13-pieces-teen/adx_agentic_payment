@@ -12,6 +12,9 @@ WORKFLOW = (
 RELEASE = (
     ROOT / "deploy" / "scripts" / "release.sh"
 ).read_text(encoding="utf-8")
+GENERATE_ENV = (
+    ROOT / "deploy" / "scripts" / "generate-env.sh"
+).read_text(encoding="utf-8")
 
 
 def test_workflow_deploys_only_main_after_all_ci_gates() -> None:
@@ -110,3 +113,10 @@ def test_release_refreshes_official_strategies_after_runtime_deploy() -> None:
     )
     health_index = RELEASE.index('health_url="${public_api_url%/}/api/health"')
     assert deploy_index < refresh_index < health_index
+
+
+def test_generated_environment_keeps_public_app_and_api_urls_separate() -> None:
+    assert 'public_api_url="https://${public_host}"' in GENERATE_ENV
+    assert 'public_url="${public_api_url}"' in GENERATE_ENV
+    assert "printf 'ADX_PUBLIC_APP_URL=%s\\n' \"${public_url}\"" in GENERATE_ENV
+    assert "printf 'ADX_PUBLIC_API_URL=%s\\n' \"${public_api_url}\"" in GENERATE_ENV
