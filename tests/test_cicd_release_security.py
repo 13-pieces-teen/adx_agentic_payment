@@ -73,6 +73,17 @@ def test_release_preserves_server_only_state_and_refuses_automatic_db_rollback()
     assert 'compose_file="${repo_dir}/docker-compose.production.yml"' in RELEASE
 
 
+def test_release_allows_only_the_tracked_environment_templates() -> None:
+    for template in (
+        '".env.example"',
+        '"agent-arena/settlement/.env.example"',
+        '"frontend/.env.example"',
+    ):
+        assert template in RELEASE
+    assert "/(^|\\/)\\.env($|\\.)/" in RELEASE
+    assert "/\\.pem$/ || /\\.key$/" in RELEASE
+
+
 def test_release_checks_runtime_and_public_boundaries() -> None:
     for evidence in (
         "require_running_service",
