@@ -116,14 +116,48 @@ def test_production_facilitator_builder_requires_all_four_shards() -> None:
             )
             for index in range(1, 5)
         },
+        **{
+            f"ADX_X402_FACILITATOR_{index}_EOA": (
+                "0x" + f"{index:040x}"
+            )
+            for index in range(1, 5)
+        },
     }
 
     client = build_facilitator_client(environment)
 
     assert isinstance(client, ShardedFacilitatorClient)
+    assert {
+        client.facilitator_id_for(_requirement(index))
+        for index in range(256)
+    } == {
+        "0x" + f"{index:040x}"
+        for index in range(1, 5)
+    }
     del environment["ADX_X402_FACILITATOR_4_URL"]
     with pytest.raises(
         RuntimeError,
         match="ADX_X402_FACILITATOR_4_URL is required",
     ):
+        build_facilitator_client(environment)
+
+
+def test_production_facilitator_builder_rejects_missing_or_duplicate_eoa() -> None:
+    environment = {
+        "ADX_X402_FACILITATOR_SHARD_COUNT": "2",
+        "ADX_X402_FACILITATOR_1_ID": "shard-1",
+        "ADX_X402_FACILITATOR_1_URL": "http://arena-facilitator-1:4021",
+        "ADX_X402_FACILITATOR_1_EOA": "0x" + "11" * 20,
+        "ADX_X402_FACILITATOR_2_ID": "shard-2",
+        "ADX_X402_FACILITATOR_2_URL": "http://arena-facilitator-2:4021",
+    }
+
+    with pytest.raises(
+        RuntimeError,
+        match="ADX_X402_FACILITATOR_2_EOA is required",
+    ):
+        build_facilitator_client(environment)
+
+    environment["ADX_X402_FACILITATOR_2_EOA"] = "0x" + "11" * 20
+    with pytest.raises(RuntimeError, match="facilitator shard EOAs must be unique"):
         build_facilitator_client(environment)

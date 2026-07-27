@@ -215,14 +215,42 @@ class EvmJsonRpcConfirmationReader:
             if not isinstance(tx_hash, str) or len(tx_hash) != 66:
                 raise ChainReadError("invalid_authorization_recovery_transaction")
             transaction = self._rpc("eth_getTransactionByHash", [tx_hash])
-            if not isinstance(transaction, dict):
-                continue
-            input_data = transaction.get("input")
+            input_data = (
+                transaction.get("input")
+                if isinstance(transaction, dict)
+                else self._blockscout_recovery_calldata(tx_hash)
+            )
             if _authorization_nonce_from_calldata(input_data) == expected_nonce:
                 matches.add(tx_hash.lower())
         if len(matches) > 1:
             raise ChainReadError("authorization_recovery_ambiguous")
         return next(iter(matches), None)
+
+    def _blockscout_recovery_calldata(self, tx_hash: str) -> object:
+        if self._blockscout_base_url is None:
+            return None
+        transaction = self._get_json(
+            f"{self._blockscout_base_url}/transactions/{tx_hash}"
+        )
+        if transaction is None:
+            return None
+        if not isinstance(transaction, dict):
+            raise ChainReadError("blockscout_invalid_transaction")
+        observed_hash = transaction.get("hash")
+        if (
+            observed_hash is not None
+            and (
+                not isinstance(observed_hash, str)
+                or observed_hash.lower() != tx_hash.lower()
+            )
+        ):
+            raise ChainReadError("blockscout_transaction_hash_mismatch")
+        if (
+            transaction.get("status") != "ok"
+            or transaction.get("result") != "success"
+        ):
+            raise ChainReadError("chain_transaction_reverted")
+        return transaction.get("raw_input", transaction.get("input"))
 
     def _read_blockscout(
         self,

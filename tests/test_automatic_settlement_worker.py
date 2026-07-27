@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -94,6 +96,11 @@ class _RoutedCoordinator(_ClockCapturingCoordinator):
         return "shard-3"
 
 
+class _RoutedRealCoordinator(X402SettlementCoordinator):
+    def facilitator_id(self, _payment_required):
+        return "shard-3"
+
+
 class _AmbiguousFacilitator(_Facilitator):
     async def settle(self, **_: object) -> FacilitatorSettlement:
         raise FacilitatorError("facilitator_unreachable", ambiguous=True)
@@ -107,6 +114,9 @@ class _Source:
         self.claims = 0
         self.claimed_facilitator_ids: list[str] = []
         self.recovered: list[tuple[str, str]] = []
+        self.payload_digests: list[str | None] = []
+        self.facilitator_fence_claims: list[tuple[str, str]] = []
+        self.facilitator_fence_releases: list[tuple[str, str]] = []
 
     async def authorization_targets(self, *, limit: int):
         assert limit == 25
@@ -129,8 +139,38 @@ class _Source:
         self.claimed_facilitator_ids.append(facilitator_id)
         return self.claims == 1
 
-    async def mark_attempt(self, *, status: str, **_: object):
+    async def mark_attempt(
+        self,
+        *,
+        status: str,
+        payment_payload_digest: str | None = None,
+        **_: object,
+    ):
         self.statuses.append(status)
+        self.payload_digests.append(payment_payload_digest)
+
+    async def claim_facilitator_fence(
+        self,
+        *,
+        facilitator_id: str,
+        settlement_intent_id: str,
+        **_: object,
+    ) -> bool:
+        self.facilitator_fence_claims.append(
+            (facilitator_id, settlement_intent_id)
+        )
+        return True
+
+    async def release_facilitator_fence(
+        self,
+        *,
+        facilitator_id: str,
+        settlement_intent_id: str,
+        **_: object,
+    ) -> None:
+        self.facilitator_fence_releases.append(
+            (facilitator_id, settlement_intent_id)
+        )
 
     async def fail_settlement(self, *, safe_error_code: str, **_: object):
         self.failures.append(safe_error_code)
@@ -157,6 +197,17 @@ class _UnknownSource(_Source):
     async def unknown_submission_targets(self, *, limit: int):
         assert limit == 25
         return ["intent-1"]
+
+
+class _UnavailableFenceSource(_Source):
+    async def claim_facilitator_fence(self, **kwargs: object) -> bool:
+        self.facilitator_fence_claims.append(
+            (
+                str(kwargs["facilitator_id"]),
+                str(kwargs["settlement_intent_id"]),
+            )
+        )
+        return False
 
 
 class _UnknownPersistenceFailureSource(_Source):
@@ -250,6 +301,57 @@ def test_worker_runs_wallet_to_x402_to_submission_without_human_gate() -> None:
     assert reservation.status == "submitted"
 
 
+def test_worker_persists_signed_payment_payload_digest_before_submission() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _Source(mandate)
+    signer = _Signer()
+    coordinator = X402SettlementCoordinator(
+        payments=payments,
+        arena=_Arena(),
+        facilitator=_Facilitator(),
+    )
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=signer,
+        coordinator=coordinator,
+        worker_id="worker-1",
+    )
+    payment_required = coordinator.payment_required(_terms())
+    payload = asyncio.run(
+        signer.create_payment_payload(
+            payment_required=payment_required,
+            wallet_id=mandate.wallet_id,
+            expected_from=_terms().payer,
+        )
+    )
+    expected = "sha256:" + hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with patch.object(
+        signer,
+        "create_payment_payload",
+        return_value=payload,
+    ):
+        asyncio.run(worker.run_once())
+
+    assert source.payload_digests == [expected, None, None]
+
+
 def test_worker_validates_signed_payload_against_post_signing_clock() -> None:
     before_signing = datetime(2026, 7, 26, 1, 2, 3, tzinfo=timezone.utc)
     after_signing = before_signing + timedelta(seconds=2)
@@ -271,7 +373,7 @@ def test_worker_validates_signed_payload_against_post_signing_clock() -> None:
     )
 
     with patch("arena_payments.automatic_worker.datetime") as clock:
-        clock.now.side_effect = [before_signing, after_signing]
+        clock.now.side_effect = [before_signing, after_signing, after_signing]
         asyncio.run(worker.run_once())
 
     assert coordinator.execution_now == after_signing
@@ -299,6 +401,66 @@ def test_worker_persists_facilitator_route_before_signing() -> None:
 
     assert source.claimed_facilitator_ids == ["shard-3"]
     assert source.statuses == ["signed", "submitting", "submitted"]
+
+
+def test_worker_holds_durable_facilitator_fence_around_broadcast() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _Source(mandate)
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_Signer(),
+        coordinator=_RoutedRealCoordinator(
+            payments=payments,
+            arena=_Arena(),
+            facilitator=_Facilitator(),
+        ),
+        worker_id="worker-1",
+    )
+
+    asyncio.run(worker.run_once())
+
+    expected = [("shard-3", "intent-1")]
+    assert source.facilitator_fence_claims == expected
+    assert source.facilitator_fence_releases == expected
+
+
+def test_worker_does_not_broadcast_without_durable_facilitator_fence() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _UnavailableFenceSource(mandate)
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_Signer(),
+        coordinator=_RoutedRealCoordinator(
+            payments=payments,
+            arena=_Arena(),
+            facilitator=_Facilitator(),
+        ),
+        worker_id="worker-1",
+    )
+
+    asyncio.run(worker.run_once())
+
+    expected = [("shard-3", "intent-1")]
+    assert source.statuses == ["signed"]
+    assert source.facilitator_fence_claims == expected
+    assert source.facilitator_fence_releases == []
+    assert next(iter(payments.reservations.values())).status == "reserved"
 
 
 def test_signer_failure_releases_reserved_mandate_budget() -> None:
@@ -365,6 +527,8 @@ def test_unknown_submission_never_releases_budget_on_persistence_failure() -> No
         raise AssertionError("expected persistence failure")
 
     assert source.statuses == ["signed", "submitting", "unknown"]
+    assert source.facilitator_fence_claims == [("configured", "intent-1")]
+    assert source.facilitator_fence_releases == []
     assert payments.mandates["mandate-1"].reserved_atomic == 40
     assert next(iter(payments.reservations.values())).status == "reserved"
 

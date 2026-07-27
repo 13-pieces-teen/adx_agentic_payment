@@ -26,6 +26,10 @@ class _Pool:
         self.calls.append((query, args))
         return {"settlement_intent_id": str(args[0])}
 
+    async def execute(self, query: str, *args: object) -> str:
+        self.calls.append((query, args))
+        return "DELETE 1"
+
 
 class _Payments:
     def __init__(self, pool: _Pool) -> None:
@@ -91,6 +95,119 @@ def test_claim_persists_the_selected_facilitator_shard() -> None:
     assert "facilitator_id" in query
     assert "EXCLUDED.facilitator_id" in query
     assert args[4] == "shard-3"
+
+
+def test_facilitator_fence_claim_atomically_blocks_unresolved_broadcasts() -> None:
+    pool = _Pool()
+    source = PostgresAutomaticSettlementSource(
+        payments=_Payments(pool),  # type: ignore[arg-type]
+        arena=object(),  # type: ignore[arg-type]
+        public_api_url="https://api.example.test",
+    )
+    now = datetime(2026, 7, 26, tzinfo=timezone.utc)
+
+    claimed = asyncio.run(
+        source.claim_facilitator_fence(
+            facilitator_id="shard-3",
+            settlement_intent_id="intent-1",
+            worker_id="worker-1",
+            now=now,
+        )
+    )
+
+    query, args = pool.calls[0]
+    assert claimed is True
+    assert "INSERT INTO arena402.facilitator_broadcast_fences" in query
+    assert "attempt.status IN ('submitting', 'unknown')" in query
+    assert "submission.settlement_intent_id IS NULL" in query
+    assert "fence.lease_expires_at < $5" in query
+    assert args[:3] == ("shard-3", "intent-1", "worker-1")
+
+
+def test_facilitator_fence_release_is_owner_and_intent_scoped() -> None:
+    pool = _Pool()
+    source = PostgresAutomaticSettlementSource(
+        payments=_Payments(pool),  # type: ignore[arg-type]
+        arena=object(),  # type: ignore[arg-type]
+        public_api_url="https://api.example.test",
+    )
+
+    asyncio.run(
+        source.release_facilitator_fence(
+            facilitator_id="shard-3",
+            settlement_intent_id="intent-1",
+            worker_id="worker-1",
+        )
+    )
+
+    query, args = pool.calls[0]
+    assert "DELETE FROM arena402.facilitator_broadcast_fences" in query
+    assert "facilitator_id = $1" in query
+    assert "settlement_intent_id = $2" in query
+    assert "lease_owner = $3" in query
+    assert args == ("shard-3", "intent-1", "worker-1")
+
+
+def test_recovered_submission_clears_the_unresolved_facilitator_fence() -> None:
+    class _RecoveryPool(_Pool):
+        async def fetchrow(
+            self,
+            query: str,
+            *args: object,
+        ) -> dict[str, str]:
+            self.calls.append((query, args))
+            return {
+                "reservation_id": "reservation-1",
+                "facilitator_id": "shard-3",
+            }
+
+    class _RecoveryPayments(_Payments):
+        async def submit_reservation(self, *_: object, **__: object) -> None:
+            return None
+
+    class _RecoveryArena:
+        async def settlement_intent_for_payment(self, **_: object):
+            return type(
+                "Intent",
+                (),
+                {
+                    "settlement_intent_id": "intent-1",
+                    "intent_hash": "sha256:" + "11" * 32,
+                    "game_id": "game-1",
+                    "buyer_account": "0x" + "22" * 20,
+                    "seller_account": "0x" + "33" * 20,
+                    "chain_id": 1439,
+                    "token_address": "0x" + "44" * 20,
+                    "token_symbol": "arena402-g",
+                    "token_decimals": 6,
+                    "token_eip712_name": "Arena402 Game Coin",
+                    "token_eip712_version": "1",
+                    "amount_atomic": 2_500_000,
+                },
+            )()
+
+        async def record_automatic_submission(self, **_: object) -> None:
+            return None
+
+    pool = _RecoveryPool()
+    source = PostgresAutomaticSettlementSource(
+        payments=_RecoveryPayments(pool),  # type: ignore[arg-type]
+        arena=_RecoveryArena(),  # type: ignore[arg-type]
+        public_api_url="https://api.example.test",
+    )
+
+    asyncio.run(
+        source.record_recovered_submission(
+            settlement_intent_id="intent-1",
+            tx_hash="0x" + "55" * 32,
+            now=datetime(2026, 7, 26, tzinfo=timezone.utc),
+        )
+    )
+
+    assert "facilitator_id" in pool.calls[0][0]
+    delete_query, delete_args = pool.calls[-1]
+    assert "DELETE FROM arena402.facilitator_broadcast_fences" in delete_query
+    assert delete_args == ("shard-3", "intent-1")
 
 
 def test_settlement_repository_uses_least_privilege_database_role() -> None:

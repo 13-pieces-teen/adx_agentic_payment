@@ -158,6 +158,10 @@ if [ "${automatic_payments_enabled}" = "true" ]; then
     echo "Automatic payments require ADX_ENABLE_TESTNET_SIGNER=true." >&2
     exit 1
   fi
+  if [ "${enable_testnet_facilitator}" != "true" ]; then
+    echo "Automatic payments require ADX_ENABLE_TESTNET_FACILITATOR=true." >&2
+    exit 1
+  fi
   if [ "$(env_value ADX_CURRENT_GAME_TOKEN_SYMBOL)" = "arena402-g" ] && \
      [ "${enable_gamecoin_provisioner}" != "true" ]; then
     echo "arena402-g automatic payments require ADX_ENABLE_GAMECOIN_PROVISIONER=true." >&2
@@ -205,6 +209,7 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
   fi
   facilitator_tokens="|"
   facilitator_wallet_indices="|"
+  facilitator_eoas="|"
   facilitator_index=1
   while [ "${facilitator_index}" -le 4 ]; do
     facilitator_token="$(
@@ -255,6 +260,39 @@ if [ "${enable_testnet_facilitator}" = "true" ]; then
       echo "Facilitator CSV must contain exactly one row for wallet index ${facilitator_wallet_index}." >&2
       exit 1
     fi
+    facilitator_eoa="$(
+      awk -F, -v target="${facilitator_wallet_index}" '
+        NR == 1 {
+          for (column = 1; column <= NF; column += 1) {
+            gsub(/\r$/, "", $column)
+            if ($column == "facilitator_index") index_column = column
+            if ($column == "ethereum_address") address_column = column
+          }
+          next
+        }
+        index_column && address_column && $index_column == target {
+          value = $address_column
+          gsub(/\r$/, "", value)
+          print value
+        }
+      ' "${facilitator_csv}"
+    )"
+    if ! printf '%s\n' "${facilitator_eoa}" | \
+      grep -Eq '^0x[0-9a-fA-F]{40}$'; then
+      echo "Facilitator CSV contains an invalid Ethereum address." >&2
+      exit 1
+    fi
+    facilitator_eoa_normalized="$(
+      printf '%s' "${facilitator_eoa}" | tr '[:upper:]' '[:lower:]'
+    )"
+    case "${facilitator_eoas}" in
+      *"|${facilitator_eoa_normalized}|"*)
+        echo "Facilitator EOA addresses must be unique." >&2
+        exit 1
+        ;;
+    esac
+    facilitator_eoas="${facilitator_eoas}${facilitator_eoa_normalized}|"
+    set_env_value "ADX_X402_FACILITATOR_${facilitator_index}_EOA" "${facilitator_eoa_normalized}"
     facilitator_index=$((facilitator_index + 1))
   done
 fi

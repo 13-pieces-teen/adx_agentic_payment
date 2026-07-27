@@ -21,9 +21,10 @@ Injective EVM testnet 是 MVP 目标中的真实链上支付层，当前 Game �
 用户自带钱包或真实资金。
 
 这里的“真实”限定为 testnet 上的可验证支付基础设施，不等同于主网资金能力，
-也不等同于当前已经完成一笔新鲜 live testnet 交易。当前仓库已验证本地游戏闭环、
-结算意图冻结、确认门控和幂等提交边界；公网 Provider、无人值守链路和生产验收
-仍按路线图单独推进。
+也不等同于主网生产资金能力。当前仓库已验证本地游戏闭环、结算意图冻结、
+PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控和幂等
+库存提交；公网 Provider、公共 Facilitator 兼容性和完整生产验收仍按路线图
+单独推进。
 
 游客体验是明确例外：平台 signer service 可以管理隔离、限额、可过期、可撤销
 和可轮换的 testnet-only 演示密钥。该便利层不能被描述为主网非托管方案，也
@@ -164,10 +165,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   公开地址且不返回私钥的 EIP-3009 signer 接缝，以及显式 test-only 内存 Fake
   adapter。未配置 backend 时签名 fail closed；永久钱包绑定、PaymentMandate、
   x402 V2、自动 Worker 和 PostgreSQL AES-GCM 信封密文 signer 已实现。CSV 只用于
-  一次性导入，长期 signer 使用独立宿主机 KEK 和最小权限数据库函数；当前完整
-  链路的一笔新鲜 testnet 交易仍未完成。当前 Game 在 Join 后先创建持久化
-  `game_coin_provisions`，由隔离的 owner worker 完成钱包白名单和初始现金铸币；
-  链上确认前 Participant 保持 `PENDING`，不会触发开赛。
+  一次性导入，长期 signer 使用独立宿主机 KEK 和最小权限数据库函数；2026-07-27
+  已完成一笔经显式确认的新鲜 testnet 交易及确认后库存提交。当前 Game 在 Join
+  后先创建持久化 `game_coin_provisions`，由隔离的 owner worker 完成钱包白名单
+  和初始现金铸币；链上确认前 Participant 保持 `PENDING`，不会触发开赛。
 - Founding 402 纪念 NFT 是与游戏资产和 settlement 隔离的 ERC-721
   soulbound 发行面：后端按持久化 GitHub 注册顺序固化前 402 名，业务库只保存
   token ID、公开地址和确认凭据；助记词及私钥仅保留在仓库外。合约、分配、

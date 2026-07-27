@@ -78,6 +78,14 @@ def test_production_workers_are_separate_non_public_services() -> None:
     )[0]
     assert "adx_settlement_login" in settlement_block
     assert "ADX_WALLET_SIGNER_TOKEN" in settlement_block
+    assert "ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL" in settlement_block
+    for source_path in (
+        ROOT / "arena_payments" / "production_worker.py",
+        ROOT / "arena_payments" / "production_service.py",
+    ):
+        source = source_path.read_text(encoding="utf-8")
+        assert 'blockscout_base_url=_https_url(' in source
+        assert '"ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL"' in source
     api_environment = compose.split(
         "x-api-environment: &api-environment", 1
     )[1].split("\nservices:", 1)[0]
@@ -102,6 +110,7 @@ def test_production_uses_four_independent_facilitator_shards() -> None:
         ) in compose
         assert f"ADX_X402_FACILITATOR_{index}_URL:" in compose
         assert f"ADX_X402_FACILITATOR_{index}_ID:" in compose
+        assert f"ADX_X402_FACILITATOR_{index}_EOA:" in compose
         assert f"ADX_X402_FACILITATOR_{index}_AUTHORIZATION:" in compose
     assert "ADX_X402_FACILITATOR_SHARD_COUNT: ${" in compose
     assert "ADX_SETTLEMENT_WORKER_CONCURRENCY: ${" in compose
@@ -112,6 +121,9 @@ def test_production_uses_four_independent_facilitator_shards() -> None:
     ) in deploy
     assert "Facilitator bearer tokens must be unique." in deploy
     assert "Facilitator wallet indices must be unique." in deploy
+    assert "Facilitator EOA addresses must be unique." in deploy
+    assert 'set_env_value "ADX_X402_FACILITATOR_${facilitator_index}_EOA"' in deploy
+    assert '"ethereum_address"' in deploy
     assert (
         "ADX_X402_FACILITATOR_SHARD_COUNT must be an integer."
         in deploy

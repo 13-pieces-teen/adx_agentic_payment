@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 
 from arena_game.postgres import PostgresPawnhouseRepository
@@ -94,7 +95,7 @@ class PostgresAutomaticSettlementSource:
     ) -> None:
         row = await self._payments._require_pool().fetchrow(
             """
-            SELECT reservation_id
+            SELECT reservation_id, facilitator_id
             FROM arena402.x402_settlement_attempts
             WHERE settlement_intent_id = $1
               AND status IN ('submitting', 'unknown')
@@ -117,6 +118,17 @@ class PostgresAutomaticSettlementSource:
             ),
             approved_intent_hash=terms.intent_hash,
         )
+        facilitator_id = row["facilitator_id"]
+        if facilitator_id is not None:
+            await self._payments._require_pool().execute(
+                """
+                DELETE FROM arena402.facilitator_broadcast_fences
+                WHERE facilitator_id = $1
+                  AND settlement_intent_id = $2
+                """,
+                str(facilitator_id),
+                settlement_intent_id,
+            )
 
     async def settlement_terms(self, settlement_intent_id: str) -> SettlementTerms:
         intent = await self._arena.settlement_intent_for_payment(
@@ -211,6 +223,7 @@ class PostgresAutomaticSettlementSource:
         status: str,
         worker_id: str,
         safe_error_code: str | None = None,
+        payment_payload_digest: str | None = None,
     ) -> None:
         if status not in {
             "signed",
@@ -220,15 +233,27 @@ class PostgresAutomaticSettlementSource:
             "unknown",
         }:
             raise ValueError("invalid_x402_attempt_status")
+        if status == "signed":
+            if not isinstance(payment_payload_digest, str) or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                payment_payload_digest,
+            ):
+                raise ValueError("invalid_payment_payload_digest")
+        elif payment_payload_digest is not None:
+            raise ValueError("payment_payload_digest_only_allowed_when_signed")
         terminal = status in {"submitted", "failed", "unknown"}
         updated = await self._payments._require_pool().execute(
             """
             UPDATE arena402.x402_settlement_attempts
             SET status = $3,
                 safe_error_code = $4,
-                lease_owner = CASE WHEN $5 THEN NULL ELSE lease_owner END,
+                payment_payload_digest = CASE
+                    WHEN $3 = 'signed' THEN $5
+                    ELSE payment_payload_digest
+                END,
+                lease_owner = CASE WHEN $6 THEN NULL ELSE lease_owner END,
                 lease_expires_at = CASE
-                    WHEN $5 THEN NULL ELSE lease_expires_at
+                    WHEN $6 THEN NULL ELSE lease_expires_at
                 END,
                 updated_at = clock_timestamp()
             WHERE settlement_intent_id = $1
@@ -238,10 +263,84 @@ class PostgresAutomaticSettlementSource:
             worker_id,
             status,
             safe_error_code,
+            payment_payload_digest,
             terminal,
         )
         if updated != "UPDATE 1":
             raise RuntimeError("automatic_payment_lease_lost")
+
+    async def claim_facilitator_fence(
+        self,
+        *,
+        facilitator_id: str,
+        settlement_intent_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> bool:
+        lease_expires = now + timedelta(seconds=self._lease_seconds)
+        row = await self._payments._require_pool().fetchrow(
+            """
+            INSERT INTO arena402.facilitator_broadcast_fences AS fence (
+                facilitator_id, settlement_intent_id, lease_owner,
+                lease_expires_at, created_at, updated_at
+            )
+            SELECT $1, $2, $3, $4, $5, $5
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM arena402.x402_settlement_attempts AS attempt
+                LEFT JOIN arena402.settlement_submissions AS submission
+                  ON submission.settlement_intent_id
+                    = attempt.settlement_intent_id
+                WHERE attempt.facilitator_id = $1
+                  AND attempt.status IN ('submitting', 'unknown')
+                  AND submission.settlement_intent_id IS NULL
+            )
+            ON CONFLICT (facilitator_id) DO UPDATE
+            SET settlement_intent_id = EXCLUDED.settlement_intent_id,
+                lease_owner = EXCLUDED.lease_owner,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                updated_at = EXCLUDED.updated_at
+            WHERE fence.lease_expires_at < $5
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM arena402.x402_settlement_attempts AS attempt
+                    LEFT JOIN arena402.settlement_submissions AS submission
+                      ON submission.settlement_intent_id
+                        = attempt.settlement_intent_id
+                    WHERE attempt.facilitator_id = $1
+                      AND attempt.status IN ('submitting', 'unknown')
+                      AND submission.settlement_intent_id IS NULL
+              )
+            RETURNING settlement_intent_id
+            """,
+            facilitator_id,
+            settlement_intent_id,
+            worker_id,
+            lease_expires,
+            now,
+        )
+        return row is not None
+
+    async def release_facilitator_fence(
+        self,
+        *,
+        facilitator_id: str,
+        settlement_intent_id: str,
+        worker_id: str,
+    ) -> None:
+        deleted = await self._payments._require_pool().execute(
+            """
+            DELETE FROM arena402.facilitator_broadcast_fences
+            WHERE facilitator_id = $1
+              AND settlement_intent_id = $2
+              AND lease_owner = $3
+            """,
+            facilitator_id,
+            settlement_intent_id,
+            worker_id,
+        )
+        if deleted != "DELETE 1":
+            raise RuntimeError("facilitator_broadcast_fence_lost")
 
     async def fail_settlement(
         self,

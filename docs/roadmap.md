@@ -29,8 +29,14 @@ Arena 402 的对外叙事固定为三层：
   confirmation gate; read-only chain recovery verifies the exact ERC-20
   transfer; Arena commits cash and inventory exactly once only after a
   persisted confirmation.
-- [ ] Milestone 4 live acceptance: explicitly approved fresh testnet transfer,
+- [x] Milestone 4 live acceptance: explicitly approved fresh testnet transfer,
   public transaction evidence, and recovery-driven inventory commit.
+  Verified on 2026-07-27 for Intent
+  `sha256:bc6cbaaae93403dc934a4b8c1d22618c645e91fd63f9eca24186596502577f93`:
+  the self-hosted Facilitator submitted
+  `0x2c2d708fc41c5f6ce7e866b187b21506c210a69e6524588f7e8bbc60f22a1e45`,
+  transferred `2500000` atomic `arena402-g` on `eip155:1439`, persisted chain
+  confirmation, and committed the frozen grain trade exactly once.
 - [x] Public trade ledger: cross-Game SettlementIntent projection with
   game/Agent/good filters, opaque cursor pagination, backend-owned
   chain/Explorer metadata, persisted block/confirmation/Facilitator receipt
@@ -286,8 +292,9 @@ create game
 - [x] GitHub User 永久绑定 platform-managed testnet guest wallet，一局一次
       Mandate 授权后，每笔 accepted trade 自动结算；逐笔人工确认 bridge 仅保留
       为开发验证工具。
-- [ ] 当前自动完整链路尚未执行一笔新鲜 Injective testnet 交易；生产启用仍须
-      通过显式配置和真实 testnet 验收闸门。
+- [x] 当前自动完整链路已在显式确认和单 Intent Worker 约束下执行一笔新鲜
+      Injective testnet 交易，并完成链上确认与库存提交；公共 Facilitator
+      兼容性和完整生产验收仍须单独通过。
 - [x] 后端已实现外部前端契约所需的 GitHub OAuth authorization-code + PKCE、
       不可变 GitHub subject 身份、现有 Session/CSRF Cookie 和安全回跳。
 - [x] 外部前端已完成 Next.js 仓库升级和当前 Arena API 迁移；Vercel→腾讯云
@@ -428,6 +435,10 @@ create game
 - [x] 增加无公网端口的可选 testnet signer service 与 Settlement Worker，自动
       reserve、签名、x402 `/verify`/`/settle`、持久化 tx hash；`submitting` 之前
       写入 lease/ambiguity boundary，未知结果不会盲目重付。
+- [x] Migration `044` 要求新签名尝试保存规范化
+      `payment_payload_digest`，并以部署时从只读 CSV 校验出的 Facilitator EOA
+      作为 PostgreSQL durable broadcast fence；同一 EOA 的广播跨 Worker/重启
+      串行，`unknown` 在找到原交易前持续阻止重播。
 - [ ] funding 与 Settlement 共用数据库化 relay EOA nonce allocator；2 笔 Intent
       可同时在途，但 nonce 分配/广播短暂串行，重启只以同一 nonce 恢复。
 - [x] 本地 bridge 已验证现有 SettlementSDK/Facilitator；它保留为开发验证工具，
@@ -435,8 +446,10 @@ create game
 - [x] Arena Worker 只读恢复 submitted；unknown 保持额度锁定，自动按同一
       authorization 恢复仍是上线前缺口。
 - [x] 链上确认后幂等提交现金和货物。
-- [ ] 自动路径按同一 EIP-3009 authorization 恢复 unknown；冻结两个确认，
-      复核 receipt block hash、calldata 与 Transfer event 后才提交库存。
+- [x] 自动路径可按同一 EIP-3009 authorization 恢复 unknown：RPC 精确筛选
+      token/from/to/amount `Transfer`，RPC 缺失交易正文时从 Blockscout
+      `raw_input` 复核 nonce；后续仍由统一确认 Reader 冻结两个确认并复核
+      receipt/block hash 后才提交库存。生产故障切换演练仍单独验收。
 - [x] revoke 阻止新 reserve；已 reserve/submitted 的 Intent 继续完成，不增加链上
       取消或退款路径。
 - [x] Hosted Worker 无 signer 权限；长期 signer 仅拥有密文读取函数和独立

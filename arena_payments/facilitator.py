@@ -68,11 +68,13 @@ class ShardedFacilitatorClient:
         self,
         payment_requirements: dict[str, Any],
     ) -> str:
-        route_key = self._route_key(payment_requirements)
-        digest = hashlib.sha256(route_key.encode("utf-8")).digest()
-        return self._shards[
-            int.from_bytes(digest[:8], "big") % len(self._shards)
-        ][0]
+        route_id, client = self._shard_for(payment_requirements)
+        resolver = getattr(client, "facilitator_id_for", None)
+        return (
+            str(resolver(payment_requirements))
+            if resolver is not None
+            else route_id
+        )
 
     async def verify(
         self,
@@ -92,22 +94,25 @@ class ShardedFacilitatorClient:
         payment_payload: dict[str, Any],
         payment_requirements: dict[str, Any],
     ) -> FacilitatorSettlement:
-        facilitator_id, client = self._shard_for(payment_requirements)
+        _, client = self._shard_for(payment_requirements)
         result = await client.settle(
             payment_payload=payment_payload,
             payment_requirements=payment_requirements,
         )
-        return replace(result, facilitator_id=facilitator_id)
+        return replace(
+            result,
+            facilitator_id=self.facilitator_id_for(payment_requirements),
+        )
 
     def _shard_for(
         self,
         payment_requirements: dict[str, Any],
     ) -> tuple[str, FacilitatorClient]:
-        facilitator_id = self.facilitator_id_for(payment_requirements)
-        for candidate_id, client in self._shards:
-            if candidate_id == facilitator_id:
-                return candidate_id, client
-        raise AssertionError("selected facilitator shard is missing")
+        route_key = self._route_key(payment_requirements)
+        digest = hashlib.sha256(route_key.encode("utf-8")).digest()
+        return self._shards[
+            int.from_bytes(digest[:8], "big") % len(self._shards)
+        ]
 
     @staticmethod
     def _route_key(payment_requirements: dict[str, Any]) -> str:
@@ -141,6 +146,7 @@ class HttpX402FacilitatorClient:
         base_url: str,
         *,
         facilitator_id: str,
+        broadcast_identity: str | None = None,
         timeout_seconds: float = 20.0,
         authorization: str | None = None,
     ) -> None:
@@ -169,6 +175,11 @@ class HttpX402FacilitatorClient:
             raise ValueError("invalid_facilitator_id")
         self._base_url = base_url.rstrip("/")
         self._facilitator_id = facilitator_id
+        self._broadcast_identity = (
+            _evm_broadcast_identity(broadcast_identity)
+            if broadcast_identity is not None
+            else facilitator_id
+        )
         self._timeout = timeout_seconds
         self._headers = {"Authorization": authorization} if authorization else {}
 
@@ -176,7 +187,7 @@ class HttpX402FacilitatorClient:
         self,
         _: dict[str, Any],
     ) -> str:
-        return self._facilitator_id
+        return self._broadcast_identity
 
     async def verify(
         self,
@@ -277,14 +288,19 @@ def build_facilitator_client(
             "ADX_X402_FACILITATOR_SHARD_COUNT must be an integer"
         ) from exc
     if shard_count == 1:
+        facilitator_id = _required_environment(
+            environment,
+            "ADX_X402_FACILITATOR_ID",
+        )
         return HttpX402FacilitatorClient(
             _required_environment(
                 environment,
                 "ADX_X402_FACILITATOR_URL",
             ),
-            facilitator_id=_required_environment(
+            facilitator_id=facilitator_id,
+            broadcast_identity=_required_environment(
                 environment,
-                "ADX_X402_FACILITATOR_ID",
+                "ADX_X402_FACILITATOR_EOA",
             ),
             authorization=(
                 environment.get(
@@ -299,6 +315,7 @@ def build_facilitator_client(
             "ADX_X402_FACILITATOR_SHARD_COUNT must be between 1 and 64"
         )
     shards: dict[str, FacilitatorClient] = {}
+    broadcast_identities: set[str] = set()
     for index in range(1, shard_count + 1):
         prefix = f"ADX_X402_FACILITATOR_{index}"
         facilitator_id = _required_environment(
@@ -307,18 +324,34 @@ def build_facilitator_client(
         )
         if facilitator_id in shards:
             raise RuntimeError("facilitator shard ids must be unique")
+        broadcast_identity = _evm_broadcast_identity(
+            _required_environment(
+                environment,
+                f"{prefix}_EOA",
+            )
+        )
+        if broadcast_identity in broadcast_identities:
+            raise RuntimeError("facilitator shard EOAs must be unique")
+        broadcast_identities.add(broadcast_identity)
         shards[facilitator_id] = HttpX402FacilitatorClient(
             _required_environment(
                 environment,
                 f"{prefix}_URL",
             ),
             facilitator_id=facilitator_id,
+            broadcast_identity=broadcast_identity,
             authorization=(
                 environment.get(f"{prefix}_AUTHORIZATION", "").strip()
                 or None
             ),
         )
     return ShardedFacilitatorClient(shards)
+
+
+def _evm_broadcast_identity(value: str | None) -> str:
+    if value is None or not re.fullmatch(r"0x[0-9a-fA-F]{40}", value):
+        raise RuntimeError("invalid facilitator EOA")
+    return value.lower()
 
 
 def _required_environment(

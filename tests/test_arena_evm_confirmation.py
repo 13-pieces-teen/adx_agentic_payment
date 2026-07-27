@@ -155,6 +155,49 @@ def test_reader_recovers_broadcast_transaction_by_frozen_authorization_nonce() -
     )
 
 
+def test_reader_uses_blockscout_calldata_when_rpc_prunes_recovery_transaction() -> None:
+    intent = _intent()
+    nonce = intent.intent_hash.removeprefix("sha256:")
+    calldata = "0xdeadbeef" + "00" * (5 * 32) + nonce
+
+    def rpc(method: str, _: list[object]) -> object:
+        if method == "eth_chainId":
+            return hex(1439)
+        if method == "eth_blockNumber":
+            return "0x100"
+        if method == "eth_getLogs":
+            return [
+                {
+                    "transactionHash": TX_HASH,
+                    "data": hex(intent.amount_atomic),
+                }
+            ]
+        if method == "eth_getTransactionByHash":
+            return None
+        raise AssertionError(method)
+
+    def get(url: str) -> object:
+        assert url.endswith(f"/transactions/{TX_HASH}")
+        return {
+            "hash": TX_HASH,
+            "status": "ok",
+            "result": "success",
+            "raw_input": calldata,
+        }
+
+    reader = EvmJsonRpcConfirmationReader(
+        "test://rpc",
+        blockscout_base_url="https://explorer.invalid/api/v2",
+        rpc_call=rpc,
+        http_get=get,
+    )
+
+    assert (
+        asyncio.run(reader.find_transaction_for_authorization(intent))
+        == TX_HASH
+    )
+
+
 def test_reader_rejects_multiple_nonce_matched_recovery_candidates() -> None:
     intent = _intent()
     nonce = intent.intent_hash.removeprefix("sha256:")

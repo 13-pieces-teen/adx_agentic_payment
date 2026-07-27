@@ -93,6 +93,12 @@ EMPTY_CURRENT_GAME_REFRESH_SQL_PATH = (
     / "migrations"
     / "043_arena_refresh_empty_current_game.sql"
 )
+SETTLEMENT_FENCING_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "044_arena_settlement_audit_and_facilitator_fencing.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -548,6 +554,19 @@ def test_authoritative_action_policy_migration_converges_sql_with_python():
     assert "OWNER TO adx_arena_migration" in sql
     assert "OWNER TO adx_arena_function_owner" in sql
     assert "insufficient_inventory" in sql
+
+
+def test_settlement_fencing_migration_enforces_signed_evidence_and_db_fence():
+    sql = SETTLEMENT_FENCING_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "x402_attempt_payment_payload_digest_required" in sql
+    assert "payment_payload_digest IS NOT NULL" in sql
+    assert "NOT VALID" in sql
+    assert "CREATE TABLE arena402.facilitator_broadcast_fences" in sql
+    assert "facilitator_id TEXT PRIMARY KEY" in sql
+    assert "UNIQUE (settlement_intent_id)" in sql
+    assert "TO adx_settlement" in sql
 
 
 def test_empty_current_game_refresh_never_cancels_a_joined_game():

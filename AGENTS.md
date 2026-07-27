@@ -27,8 +27,9 @@ The bounded/revocable PaymentMandate, permanent GitHub-user wallet binding,
 x402 V2 HTTP envelope, isolated testnet CSV signer, and unattended settlement
 worker are implemented with Fake E2E coverage. The Local Connector game adapter
 is integrated, but real CC/Codex Connector game E2E, Realtime frontend
-projection, standard public Facilitator acceptance, fresh testnet E2E, and
-complete production acceptance are not complete yet. The former in-memory
+projection, standard public Facilitator acceptance, and complete production
+acceptance are not complete yet. A fresh self-hosted-Facilitator testnet
+settlement E2E has completed. The former in-memory
 `matching/` and Supabase/ELO business path have been removed.
 
 Frontend product development is owned by the separate
@@ -134,9 +135,10 @@ For Arena Agent execution:
 The on-chain settlement code remains an EIP-3009 direct relay prototype. The
 cross-module integration implements x402 V2 HTTP headers and a reusable,
 bounded, revocable PaymentMandate with idempotent `reserve / consume / release`,
-but standard public Facilitator compatibility and fresh testnet execution have
-not been accepted yet. Keep those distinctions explicit. Hosted Agent execution
-alone never provides payment authority.
+and fresh testnet execution through the self-hosted Facilitator has been
+accepted. Standard public Facilitator compatibility has not been accepted yet.
+Keep those distinctions explicit. Hosted Agent execution alone never provides
+payment authority.
 
 ## Repository harness
 

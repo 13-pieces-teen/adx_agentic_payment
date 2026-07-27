@@ -122,7 +122,10 @@ async def main() -> None:
             os.getenv("ADX_SETTLEMENT_WORKER_CONCURRENCY", "4")
         ),
         authorization_recovery_reader=EvmJsonRpcConfirmationReader(
-            _https_url("ADX_ARENA_SETTLEMENT_RPC_URL")
+            _https_url("ADX_ARENA_SETTLEMENT_RPC_URL"),
+            blockscout_base_url=_https_url(
+                "ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL"
+            ),
         ),
     )
     worker = SettlementProductionWorker(

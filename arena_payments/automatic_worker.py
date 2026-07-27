@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -48,6 +50,24 @@ class AutomaticSettlementSource(Protocol):
         status: str,
         worker_id: str,
         safe_error_code: str | None = None,
+        payment_payload_digest: str | None = None,
+    ) -> None: ...
+
+    async def claim_facilitator_fence(
+        self,
+        *,
+        facilitator_id: str,
+        settlement_intent_id: str,
+        worker_id: str,
+        now: datetime,
+    ) -> bool: ...
+
+    async def release_facilitator_fence(
+        self,
+        *,
+        facilitator_id: str,
+        settlement_intent_id: str,
+        worker_id: str,
     ) -> None: ...
 
     async def fail_settlement(
@@ -159,6 +179,7 @@ class AutomaticSettlementWorker:
         if not claimed:
             return
         submission_may_have_started = False
+        fence_claimed = False
         try:
             payload = await self._signer.create_payment_payload(
                 payment_required=payment_required,
@@ -169,7 +190,16 @@ class AutomaticSettlementWorker:
                 settlement_intent_id=settlement_intent_id,
                 status="signed",
                 worker_id=self._worker_id,
+                payment_payload_digest=_payment_payload_digest(payload),
             )
+            fence_claimed = await self._source.claim_facilitator_fence(
+                facilitator_id=facilitator_id,
+                settlement_intent_id=settlement_intent_id,
+                worker_id=self._worker_id,
+                now=datetime.now(timezone.utc),
+            )
+            if not fence_claimed:
+                return
             # Persist the ambiguity boundary before the external settle call.
             await self._source.mark_attempt(
                 settlement_intent_id=settlement_intent_id,
@@ -200,8 +230,20 @@ class AutomaticSettlementWorker:
                 worker_id=self._worker_id,
                 safe_error_code=result.error_reason,
             )
+            if result.status in {"submitted", "failed"}:
+                await self._source.release_facilitator_fence(
+                    facilitator_id=facilitator_id,
+                    settlement_intent_id=settlement_intent_id,
+                    worker_id=self._worker_id,
+                )
         except Exception:
             if not submission_may_have_started:
+                if fence_claimed:
+                    await self._source.release_facilitator_fence(
+                        facilitator_id=facilitator_id,
+                        settlement_intent_id=settlement_intent_id,
+                        worker_id=self._worker_id,
+                    )
                 await self._payments.release_reservation(
                     reservation.reservation_id,
                     reason="automatic_settlement_pre_submission_failed",
@@ -218,3 +260,14 @@ class AutomaticSettlementWorker:
                     safe_error_code="automatic_settlement_failed",
                 )
             raise
+
+
+def _payment_payload_digest(payload: dict[str, object]) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
