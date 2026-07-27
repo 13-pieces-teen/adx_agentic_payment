@@ -36,6 +36,25 @@ from .secret_store import (
 
 
 _LOGGER = logging.getLogger(__name__)
+_ARENA_VISIBLE_OUTPUT_TOKENS = 256
+_ARENA_THINKING_OUTPUT_TOKENS = 2_048
+
+
+def arena_action_output_token_budget(
+    *,
+    configured_tokens: int,
+    thinking_enabled: bool,
+) -> int:
+    """Clamp Arena actions without silently disabling configured thinking."""
+
+    if configured_tokens <= 0:
+        raise ValueError("configured_tokens must be positive")
+    ceiling = (
+        _ARENA_THINKING_OUTPUT_TOKENS
+        if thinking_enabled
+        else _ARENA_VISIBLE_OUTPUT_TOKENS
+    )
+    return min(configured_tokens, ceiling)
 
 
 def _json_object(value: object) -> dict[str, Any]:
@@ -659,12 +678,21 @@ class DurableHostedWorker:
                         "strategyInstructions",
                     )
                 ),
-                requested_max_output_tokens=int(
-                    _config_value(
-                        config,
-                        "max_output_tokens",
-                        "maxOutputTokens",
-                    )
+                requested_max_output_tokens=arena_action_output_token_budget(
+                    configured_tokens=int(
+                        _config_value(
+                            config,
+                            "max_output_tokens",
+                            "maxOutputTokens",
+                        )
+                    ),
+                    thinking_enabled=bool(
+                        _config_value(
+                            config,
+                            "thinking_enabled",
+                            "thinkingEnabled",
+                        )
+                    ),
                 ),
             ),
             attempt_recorder=PostgresAttemptRecorder(
@@ -732,4 +760,5 @@ __all__ = [
     "DurableHostedWorker",
     "PostgresAttemptRecorder",
     "PostgresHostedWorkerRepository",
+    "arena_action_output_token_budget",
 ]

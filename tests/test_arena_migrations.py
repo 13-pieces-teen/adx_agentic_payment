@@ -81,6 +81,18 @@ LEGACY_CURRENT_GAME_CAPACITY_SQL_PATH = (
     / "migrations"
     / "041_arena_drop_legacy_current_game_capacity_check.sql"
 )
+AUTHORITATIVE_ACTION_POLICY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "042_arena_authoritative_action_policy.sql"
+)
+EMPTY_CURRENT_GAME_REFRESH_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "043_arena_refresh_empty_current_game.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -524,3 +536,23 @@ def test_unbounded_game_capacity_drops_the_legacy_inline_check():
     assert "DROP CONSTRAINT IF EXISTS games_check" in sql
     assert "DROP CONSTRAINT IF EXISTS games_max_participants_check" in sql
     assert sql.count("CHECK (max_participants >= min_participants)") == 1
+
+
+def test_authoritative_action_policy_migration_converges_sql_with_python():
+    sql = AUTHORITATIVE_ACTION_POLICY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE OR REPLACE FUNCTION apply_arena_agent_task_result" in sql
+    assert "buyer_opening_proposal_required" in sql
+    assert "counterparty_proposal_required" in sql
+    assert "final_turn_must_close" in sql
+    assert "insufficient_inventory" in sql
+
+
+def test_empty_current_game_refresh_never_cancels_a_joined_game():
+    sql = EMPTY_CURRENT_GAME_REFRESH_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "UPDATE arena402.games AS game" in sql
+    assert "game.phase = 'registration'" in sql
+    assert "NOT EXISTS" in sql
+    assert "FROM arena402.game_participants AS participant" in sql
+    assert "participant.game_id = game.game_id" in sql

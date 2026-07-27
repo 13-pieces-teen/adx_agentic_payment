@@ -32,6 +32,7 @@ COPY --chown=adx:adx deploy/scripts/migrate.py ./deploy/scripts/migrate.py
 COPY --chown=adx:adx deploy/scripts/provision_db_roles.py ./deploy/scripts/provision_db_roles.py
 COPY --chown=adx:adx deploy/scripts/import_wallet_inventory.py ./deploy/scripts/import_wallet_inventory.py
 COPY --chown=adx:adx scripts/bootstrap_official_agent_pool.py ./scripts/bootstrap_official_agent_pool.py
+COPY --chown=adx:adx scripts/refresh_official_agent_strategies.py ./scripts/refresh_official_agent_strategies.py
 RUN chmod 0555 /app/deploy/scripts/api-entrypoint.sh
 
 USER adx

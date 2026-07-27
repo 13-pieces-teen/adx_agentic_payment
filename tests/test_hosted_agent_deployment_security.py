@@ -191,6 +191,10 @@ def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> N
         "COPY --chown=adx:adx scripts/bootstrap_official_agent_pool.py "
         "./scripts/bootstrap_official_agent_pool.py"
     ) in dockerfile
+    assert (
+        "COPY --chown=adx:adx scripts/refresh_official_agent_strategies.py "
+        "./scripts/refresh_official_agent_strategies.py"
+    ) in dockerfile
     controller = compose.split("  credential-controller:", 1)[1].split(
         "\n  official-agent-bootstrap:", 1
     )[0]

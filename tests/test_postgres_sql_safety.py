@@ -43,3 +43,17 @@ def test_settlement_resolves_both_user_and_official_wallet_authorities() -> None
         assert "payment_wallet_authorities" in source
         assert "wallet_inventory" in source
         assert "wallet.status <> 'disabled'" in source
+
+
+def test_game_start_and_final_ranking_exclude_pending_participants() -> None:
+    start_source = inspect.getsource(
+        PostgresPawnhouseRepository._start_game_locked
+    )
+    finalize_source = inspect.getsource(
+        PostgresPawnhouseRepository._finalize_game
+    )
+
+    assert "readiness = 'ready'" in start_source
+    assert "SET status = 'cancelled'" in start_source
+    assert "SET status = 'active'" in start_source
+    assert "AND readiness = 'ready'" in finalize_source

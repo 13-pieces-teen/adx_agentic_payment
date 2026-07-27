@@ -124,6 +124,10 @@ Portfolio，并冻结进 Game Agent 快照。比赛开始后不能重新配置�
 worker 只在 Game 开始前把 Participant 钱包加入白名单，并按冻结 Portfolio 的
 `cashAtomic` 铸造初始游戏币；交易哈希、nonce、Gas 与确认区块都可恢复。两步都
 确认后 Arena 才把 Participant 从 `PENDING` 提升为 `READY`，达到阈值后再开赛。
+官方补位按已占用席位而不是只按 `READY` 数计算缺口；正在链上准备的 `PENDING`
+Participant 会保留自己的席位，但不能参与回合。开赛事务只激活 `READY`
+Participant，并取消仍未准备完成的 Participant，后续 Decide、快照和排名均不得
+包含它们。
 
 产品 Current Game 的 Join v2 使用 `cashAtomic` 十进制整数字符串和四种货物的
 非负整数数量提交初始组合；服务端按公开初始价重新计算，只有总值严格等于
@@ -266,7 +270,10 @@ Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息
 - 随机事件必须在开局前提交 schedule commitment，并在结束后公开 seed。
 
 MVP 事件库为：王宫征召、新矿开采、粮仓失火、贵族狂热、加冕取消、蛮族围城和
-议和传闻。先知预言、组合套利、王宫远期契约和密探情报属于后续机制。
+议和传闻。王宫征召在 MVP 只改变精铁的公开参考价和终场估值，不创建没有真实
+付款方的 Royal Order。先知预言、组合套利、王宫订单/远期契约和密探情报属于
+后续机制；王宫订单只有在平台付款方、PaymentMandate、x402 与链上确认边界完整
+接入后才能进入活跃牌组。
 
 终场生成 `settleTable`，每种货物对应唯一最终价格。
 

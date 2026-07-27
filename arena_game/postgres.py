@@ -24,6 +24,7 @@ from .goods import GOODS, GOOD_IDS, INITIAL_PRICES, require_good
 from .market import Pairing, PoolEntry, fcfs_pair
 from .money import gold
 from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
+from .official_filler import official_seat_deficit
 from .portfolio import (
     INITIAL_NET_WORTH_ATOMIC,
     Portfolio,
@@ -1599,8 +1600,39 @@ class PostgresPawnhouseRepository:
         )
         await connection.execute(
             """
-            UPDATE arena402.game_participants SET status = 'active'
+            UPDATE arena402.game_participants
+            SET status = 'cancelled',
+                completed_at = COALESCE(
+                    completed_at,
+                    clock_timestamp()
+                )
             WHERE game_id = $1
+              AND readiness <> 'ready'
+              AND status IN ('joined', 'active', 'settling')
+            """,
+            game_id,
+        )
+        await connection.execute(
+            """
+            UPDATE public.game_agents AS game_agent
+            SET status = 'cancelled',
+                completed_at = COALESCE(
+                    game_agent.completed_at,
+                    clock_timestamp()
+                )
+            FROM arena402.game_participants AS participant
+            WHERE participant.game_id = $1
+              AND participant.game_participant_id = game_agent.game_agent_id
+              AND participant.status = 'cancelled'
+            """,
+            game_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.game_participants
+            SET status = 'active'
+            WHERE game_id = $1
+              AND readiness = 'ready'
             """,
             game_id,
         )
@@ -1649,7 +1681,15 @@ class PostgresPawnhouseRepository:
             game_id,
         )
         await connection.execute(
-            "UPDATE public.game_agents SET status = 'active' WHERE game_id = $1",
+            """
+            UPDATE public.game_agents AS game_agent
+            SET status = 'active'
+            FROM arena402.game_participants AS participant
+            WHERE participant.game_id = $1
+              AND participant.game_participant_id = game_agent.game_agent_id
+              AND participant.readiness = 'ready'
+              AND participant.status = 'active'
+            """,
             game_id,
         )
         await connection.execute(
@@ -4605,6 +4645,7 @@ class PostgresPawnhouseRepository:
             for participant in public_participants
             if participant["readiness"] == "READY"
         )
+        participating_count = len(public_participants)
         human_ready_count = sum(
             1
             for participant in public_participants
@@ -4614,6 +4655,8 @@ class PostgresPawnhouseRepository:
         official_ready_count = ready_count - human_ready_count
         if status != "WAITING" or ready_count >= int(game["start_threshold"]):
             fill_status = "READY"
+        elif participating_count >= int(game["start_threshold"]):
+            fill_status = "PROVISIONING"
         elif first_human_ready_at is None:
             fill_status = "IDLE"
         elif fill_at is not None and server_time < fill_at:
@@ -4735,6 +4778,7 @@ class PostgresPawnhouseRepository:
         counts = await pool.fetchrow(
             """
             SELECT
+                count(*) AS participating_count,
                 count(*) FILTER (
                     WHERE participant.readiness = 'ready'
                 ) AS ready_count,
@@ -4752,6 +4796,7 @@ class PostgresPawnhouseRepository:
             game["game_id"],
         )
         ready_count = int(counts["ready_count"])
+        participating_count = int(counts["participating_count"])
         target_seats = int(game["start_threshold"])
         first_human_ready_at = counts["first_human_ready_at"]
         if ready_count >= target_seats:
@@ -4759,6 +4804,13 @@ class PostgresPawnhouseRepository:
                 "gameId": str(game["game_id"]),
                 "status": "READY",
                 "candidateAgentIds": [],
+            }
+        if participating_count >= target_seats:
+            return {
+                "gameId": str(game["game_id"]),
+                "status": "PROVISIONING",
+                "candidateAgentIds": [],
+                "missingReadySeats": target_seats - ready_count,
             }
         if first_human_ready_at is None:
             return {
@@ -4783,7 +4835,11 @@ class PostgresPawnhouseRepository:
                 "candidateAgentIds": [],
             }
 
-        deficit = target_seats - ready_count
+        deficit = official_seat_deficit(
+            target_seats=target_seats,
+            ready_count=ready_count,
+            participating_count=participating_count,
+        )
         candidates = await pool.fetch(
             """
             SELECT official.agent_id
@@ -5955,6 +6011,8 @@ class PostgresPawnhouseRepository:
               ON h.game_participant_id = p.game_participant_id
              AND h.game_id = p.game_id
             WHERE p.game_id = $1
+              AND p.readiness = 'ready'
+              AND p.status = 'active'
             ORDER BY p.game_participant_id, h.good_id
             """,
             game_id,
@@ -6296,6 +6354,8 @@ class PostgresPawnhouseRepository:
               ON h.game_participant_id = p.game_participant_id
              AND h.game_id = p.game_id
             WHERE p.game_id = $1
+              AND p.readiness = 'ready'
+              AND p.status = 'active'
             ORDER BY p.game_participant_id, h.good_id
             """,
             game_id,
@@ -6375,6 +6435,8 @@ class PostgresPawnhouseRepository:
                     clock_timestamp()
                 )
             WHERE game_id = $1
+              AND readiness = 'ready'
+              AND status = 'active'
             """,
             game_id,
         )
@@ -6399,6 +6461,12 @@ class PostgresPawnhouseRepository:
                     clock_timestamp()
                 )
             WHERE game_id = $1
+              AND game_agent_id IN (
+                  SELECT game_participant_id
+                  FROM arena402.game_participants
+                  WHERE game_id = $1
+                    AND readiness = 'ready'
+              )
             """,
             game_id,
         )

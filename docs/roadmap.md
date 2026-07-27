@@ -486,6 +486,17 @@ create game
       人工操作地自动完成 reserve、签名、提交、确认和库存提交。
 - [x] 保存本批脱敏交易、确认和库存提交证据，并继续准确标注 testnet direct
       settlement、自建 Facilitator 与公共 x402 兼容性边界。
+- [x] 修复 Current Game 官方补位席位计算：`PENDING` provision Participant
+      保留席位但不能参赛；开赛只激活 `READY` Participant，未 Ready 记录被取消，
+      且回合快照和最终排名只读取 Ready/active 参与者。
+- [x] 将 Runtime 成功结果继续视为候选动作，并在 Python 与 PostgreSQL CAS
+      投影中统一拒绝库存/现金不足、无对手报价的 `accept`、买方首轮非报价以及
+      末轮继续报价；分别收敛为 `pass` 或 negotiation timeout。
+- [x] 下线 MVP 王宫征召中的未结算 Royal Order effect；空的 registration
+      Current Game 可安全轮换到新牌组，已有参与者的冻结赛程不被迁移修改。
+- [x] 为无自定义策略的 Hosted Agent 提供受限市场默认策略，把官方池扩展为五种
+      市场角色，并将 Arena 动作输出预算限制为非 thinking 256、thinking 2048
+      Token；生产可在不重新接触 Provider key 的情况下刷新并重新验证官方配置。
 
 ### Phase 9：Post-MVP
 

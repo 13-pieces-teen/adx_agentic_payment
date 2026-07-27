@@ -76,8 +76,7 @@ def test_demo_event_schedule_is_deterministic_and_resets_gem_bubble() -> None:
     round_one = world.reveal(events[0].event_id, round_index=1)
     assert round_one.market_prices["iron"] == gold("10")
     assert round_one.final_prices["iron"] == gold("5.5")
-    assert round_one.royal_orders[0].price_atomic == gold("15")
-    assert round_one.royal_orders[0].quantity_limit == 200
+    assert round_one.royal_orders == ()
 
     round_two = world.reveal(events[1].event_id, round_index=2)
     assert round_two.market_prices["iron"] == INITIAL_PRICES["iron"]

@@ -15,6 +15,7 @@ from hosted_agent_runtime.postgres_worker import (
     ClaimedValidation,
     DurableHostedWorker,
     PostgresHostedWorkerRepository,
+    arena_action_output_token_budget,
 )
 from hosted_agent_runtime.production_providers import ProductionProviderBundle
 from hosted_agent_runtime.providers import (
@@ -40,6 +41,21 @@ def _job() -> ClaimedValidation:
         thinking_enabled=True,
         secret_ref="arena402/hosted-model/credential-1",
     )
+
+
+def test_arena_action_output_budget_is_small_and_thinking_aware() -> None:
+    assert arena_action_output_token_budget(
+        configured_tokens=16_384,
+        thinking_enabled=False,
+    ) == 256
+    assert arena_action_output_token_budget(
+        configured_tokens=16_384,
+        thinking_enabled=True,
+    ) == 2_048
+    assert arena_action_output_token_budget(
+        configured_tokens=128,
+        thinking_enabled=False,
+    ) == 128
 
 
 class _Repository:

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from arena_game.official_filler import OfficialAgentFiller
+from arena_game.official_filler import (
+    OfficialAgentFiller,
+    official_seat_deficit,
+)
 
 
 class _Repository:
@@ -68,3 +71,16 @@ def test_filler_joins_only_server_selected_official_agents() -> None:
     ]
     assert result["status"] == "FILLING"
     assert result["filledCount"] == 2
+
+
+def test_pending_participants_reserve_official_fill_seats() -> None:
+    assert official_seat_deficit(
+        target_seats=10,
+        ready_count=1,
+        participating_count=10,
+    ) == 0
+    assert official_seat_deficit(
+        target_seats=10,
+        ready_count=1,
+        participating_count=4,
+    ) == 6

@@ -6,6 +6,21 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 
+def official_seat_deficit(
+    *,
+    target_seats: int,
+    ready_count: int,
+    participating_count: int,
+) -> int:
+    """Return seats that are neither ready nor already being provisioned."""
+
+    if target_seats <= 0:
+        raise ValueError("target_seats must be positive")
+    if ready_count < 0 or participating_count < ready_count:
+        raise ValueError("invalid participant counts")
+    return max(0, target_seats - participating_count)
+
+
 class OfficialFillerRepository(Protocol):
     async def official_fill_plan(
         self,
@@ -56,4 +71,8 @@ class OfficialAgentFiller:
         return result
 
 
-__all__ = ["OfficialAgentFiller", "OfficialFillerRepository"]
+__all__ = [
+    "OfficialAgentFiller",
+    "OfficialFillerRepository",
+    "official_seat_deficit",
+]

@@ -21,6 +21,14 @@ PROMPT_VERSION_V2: Final[str] = "arena.hosted-prompt.v2"
 OUTPUT_VERSION_V1: Final[str] = "arena.agent-action.v1"
 MAX_STRATEGY_BYTES: Final[int] = 4 * 1024
 MAX_PROMPT_BYTES: Final[int] = 64 * 1024
+DEFAULT_STRATEGY_INSTRUCTIONS: Final[str] = (
+    "Re-evaluate every round using the current market, active event effects, "
+    "remaining rounds, cash, and inventory. Never reuse an expired event "
+    "price. Estimate final value conservatively, prefer executable prices "
+    "near the current market, and avoid stale or impossible orders. During "
+    "negotiation, make bounded concessions only when the trade remains "
+    "positive value and close the final turn with accept or reject."
+)
 
 PromptBuildErrorCode: TypeAlias = Literal[
     "credential_like_content",
@@ -235,7 +243,12 @@ class PromptBuilder:
             raise TypeError("task must be ArenaAgentTaskV1")
         if type(strategy_instructions) is not str:
             raise TypeError("strategy instructions must be a string")
-        if len(strategy_instructions.encode("utf-8")) > MAX_STRATEGY_BYTES:
+        effective_strategy = (
+            strategy_instructions
+            if strategy_instructions.strip()
+            else DEFAULT_STRATEGY_INSTRUCTIONS
+        )
+        if len(effective_strategy.encode("utf-8")) > MAX_STRATEGY_BYTES:
             raise PromptBuildError("strategy_too_large")
 
         task_input_candidate = task.input.model_dump(
@@ -244,7 +257,7 @@ class PromptBuilder:
             exclude_none=False,
         )
         try:
-            validate_runtime_controlled_text(strategy_instructions)
+            validate_runtime_controlled_text(effective_strategy)
             task_input = secure_config_snapshot(task_input_candidate)
         except ArenaIngressSecurityError as exc:
             if exc.code in {
@@ -256,7 +269,7 @@ class PromptBuilder:
                 ) from None
             raise PromptBuildError("unsafe_text") from None
 
-        _reject_private_content(strategy_instructions)
+        _reject_private_content(effective_strategy)
         _reject_private_content(task_input)
 
         output_schema = (
@@ -268,7 +281,7 @@ class PromptBuilder:
             "contextVersion": task.schema_version,
             "outputVersion": OUTPUT_VERSION_V1,
             "promptVersion": PROMPT_VERSION_V2,
-            "privateStrategyInstructions": strategy_instructions,
+            "privateStrategyInstructions": effective_strategy,
             "task": {
                 "deadlineAt": task.deadline_at.isoformat(),
                 "gameAgentId": task.game_agent_id,
@@ -297,6 +310,7 @@ class PromptBuilder:
 
 __all__ = [
     "BuiltPrompt",
+    "DEFAULT_STRATEGY_INSTRUCTIONS",
     "MAX_PROMPT_BYTES",
     "MAX_STRATEGY_BYTES",
     "OUTPUT_VERSION_V1",

@@ -168,6 +168,53 @@ def test_invalid_buyer_opening_action_converges_to_timeout(action):
     asyncio.run(scenario())
 
 
+def test_sell_without_frozen_inventory_converges_to_default_pass():
+    async def scenario():
+        repository = MemoryArenaCoreRepository()
+        participant = decide_input().model_copy(
+            update={"holdings": {"ruby": 0}}
+        )
+        task = await ArenaTaskFactory(
+            repository,
+            clock=lambda: NOW,
+        ).create_decide_task(
+            game_agent_id="game-agent-1",
+            participant_view=participant,
+            config_snapshot={},
+        )
+        await ArenaResultSink(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=1),
+        ).submit(
+            AgentTaskResultV1(
+                result_id="invalid-inventory-sell",
+                task_id=task.task.task_id,
+                schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                status="succeeded",
+                action=SellAction(
+                    action="sell",
+                    good="ruby",
+                    quantity=1,
+                    limit_price="12.500000",
+                ),
+            )
+        )
+
+        applied = await ArenaResultConsumer(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=2),
+        ).consume_pending()
+        stored = await repository.get_result_for_task(task.task.task_id)
+
+        assert len(applied) == 1
+        assert applied[0].outcome == "default_pass"
+        assert applied[0].action == {"action": "pass"}
+        assert stored is not None
+        assert stored.rejection_reason == "insufficient_inventory"
+
+    asyncio.run(scenario())
+
+
 def test_proposal_on_final_turn_converges_to_timeout():
     async def scenario():
         repository = MemoryArenaCoreRepository()

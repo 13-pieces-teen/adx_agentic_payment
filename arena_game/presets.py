@@ -13,7 +13,7 @@ MVP_EVENT_CATALOG: Final[dict[str, WorldEvent]] = {
         event_id="palace-requisition",
         display_name="王宫征召",
         narrative=(
-            "北境战事再起。王宫奉皇帝之命，限量高价征收精铁，售罄即止。"
+            "北境战事再起。王宫征召推高精铁现货需求，终场估值温和上升。"
         ),
         reveal_round=1,
         duration_rounds=1,
@@ -29,13 +29,6 @@ MVP_EVENT_CATALOG: Final[dict[str, WorldEvent]] = {
                 good="iron",
                 target="final",
                 basis_points=1_000,
-            ),
-            EventEffect(
-                kind=EffectKind.CREATE_ROYAL_ORDER,
-                good="iron",
-                target="market",
-                order_price_atomic=gold("15"),
-                order_limit=200,
             ),
         ),
     ),

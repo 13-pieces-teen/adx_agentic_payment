@@ -64,6 +64,21 @@ def derive_application(
                 return _default_application(
                     task, reason="good_not_allowed"
                 )
+            if (
+                isinstance(action, SellAction)
+                and task.input.holdings.get(action.good, 0) < action.quantity
+            ):
+                return _default_application(
+                    task, reason="insufficient_inventory"
+                )
+            if (
+                isinstance(action, BuyAction)
+                and action.limit_price is not None
+                and action.limit_price * action.quantity > task.input.cash
+            ):
+                return _default_application(
+                    task, reason="insufficient_cash"
+                )
         elif action.action not in task.input.limits.allowed_actions:
             return _default_application(task, reason="action_not_allowed")
         return ArenaApplication(

@@ -134,6 +134,16 @@ def test_output_schema_is_kind_specific_and_disallows_extra_fields() -> None:
     )
 
 
+def test_empty_private_strategy_receives_a_bounded_market_default() -> None:
+    built = PromptBuilder().build(_task(), strategy_instructions="")
+    envelope = json.loads(built.input_json)
+
+    strategy = envelope["privateStrategyInstructions"]
+    assert "Re-evaluate every round" in strategy
+    assert "expired event price" in strategy
+    assert "executable" in strategy
+
+
 @pytest.mark.parametrize(
     "strategy",
     [

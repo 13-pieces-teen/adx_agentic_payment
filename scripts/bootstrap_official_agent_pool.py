@@ -94,22 +94,44 @@ def _username(index: int) -> str:
 
 
 def _strategy(index: int) -> str:
-    if index % 2:
-        preference = (
-            "Prefer buying when the public market and your portfolio imply "
-            "positive expected value."
-        )
-    else:
-        preference = (
-            "Prefer selling inventory when the public market offers a "
-            "profitable price."
-        )
+    role = (index - 1) % 5
+    preferences = (
+        (
+            "Act as a value buyer. Prefer buying assets whose current market "
+            "price is below your event-adjusted estimate of final value, "
+            "while preserving enough cash for later rounds."
+        ),
+        (
+            "Act as an inventory seller. Reduce concentrated holdings when "
+            "the current executable price is at or above your event-adjusted "
+            "estimate, but do not anchor to a past round."
+        ),
+        (
+            "Act as a two-sided market maker. Prefer an executable buy or "
+            "sell near the current market when inventory and cash permit, "
+            "and negotiate toward a mutually acceptable price."
+        ),
+        (
+            "Act as an event trader. Use only effects that are active in the "
+            "current round, distinguish market effects from final-value "
+            "effects, and reposition before the signal expires."
+        ),
+        (
+            "Act as a portfolio allocator. Diversify final-value exposure, "
+            "rebalance away from weak assets, and avoid leaving all capital "
+            "idle when a positive risk-adjusted trade is available."
+        ),
+    )
+    preference = preferences[role]
     return (
         "You are an official Arena 402 market participant. "
         f"{preference} "
-        "Use only the supplied game state, obey quantity and limit-price "
-        "constraints, negotiate in good faith, and pass when no safe trade "
-        "exists. Never disclose credentials or private reasoning."
+        "Re-evaluate every round and never reuse an expired event price. "
+        "Use the current market as the quote anchor, obey quantity and "
+        "limit-price constraints, prefer executable good-faith trades, and "
+        "close the final negotiation turn with accept or reject. Pass only "
+        "when no positive risk-adjusted action exists. Never disclose "
+        "credentials or private reasoning."
     )
 
 
