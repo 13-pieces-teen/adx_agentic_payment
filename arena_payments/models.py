@@ -44,14 +44,19 @@ class WalletInventoryItem:
 @dataclass(frozen=True, slots=True)
 class UserWalletBinding:
     user_id: str
-    github_subject: str
+    # Compatibility field for wallets originally allocated to GitHub-only
+    # accounts. Platform password accounts deliberately store no provider
+    # subject; user_id is the durable business authority.
+    github_subject: str | None
     wallet_id: str
     chain_id: int
     address: str
     bound_at: datetime
 
     def __post_init__(self) -> None:
-        if not self.user_id or not self.github_subject.isdigit():
+        if not self.user_id or (
+            self.github_subject is not None and not self.github_subject.isdigit()
+        ):
             raise ValueError("invalid_wallet_binding")
         object.__setattr__(self, "address", _address(self.address))
 

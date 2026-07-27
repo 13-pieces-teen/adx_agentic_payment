@@ -176,6 +176,36 @@ class PostgresConnectorRepository:
                     raise InvalidInviteError
                 return dict(user)
 
+    async def create_password_user(
+        self,
+        user_id: str,
+        username: str,
+        password_hash: str,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        try:
+            row = await self._require_pool().fetchrow(
+                """
+                INSERT INTO connector_users (
+                    user_id, username, password_hash, temporary,
+                    identity_provider, provider_subject, created_at
+                )
+                VALUES ($1, $2, $3, FALSE, 'password', NULL, $4)
+                RETURNING user_id, username, password_hash, temporary,
+                          identity_provider, provider_subject,
+                          created_at, disabled_at
+                """,
+                user_id,
+                username,
+                password_hash,
+                created_at,
+            )
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "23505":
+                raise DuplicateIdentityError from exc
+            raise
+        return dict(row)
+
     async def get_user_by_username(
         self, normalized_username: str
     ) -> dict[str, Any] | None:

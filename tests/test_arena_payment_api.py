@@ -62,9 +62,9 @@ def _app():
     )
 
 
-def test_wallet_endpoint_binds_once_and_never_returns_secret_reference() -> None:
-    client, _, _, _ = _app()
-    client.post(
+def test_password_account_wallet_binds_once_without_github() -> None:
+    client, _, _, payments = _app()
+    registered = client.post(
         "/api/auth/invite",
         json={
             "invite_code": "invite-one-that-is-long-enough",
@@ -72,8 +72,16 @@ def test_wallet_endpoint_binds_once_and_never_returns_secret_reference() -> None
             "password": "correct horse battery staple",
         },
     )
-    denied = client.get("/api/v1/me/wallet")
-    assert denied.status_code == 403
+    assert registered.status_code == 201
+
+    first = client.get("/api/v1/me/wallet")
+    second = client.get("/api/v1/me/wallet")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    user_id = registered.json()["user"]["user_id"]
+    assert payments.wallet_bindings[user_id].github_subject is None
+    assert "secret" not in str(first.json()).lower()
 
 
 def test_github_wallet_and_mandate_api() -> None:
@@ -98,7 +106,7 @@ def test_github_wallet_and_mandate_api() -> None:
     connector_auth.set_session_cookies(
         type(
             "CookieSink",
-            (),
+            ( ),
             {
                 "set_cookie": lambda self, key, value, **kwargs: client.cookies.set(
                     key, value
@@ -177,7 +185,7 @@ def test_payment_mandate_api_supports_pre_join_dynamic_payee_scope() -> None:
     connector_auth.set_session_cookies(
         type(
             "CookieSink",
-            ( ),
+            (),
             {
                 "set_cookie": lambda self, key, value, **kwargs: client.cookies.set(
                     key, value

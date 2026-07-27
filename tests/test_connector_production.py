@@ -33,6 +33,7 @@ def _bundle(
     auth_rate_limit_attempts: int = 10,
     pairing_rate_limit_attempts: int = 60,
     max_pending_pairings: int = 500,
+    public_registration_enabled: bool = False,
     repository: MemoryConnectorRepository | None = None,
 ):
     repository = repository or MemoryConnectorRepository()
@@ -41,6 +42,7 @@ def _bundle(
         session_secret="session-secret-that-is-more-than-32-characters",
         public_app_url="https://arena.example.test",
         bootstrap_invite_hash=_hash(invite),
+        public_registration_enabled=public_registration_enabled,
         auth_rate_limit_attempts=auth_rate_limit_attempts,
         pairing_rate_limit_attempts=pairing_rate_limit_attempts,
         max_pending_pairings=max_pending_pairings,
@@ -84,6 +86,7 @@ def test_production_configuration_fails_closed(monkeypatch):
         "ADX_GITHUB_OAUTH_CLIENT_ID",
         "ADX_GITHUB_OAUTH_CLIENT_SECRET",
         "ADX_GITHUB_OAUTH_RELAY_URL",
+        "ADX_PUBLIC_REGISTRATION_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ConnectorConfigurationError, match="DATABASE_URL"):
@@ -100,6 +103,18 @@ def test_production_configuration_fails_closed(monkeypatch):
     config = ConnectorGatewayConfig.from_env()
     assert config.session_cookie_name == "adx_session"
     assert config.csrf_cookie_name == "adx_csrf"
+    assert config.public_registration_enabled is False
+
+    monkeypatch.delenv("ADX_BOOTSTRAP_INVITE_HASH")
+    monkeypatch.setenv("ADX_PUBLIC_REGISTRATION_ENABLED", "true")
+    config = ConnectorGatewayConfig.from_env()
+    assert config.public_registration_enabled is True
+    assert config.bootstrap_invite_hash is None
+
+    monkeypatch.setenv("ADX_PUBLIC_REGISTRATION_ENABLED", "sometimes")
+    with pytest.raises(ConnectorConfigurationError, match="must be one of"):
+        ConnectorGatewayConfig.from_env()
+    monkeypatch.setenv("ADX_PUBLIC_REGISTRATION_ENABLED", "true")
 
     monkeypatch.setenv("ADX_GITHUB_OAUTH_CLIENT_ID", "github-client-id")
     with pytest.raises(ConnectorConfigurationError, match="configured together"):
@@ -450,6 +465,40 @@ def test_invite_is_one_time_password_is_argon2id_and_cookie_is_hardened():
         json={"username": "alice.admin", "password": "wrong"},
     )
     assert wrong.status_code == 401
+
+
+def test_public_registration_creates_a_platform_account_without_an_invite():
+    _, repository, client = _bundle(public_registration_enabled=True)
+
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "username": "Public.Player",
+            "password": "correct horse battery staple",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["user"]["username"] == "public.player"
+    user_id = response.json()["user"]["user_id"]
+    assert repository.users[user_id]["identity_provider"] == "password"
+    assert repository.users[user_id]["provider_subject"] is None
+    assert repository.users[user_id]["password_hash"].startswith("$argon2id$")
+
+
+def test_invite_less_registration_fails_closed_by_default():
+    _, _, client = _bundle()
+
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "username": "public.player",
+            "password": "correct horse battery staple",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Registration requires an invite"
 
 
 def test_invite_creates_recoverable_account_and_requires_credentials():

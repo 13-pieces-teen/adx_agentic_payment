@@ -202,7 +202,7 @@ def create_arena_participation_router(
         principal = await _principal(auth, request, csrf=True)
         if payment_service is not None:
             try:
-                await payment_service.get_or_bind_github_wallet(
+                await payment_service.get_or_bind_platform_wallet(
                     user_id=principal.user_id,
                     identity_provider=principal.identity_provider,
                     provider_subject=principal.provider_subject,

@@ -175,10 +175,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   公开批次和状态 API 已实现，但尚未部署或广播纪念 NFT testnet 交易。
 - 产品前端已迁移到外部
   [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
-  Vercel 部署到 `www.arena402.com`。后端已实现同源 GitHub OAuth + PKCE、不可变
-  GitHub subject、现有 Session/CSRF Cookie 与安全回跳；仍需配置真实 OAuth App，
-  把 legacy Agent/listing/ELO client 切换到当前 API，并完成 Vercel→腾讯云公网
-  联调。本仓库 `frontend/` 已退出默认生产 profile。
+  Vercel 部署到 `www.arena402.com`。后端支持平台用户名/密码账号以及可选
+  GitHub OAuth + PKCE；Agent、钱包和比赛所有权统一使用内部 `user_id`，登录
+  Provider 不提供支付权限。公共注册需显式启用，广州公网 API 仍需迁往境外入口
+  或完成备案。本仓库 `frontend/` 已退出默认生产 profile。
 - 标准 HTTP x402 V2 challenge/retry/header 已实现；公共 Facilitator 兼容尚未
   完成真实 testnet 验收。
 - TEE、主网资金、链上 escrow、退款、争议、生产手续费和多链不属于已实现能力。

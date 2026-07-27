@@ -20,7 +20,9 @@ from .repository import MandateRejected, WalletUnavailable, _identifier
 def _binding(row: Any) -> UserWalletBinding:
     return UserWalletBinding(
         user_id=str(row["user_id"]),
-        github_subject=str(row["github_subject"]),
+        github_subject=(
+            str(row["github_subject"]) if row["github_subject"] is not None else None
+        ),
         wallet_id=str(row["wallet_id"]),
         chain_id=int(row["chain_id"]),
         address=str(row["account_address"]),
@@ -118,7 +120,8 @@ class PostgresPaymentRepository:
             async with connection.transaction():
                 user = await connection.fetchrow(
                     """
-                    SELECT user_id, identity_provider, provider_subject
+                    SELECT user_id, identity_provider, provider_subject,
+                           temporary, disabled_at
                     FROM public.connector_users
                     WHERE user_id = $1
                     FOR UPDATE
@@ -127,10 +130,24 @@ class PostgresPaymentRepository:
                 )
                 if (
                     user is None
-                    or user["identity_provider"] != "github"
-                    or not user["provider_subject"]
+                    or user["temporary"]
+                    or user["disabled_at"] is not None
+                    or user["identity_provider"] not in {"github", "password"}
+                    or (
+                        user["identity_provider"] == "github"
+                        and not user["provider_subject"]
+                    )
+                    or (
+                        user["identity_provider"] == "password"
+                        and user["provider_subject"] is not None
+                    )
                 ):
-                    raise WalletUnavailable("github_identity_required")
+                    raise WalletUnavailable("platform_identity_required")
+                identity_subject = (
+                    user["provider_subject"]
+                    if user["identity_provider"] == "github"
+                    else None
+                )
                 existing = await connection.fetchrow(
                     """
                     SELECT user_id, github_subject, wallet_id, chain_id,
@@ -141,8 +158,8 @@ class PostgresPaymentRepository:
                     user_id,
                 )
                 if existing is not None:
-                    if existing["github_subject"] != user["provider_subject"]:
-                        raise WalletUnavailable("github_identity_conflict")
+                    if existing["github_subject"] != identity_subject:
+                        raise WalletUnavailable("platform_identity_conflict")
                     return _binding(existing)
                 wallet = await connection.fetchrow(
                     """
@@ -168,7 +185,7 @@ class PostgresPaymentRepository:
                                   account_address, bound_at
                         """,
                         user_id,
-                        user["provider_subject"],
+                        identity_subject,
                         wallet["wallet_id"],
                         wallet["chain_id"],
                         wallet["account_address"],

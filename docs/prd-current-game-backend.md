@@ -168,7 +168,7 @@ Join 预检失败时不得增加 `readyCount`。不能使用登录人数、前�
 
 当前代码已经实现：
 
-- GitHub User 永久 testnet 钱包绑定；
+- 平台 `user_id` 永久 testnet 钱包绑定，GitHub 仅为可选登录身份；
 - Game-scoped PaymentMandate；
 - 单笔 / 累计额度、有效期、撤销和显式 allowed payees；
 - 并发安全、幂等的 `reserve / consume / release`；

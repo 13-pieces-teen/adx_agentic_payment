@@ -153,9 +153,33 @@ class ConnectorAuth:
         return await self._issue_session(user)
 
     async def register(
-        self, invite_code: str, username: str, password: str
+        self, invite_code: str | None, username: str, password: str
     ) -> IssuedSession:
-        return await self.accept_invite(invite_code, username, password)
+        if invite_code:
+            return await self.accept_invite(invite_code, username, password)
+        if not self.config.public_registration_enabled:
+            raise AuthError(403, "Registration requires an invite")
+
+        await self.initialize()
+        normalized_username = self._normalize_username(username)
+        self._validate_password(password)
+        if await self.repository.get_user_by_username(normalized_username):
+            raise AuthError(409, "Username is already registered")
+        async with self._password_work_slots:
+            password_hash = await asyncio.to_thread(
+                self._password_hasher.hash,
+                password,
+            )
+        try:
+            user = await self.repository.create_password_user(
+                f"user_{uuid.uuid4().hex[:20]}",
+                normalized_username,
+                password_hash,
+                _now(),
+            )
+        except DuplicateIdentityError as exc:
+            raise AuthError(409, "Username is already registered") from exc
+        return await self._issue_session(user)
 
     async def login(self, username: str, password: str) -> IssuedSession:
         await self.initialize()

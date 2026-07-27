@@ -36,8 +36,9 @@ the confirmation and inventory-commit transaction, and a historical Injective
 testnet transfer has been matched through the read-only recovery path. No new
 state-changing transaction was broadcast as part of this milestone.
 
-The second-stage backend now also implements permanent GitHub User-to-wallet
-binding, bounded and revocable Game-scoped PaymentMandates, x402 V2
+The second-stage backend now also implements permanent platform User-to-wallet
+binding keyed by internal `user_id`, bounded and revocable Game-scoped
+PaymentMandates, x402 V2
 challenge/response headers, an isolated unattended encrypted testnet signer, and a
 dedicated non-public Settlement Worker. A newly approved live testnet
 transaction against the currently deployed services remains outstanding.
@@ -82,8 +83,9 @@ single verified ERC-20 `Transfer`.
 The per-Intent human confirmation bridge remains a development verifier, not
 the Hosted production payment path. The approved testnet launch target is:
 
-- each GitHub User is permanently bound to one platform-managed
-  `sandbox_guest` testnet wallet; later logins and Games reuse that wallet;
+- each durable platform User is permanently bound to one platform-managed
+  `sandbox_guest` testnet wallet; password and GitHub sign-in identities do not
+  change that business authority, and later logins and Games reuse the wallet;
 - joining the Game once confirms a bounded Game-scoped PaymentMandate;
 - every accepted trade is reserved, signed, submitted, confirmed, and committed
   automatically without a per-trade user action;
@@ -139,7 +141,7 @@ remains authoritative.
 
 当前已实现：
 
-- GitHub User 永久 testnet 钱包绑定和 Game Participant 钱包快照；
+- 平台 `user_id` 永久 testnet 钱包绑定和 Game Participant 钱包快照；
 - 可覆盖一局多笔交易的 PaymentMandate，以及并发安全、幂等的额度
   `reserve / consume / release`；
 - revoke 阻止新 reserve，已 submitted 记录继续走确认恢复；

@@ -67,7 +67,7 @@ class AcceptInviteRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    invite_code: str = Field(min_length=20, max_length=512)
+    invite_code: Optional[str] = Field(default=None, min_length=20, max_length=512)
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=12, max_length=1024)
 

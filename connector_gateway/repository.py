@@ -40,6 +40,14 @@ class ConnectorRepository(Protocol):
         created_at: datetime,
     ) -> dict[str, Any]: ...
 
+    async def create_password_user(
+        self,
+        user_id: str,
+        username: str,
+        password_hash: str,
+        created_at: datetime,
+    ) -> dict[str, Any]: ...
+
     async def get_user_by_username(
         self, normalized_username: str
     ) -> dict[str, Any] | None: ...
@@ -155,6 +163,30 @@ class MemoryConnectorRepository:
             self.users_by_name[username] = user_id
             invite["consumed_at"] = created_at
             invite["consumed_by"] = user_id
+            return copy.deepcopy(user)
+
+    async def create_password_user(
+        self,
+        user_id: str,
+        username: str,
+        password_hash: str,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            if username in self.users_by_name:
+                raise DuplicateIdentityError
+            user = {
+                "user_id": user_id,
+                "username": username,
+                "password_hash": password_hash,
+                "temporary": False,
+                "identity_provider": "password",
+                "provider_subject": None,
+                "created_at": created_at,
+                "disabled_at": None,
+            }
+            self.users[user_id] = user
+            self.users_by_name[username] = user_id
             return copy.deepcopy(user)
 
     async def get_user_by_username(

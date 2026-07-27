@@ -3,10 +3,13 @@
 ## Platform-assigned wallet API
 
 Arena platform wallets are allocated from the imported `wallet_inventory` only
-after a GitHub-authenticated user exists. The allocation is lazy and atomic:
-the first request claims one `available` wallet, binds it to the user's GitHub
-subject, and marks the inventory row `bound`. Later requests return the same
-wallet. The API never returns `secret_ref`, a private key, or a seed phrase.
+after a durable platform user exists. The allocation is lazy and atomic: the
+first request claims one `available` wallet, binds it to the internal `user_id`,
+and marks the inventory row `bound`. Password and GitHub sign-in identities use
+the same business rule. Later requests return the same wallet. A legacy
+`github_subject` may remain as compatibility metadata for existing rows, but it
+is not wallet authority. The API never returns `secret_ref`, a private key, or
+a seed phrase.
 
 `GET /api/v1/me/wallet`
 
