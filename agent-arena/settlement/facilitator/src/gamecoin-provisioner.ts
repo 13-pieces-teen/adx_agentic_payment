@@ -7,11 +7,16 @@ import {
   keccak256,
   type Hex,
   type TransactionSerialized,
+  zeroAddress,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import pg from "pg";
 
 import { loadFacilitatorPrivateKey } from "./facilitator-csv.ts";
+import {
+  findMatchingMintEvidence,
+  type MintEventEvidence,
+} from "./gamecoin-recovery.ts";
 import { waitViaBlockscout } from "./lib-tx.ts";
 
 const { Pool } = pg;
@@ -54,6 +59,15 @@ const GAME_COIN_ABI = [
       { name: "amount", type: "uint256" },
     ],
     outputs: [],
+  },
+  {
+    type: "event",
+    name: "Transfer",
+    inputs: [
+      { name: "from", type: "address", indexed: true },
+      { name: "to", type: "address", indexed: true },
+      { name: "value", type: "uint256", indexed: false },
+    ],
   },
 ] as const;
 
@@ -305,23 +319,34 @@ async function reconcileSubmitted(
       blockNumber: rpcReceipt.blockNumber,
     };
   } catch {
-    const indexed = await waitViaBlockscout(submitted.hash, 15_000);
-    if (indexed.status === "pending") {
-      const serialized = await recreateTransaction(
-        provision,
-        kind,
-        submitted,
-      );
-      await broadcast(serialized, submitted.hash);
-      return;
+    const recoveredMintBlock =
+      kind === "mint"
+        ? await recentMintEventBlock(provision, submitted.hash)
+        : null;
+    if (recoveredMintBlock !== null) {
+      receipt = {
+        status: "success",
+        blockNumber: recoveredMintBlock,
+      };
+    } else {
+      const indexed = await waitViaBlockscout(submitted.hash, 15_000);
+      if (indexed.status === "pending") {
+        const serialized = await recreateTransaction(
+          provision,
+          kind,
+          submitted,
+        );
+        await broadcast(serialized, submitted.hash);
+        return;
+      }
+      if (indexed.blockNumber === undefined) {
+        throw new Error(`gamecoin_${kind}_block_number_missing`);
+      }
+      receipt = {
+        status: indexed.status === "success" ? "success" : "reverted",
+        blockNumber: BigInt(indexed.blockNumber),
+      };
     }
-    if (indexed.blockNumber === undefined) {
-      throw new Error(`gamecoin_${kind}_block_number_missing`);
-    }
-    receipt = {
-      status: indexed.status === "success" ? "success" : "reverted",
-      blockNumber: BigInt(indexed.blockNumber),
-    };
   }
   if (receipt.status !== "success") {
     await failProvision(provision.provision_id, `${kind}_transaction_reverted`);
@@ -372,6 +397,34 @@ async function reconcileSubmitted(
   console.log(
     `arena402_gamecoin_provision_confirmed provision=${provision.provision_id} block=${receipt.blockNumber}`,
   );
+}
+
+async function recentMintEventBlock(
+  provision: ProvisionRow,
+  transactionHash: Hex,
+): Promise<bigint | null> {
+  const latestBlock = await publicClient.getBlockNumber();
+  const fromBlock = latestBlock > 4_096n ? latestBlock - 4_096n : 0n;
+  const target = getAddress(provision.account_address);
+  const logs = await publicClient.getContractEvents({
+    address: token,
+    abi: GAME_COIN_ABI,
+    eventName: "Transfer",
+    args: { from: zeroAddress, to: target },
+    fromBlock,
+    toBlock: "latest",
+  });
+  const evidence: MintEventEvidence[] = logs.map((item) => ({
+    transactionHash: item.transactionHash,
+    blockNumber: item.blockNumber,
+    to: getAddress(item.args.to),
+    value: item.args.value,
+  }));
+  return findMatchingMintEvidence(evidence, {
+    transactionHash,
+    to: target,
+    value: BigInt(provision.amount_atomic),
+  });
 }
 
 async function recreateTransaction(
