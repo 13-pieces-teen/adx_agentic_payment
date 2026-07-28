@@ -164,29 +164,5 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  web:
-    build:
-      context: .
-      dockerfile: deploy/docker/Dockerfile.web
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
-    restart: unless-stopped
-    init: true
-    environment:
-      NODE_ENV: production
-      NEXT_TELEMETRY_DISABLED: "1"
-      HOSTNAME: 0.0.0.0
-      PORT: "3000"
-    depends_on:
-      api:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:3000:3000"
-    read_only: true
-    tmpfs:
-      - /tmp:size=128m,mode=1777
-    security_opt:
-      - no-new-privileges:true
-
 volumes:
   arena402_local_postgres:

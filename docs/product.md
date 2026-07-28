@@ -181,7 +181,7 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   Vercel 部署到 `www.arena402.com`。后端支持平台用户名/密码账号以及可选
   GitHub OAuth + PKCE；Agent、钱包和比赛所有权统一使用内部 `user_id`，登录
   Provider 不提供支付权限。公共注册需显式启用，广州公网 API 仍需迁往境外入口
-  或完成备案。本仓库 `frontend/` 已退出默认生产 profile。
+  或完成备案。本仓库不包含产品前端或 Web Compose 服务。
 - 标准 HTTP x402 V2 challenge/retry/header 已实现；公共 Facilitator 兼容尚未
   完成真实 testnet 验收。
 - TEE、主网资金、链上 escrow、退款、争议、生产手续费和多链不属于已实现能力。

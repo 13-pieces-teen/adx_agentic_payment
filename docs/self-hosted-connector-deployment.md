@@ -3,7 +3,7 @@
 > 前端边界（2026-07-25）：产品前端权威位于
 > [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
 > Vercel 发布到 `www.arena402.com`。腾讯云仅承载 `api.arena402.com` 后端；
-> 本仓库 `frontend/` 只保留为显式 `legacy-web` profile，不属于默认生产部署。
+> 本仓库不包含产品前端或 Web Compose 服务。
 
 本文档描述当前仓库的单机生产拓扑，目标是让外部用户完成“一次安装、一次授权、自动上线”。部署不依赖 Supabase：Connector 身份、配对、设备、Runtime、命令、事件和审计数据均落在自托管 PostgreSQL。
 
@@ -250,10 +250,10 @@ sudo sh deploy/scripts/backup.sh
 
 默认写到 `/var/backups/adx`，权限为 700/600，保留 14 天。备份包含用户、设备、事件和审计敏感数据，应复制到加密的异地主机/对象存储；Docker volume 本身不是备份。
 
-恢复会覆盖数据库，应先停止 API/Web、保留当前备份并在维护窗口操作：
+恢复会覆盖数据库，应先停止 API、保留当前备份并在维护窗口操作：
 
 ```bash
-docker compose --env-file deploy/.env -f docker-compose.production.yml stop api web
+docker compose --env-file deploy/.env -f docker-compose.production.yml stop api
 gunzip -c /var/backups/adx/<backup>.sql.gz | \
   docker compose --env-file deploy/.env -f docker-compose.production.yml \
   exec -T postgres sh -eu -c \
@@ -278,7 +278,7 @@ df -h
 安全边界：
 
 - 不得把 `ADX_CONNECTOR_UNSAFE_DEMO` 改成 `true`；
-- 不得把 PostgreSQL/API/Web 端口映射到公网；
+- 不得把 PostgreSQL 或 API 容器端口直接映射到公网；
 - 除 `generate-env.sh` 首次生成时的一次性提示外，不得在日志中打印 session secret、bootstrap invite、设备 token 或用户输入的 Agent 凭证；
 - `deploy/.env`、数据库备份和 Certbot 私钥必须按密钥材料管理；
 - 证书、容器和 `/api/health` 正常并不等于完整 E2E 通过，仍需从外部机器完成安装、授权、WSS 上线、命令和撤销测试。

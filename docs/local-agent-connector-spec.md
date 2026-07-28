@@ -8,7 +8,7 @@
 > 统一 Runtime 目标：[`hosted-arena-agent-spec.md`](./hosted-arena-agent-spec.md)
 > 前端边界：产品 UI 已迁移到
 > [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)；
-> 本仓库 Next.js 仅为 Compose 过渡壳，外部 Vercel/API 切换尚未验收
+> 本仓库不包含 Next.js 服务，外部 Vercel/API 完整验收仍需按路线图推进
 
 ## 1. 核心结论
 
@@ -23,7 +23,7 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 - Pairing 过期清理和待处理 Pairing 总量上限；
 - Command 在任何 WSS 下发前先跨越 PostgreSQL durable pre-delivery barrier；
 - `adx-connector connect --server https://...`、浏览器授权、凭据保存和系统自启动；
-- Docker Compose + PostgreSQL + FastAPI + Next.js + Caddy 部署栈，支持域名 TLS 和短期 IPv4 TLS；
+- Docker Compose + PostgreSQL + FastAPI + Caddy 后端部署栈，支持域名 TLS 和短期 IPv4 TLS；
 - Windows/Linux AMD64/ARM64 安装包、SHA-256 校验和与一行安装脚本。
 
 这条路径现已在 Device/Runtime 控制面之上实现
@@ -128,13 +128,12 @@ User device
                     |
                     v
 Internet -> Caddy :80/:443
-             ├─ Next.js 15.5.21 :3000
              ├─ FastAPI production router :8000
              ├─ /downloads (installer + binaries + SHA-256)
              └─ PostgreSQL 17 (internal Docker network only)
 ```
 
-只有 Caddy 映射宿主机端口。Next.js、FastAPI 和 PostgreSQL 不直接暴露公网端口。Docker Compose 为 2 vCPU / 4 GB RAM 的单机 beta 配置了健康检查、资源上限、只读根文件系统（适用服务）和日志轮转。
+只有 Caddy 映射宿主机端口。FastAPI 和 PostgreSQL 不直接暴露公网端口。Docker Compose 为单机 beta 配置了健康检查、资源上限、只读根文件系统（适用服务）和日志轮转。
 
 当前 Arena 扩展已按以下逻辑边界完成代码接线：
 
@@ -464,10 +463,10 @@ private chain-of-thought。
 仓库提供：
 
 - `docker-compose.production.yml`；
-- PostgreSQL 17、migration job、单 worker FastAPI、Next.js 15.5.21、Caddy 2；
+- PostgreSQL 17、migration job、单 worker FastAPI、Caddy 2；
 - 域名模式的 Caddy 自动 TLS；
 - 裸 IPv4 的 HTTP challenge bootstrap、Certbot short-lived IP certificate 和 systemd 续期 timer；
-- 只暴露 80/443，PostgreSQL、API 和 Web 仅在 Docker 网络；
+- 只暴露 80/443，PostgreSQL 和 API 仅在 Docker 网络；
 - 数据库备份/恢复、升级/回滚、SSH/UFW hardening 脚本；
 - Windows/Linux AMD64/ARM64 Connector artifacts 与 installer。
 
@@ -486,8 +485,8 @@ private chain-of-thought。
 | Command delivery | `connector_gateway/service.py`、`persistent_service.py` | 已实现 durable pre-delivery barrier、重排与幂等 |
 | Public ingress protection | `rate_limit.py`、`service.py` | 已实现 auth/Pairing 限流、key 上限、Pairing 过期清理与容量上限 |
 | Local Connector | `connector/` | 已实现 discovery、pair/connect/run、WSS、outbox/receipt、owned child；默认 detection-only |
-| Onboarding | `frontend/src/app/connect/page.tsx`、`deploy/install/` | 已实现浏览器授权、Windows Scheduled Task、Linux systemd user service |
-| Frontend | 外部 `sunruize93-cmyk/arena402` + 本地 `frontend/` 过渡壳 | 产品 UI 已迁移但 Vercel/API 切换未验收；当前 Compose 仍使用固定 Next.js 15.5.21 壳 |
+| Onboarding | 外部 `sunruize93-cmyk/arena402`、`deploy/install/` | 已实现浏览器授权、Windows Scheduled Task、Linux systemd user service |
+| Frontend | 外部 `sunruize93-cmyk/arena402` | 产品 UI 的唯一代码源；本仓库只维护后端契约 |
 | Self-hosted deployment | `docker-compose.production.yml`、`deploy/` | 已实现单机部署资产、域名/IP TLS 和安装包托管；真实服务器 E2E 待执行 |
 | Arena business durability | `arena_game/`、`arena_core/`、`db/migrations/006_*`–`012_*` | Game/Round/Pool/Pairing/Negotiation/Inventory/Ranking 已持久化；Connector 仍不可直接写入 |
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |

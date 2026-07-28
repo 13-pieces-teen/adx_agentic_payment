@@ -167,7 +167,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | `hosted_agent_runtime/` | Secret Store、durable Attempt recorder、Provider/Model/thinking capability registry、安全 Prompt/Driver，以及 DeepSeek/OpenAI-compatible HTTPS Provider |
 | `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、同 Provider Runtime PATCH、PostgreSQL repository 与可选 Secret backend 生产组合 |
 | `docs/hosted-arena-agent-*.md` | Hosted/Local 统一 Runtime 的已批准规格、实施计划与当前阶段状态 |
-| `frontend/` | 仅用于本地开发和显式 `legacy-web` profile 的过渡壳；生产默认不再构建或启动它 |
+| [外部 Arena 402 frontend](https://github.com/sunruize93-cmyk/arena402) | 产品 UI 的唯一代码源与 Vercel 部署源；本仓库只维护后端 |
 | `deploy/`, `docker-compose.production.yml` | 面向 `api.arena402.com` 的后端单机部署；Arena Worker 默认启用，Hosted Worker/Credential Controller 在 credential backend 验收后显式启用；非 API 请求回到 Vercel 前端 |
 | `agent-arena/settlement/` | Injective EVM EIP-3009 结算原型 |
 | `agent-arena/specs/` | 已完成且冻结的 settlement 开发记录 |
@@ -208,7 +208,7 @@ docker compose -f docker-compose.local.yml up --build -d
 
 ```powershell
 docker compose -f docker-compose.local.yml ps
-docker compose -f docker-compose.local.yml logs -f api web
+docker compose -f docker-compose.local.yml logs -f api
 ```
 
 正常停止服务不会删除 PostgreSQL 数据：
@@ -339,7 +339,7 @@ python deploy/scripts/mark_memorial_credential_claimed.py `
 - Hosted/Arena 生产运行：[`docs/hosted-arena-production-runbook.md`](docs/hosted-arena-production-runbook.md)
 - Connector 规格：[`docs/local-agent-connector-spec.md`](docs/local-agent-connector-spec.md)
 - Connector 部署：[`docs/self-hosted-connector-deployment.md`](docs/self-hosted-connector-deployment.md)
-- 前端迁移边界：[`frontend/README.md`](frontend/README.md)
+- 产品前端：[sunruize93-cmyk/arena402](https://github.com/sunruize93-cmyk/arena402)
 - 历史文档：[`docs/archive/README.md`](docs/archive/README.md)
 
 ## 项目协作

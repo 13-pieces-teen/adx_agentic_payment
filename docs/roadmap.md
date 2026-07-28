@@ -183,8 +183,8 @@ Vercel 部署到 `www.arena402.com`。后端 GitHub OAuth + PKCE、Session/CSRF 
 和安全回跳契约已实现。2026-07-26 已在公网验证真实 OAuth App 跳转、OAuth state
 Cookie、前端直连 API、精确 Origin CORS 和带凭证预检；外部前端也已迁移到当前
 Arena API。公开 Game Event SSE 与前端断线轮询降级已经实现，但腾讯云部署、
-登录后创建 Agent/Join 的人工浏览器验收及新鲜 testnet 自动结算仍未完成。本仓库
-`frontend/` 仅保留为本地开发与显式 `legacy-web` profile。
+登录后创建 Agent/Join 的人工浏览器验收及新鲜 testnet 自动结算仍未完成。产品
+前端只在外部 `sunruize93-cmyk/arena402` 仓库维护，本仓库不再包含 Web 服务。
 
 王城典当行 clean-slate 后端闭环已经形成。`arena_game/`、`arena_core/` 与
 PostgreSQL `arena402` schema 是游戏业务权威；旧 `matching/`、Supabase 业务
@@ -226,9 +226,9 @@ create game
 - [x] SettlementSDK mock/real adapter。
 - [x] 买方授权、项目 Facilitator、nonce replay protection 和 direct
       `arena402-g` testnet transfer；mUSDC 路径保留为历史兼容验证。
-- [x] 本仓库 Compose 过渡壳具备登录/配对、Hosted/Local Agent 管理、Game
-      Lobby、Game View、时间线和 Result 页面；旧市场/ELO URL 只保留到 `/game`
-      的兼容重定向。
+- [x] 原 Compose 过渡壳曾覆盖登录/配对、Hosted/Local Agent 管理、Game
+      Lobby、Game View、时间线和 Result 页面；产品 UI 迁至外部仓库后，本仓库
+      已移除该壳。
 - [x] Hosted Agent Spec/Plan 已形成，并完成活动文档对统一 `action` schema、
       Secret Manager BYOK 例外、单局唯一、Deadline Finalizer 和 PaymentMandate
       边界的 Phase 0 同步。
@@ -306,7 +306,7 @@ create game
       OAuth 跳转、Cookie/CORS 公网基础联调已通过。
 - [ ] 公开 Game Event SSE 与前端轮询降级代码已完成本地回归，尚待腾讯云和
       Vercel 部署后完成实时投影、登录创建 Agent、Join/开局和 testnet 自动支付
-      的生产验收；本仓库过渡壳已退出默认生产 profile。
+      的生产验收；本仓库前端过渡壳已移除。
 - [x] 固定五回合事件表、版本化十张牌组、确定性 seed 洗牌、schedule
       commitment、结束后 seed 揭晓与冻结终场价格已实现。
 - [x] `run_dual_hosted_pawnhouse_demo.py --with-settlement-intent` 可一条命令
@@ -468,7 +468,7 @@ create game
 
 ### Phase 8：前端、部署、E2E 与校准（M3）
 
-- [x] Compose 过渡壳已有 Game Lobby、Game View、Result 与公开投影。
+- [x] 原 Compose 过渡壳的页面能力已迁交外部前端，本仓库已移除该壳。
 - [ ] 外部前端完成对应页面、Vercel 部署及 API/CORS 端到端切换。
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker

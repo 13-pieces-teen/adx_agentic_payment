@@ -33,12 +33,10 @@ settlement E2E has completed. The former in-memory
 `matching/` and Supabase/ELO business path have been removed.
 
 Frontend product development is owned by the separate
-`sunruize93-cmyk/arena402` repository and will be deployed through Vercel.
-Until that deployment and backend API/CORS cutover are verified, this
-repository's `frontend/` is a temporary Compose integration shell, not the
-frontend source of truth. Do not add new product UI here. Remove the shell only
-after local/production Compose no longer depends on it and the external
-frontend passes end-to-end integration.
+`sunruize93-cmyk/arena402` repository and is deployed through Vercel. This
+repository contains no product UI or Compose web service. Keep backend API,
+session, CORS, and deployment contracts compatible with the external frontend,
+and make frontend changes in its owning repository.
 
 ## Read first and documentation authority
 

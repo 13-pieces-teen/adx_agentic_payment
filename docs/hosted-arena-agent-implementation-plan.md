@@ -8,9 +8,8 @@
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
-> 前端边界：产品 UI 已迁移到外部 `sunruize93-cmyk/arena402`；后端 GitHub
-> OAuth/Session 契约已实现，本计划中的 `frontend/` 路径只记录本地开发与
-> 显式 `legacy-web` profile，Vercel→腾讯云公网联调尚未验收
+> 前端边界：产品 UI 只在外部 `sunruize93-cmyk/arena402` 维护；本仓库不包含
+> Web 服务。后端 GitHub OAuth/Session 契约已实现，Vercel→腾讯云公网联调尚未验收
 > 设计优先级：以本计划定义的最终 Hosted/Local 统一 Runtime 目标为准；现有
 > Game Design 是待同步的背景输入，不是限制目标架构调整的硬约束
 
@@ -98,9 +97,8 @@ User logs in
 | `db/migrations/002_connector_gateway.sql` | PostgreSQL 唯一约束、索引与审计模式 |
 | `deploy/scripts/migrate.py` | advisory lock、checksum migration 基础 |
 | `web/api.py` | production composition、Session principal 与 CSRF 接线 |
-| `frontend/src/app/agents/page.tsx` | Agent 统一入口页面 |
-| `frontend/src/lib/connector-api.ts` | 同源 authenticated API client 模式 |
-| `docker-compose.production.yml` | 单机 PostgreSQL/API/Caddy 默认后端部署骨架；Web 仅为显式 legacy profile |
+| 外部 `sunruize93-cmyk/arena402` | Agent 统一入口与 authenticated API client |
+| `docker-compose.production.yml` | 单机 PostgreSQL/API/Caddy 后端部署骨架 |
 
 复用的是安全与持久化模式，不是把 Connector Device/Command 表作为 Hosted Agent 表。
 
@@ -280,9 +278,7 @@ hosted_agent_runtime/
 ```text
 web/hosted_agent_api.py
 db/migrations/003_arena_agent_runtime.sql
-frontend/src/lib/hosted-agent-api.ts
-frontend/src/components/HostedAgentCreator.tsx
-frontend/src/app/agents/page.tsx
+[external] sunruize93-cmyk/arena402
 deploy/scripts/migrate.py
 docker-compose.production.yml
 requirements/production.in
@@ -871,8 +867,8 @@ credential_id
 - 显示 Sandbox/testnet-only、Provider 数据政策与费用提示；
 - 显示 replace credential、disable；
 - 不显示 secret_ref、完整 Prompt 或原始 Provider 错误；
-- 本仓库 Compose 过渡页只调用正式 API；外部 Next.js 产品仓库仍需移除 legacy
-  Agent/listing/ELO client 并切换到当前 Hosted/Pawnhouse/Connector API。
+- 所有产品 UI 改动只进入外部 Next.js 产品仓库，并调用当前
+  Hosted/Pawnhouse/Connector API。
 
 ### 11.4 测试
 

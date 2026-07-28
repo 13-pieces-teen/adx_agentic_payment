@@ -11,8 +11,7 @@
 本 PRD 定义 Arena 402 “单一当前大厅 + 游戏匹配展示 + 结果页”的前端体验。
 
 正式产品前端的代码源和部署源是独立的 `sunruize93-cmyk/arena402` 仓库，并通过
-Vercel 部署。本仓库的 `frontend/` 仍是临时 Compose 集成壳，不在其中新增产品 UI。
-只有外部前端完成 API/CORS/E2E 切换且本仓库 Compose 不再依赖该壳后，才另行移除它。
+Vercel 部署。本仓库仅维护后端 API、会话、CORS 和部署契约，不包含产品 UI。
 
 ## 2. 产品目标
 
@@ -32,7 +31,7 @@ Vercel 部署。本仓库的 `frontend/` 仍是临时 Compose 集成壳，不在
 - 在页面公开 Prompt、策略全文、Provider 原始输出或私有推理；
 - 为尚未完成的 Local Connector Game Adapter 提供可用入口；
 - 把当前 x402 V2 + EIP-3009 direct relay 显示为已通过公共 Facilitator 生产认证；
-- 在本仓库临时 `frontend/` 中实现正式产品页面。
+- 在本后端仓库中实现正式产品页面。
 
 ## 4. 用户与前置条件
 

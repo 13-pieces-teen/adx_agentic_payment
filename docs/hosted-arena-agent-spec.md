@@ -10,8 +10,7 @@
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
 > 相关入口：[Agent 入场与 Runtime 绑定](./agent-onboarding.md)
 > 前端边界：产品 UI 由外部 `sunruize93-cmyk/arena402` 负责并通过 Vercel
-> 部署；后端 GitHub OAuth/Session 契约已实现，本仓库 Next.js 页面不属于默认
-> 生产 profile
+> 部署；后端 GitHub OAuth/Session 契约已实现，本仓库不包含 Next.js 服务
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本规格同步
 > 设计优先级：本规格以最终 Hosted/Local 统一 Runtime 目标为准；现有 Game Design
 > 仅作为背景和待迁移输入，不作为阻止目标架构调整的严格约束
@@ -286,7 +285,7 @@ Arena Core Worker (no public port, DB leader/lease)
 - PostgreSQL durable queue、lease 和 `FOR UPDATE SKIP LOCKED`；
 - `httpx.AsyncClient` + Provider-specific Adapter；
 - 腾讯云 Secrets Manager/KMS 作为生产 Secret backend；
-- Next.js 作为统一 Agent 创建与状态界面；
+- 外部 Vercel Next.js 作为统一 Agent 创建与状态界面；
 - Docker Compose 继续承载单机 beta。
 
 MVP 不增加 Redis、Kafka、Temporal、Kubernetes 或独立向量数据库。若以后扩展多主机，
@@ -1270,9 +1269,11 @@ Hosted Agent 可以先完成决策/协商 vertical slice，但不能在该依赖
 目标腾讯云主机为 2 vCPU、4 GB RAM、70 GB 磁盘。首版拓扑：
 
 ```text
-Caddy
-  -> Next.js
-  -> FastAPI control plane
+Vercel Next.js (external)
+  -> Caddy
+     -> FastAPI control plane
+
+Backend Compose
   -> Arena Core Worker (no public port)
   -> Hosted Worker (no public port)
   -> Credential Controller (no public port, low concurrency)
@@ -1331,7 +1332,7 @@ External:
 
 - production Session、CSRF 和对象所有权边界；
 - Connector 的 durable-before-delivery、幂等键、Receipt/Event、脱敏和有界 payload 模式；
-- FastAPI、PostgreSQL、Next.js、Caddy 与 Docker Compose 部署壳；
+- FastAPI、PostgreSQL、Caddy 与 Docker Compose 后端部署壳；
 - Settlement 的 testnet direct-transfer 原型。
 
 已删除或明确不能作为 Hosted 业务权威的能力：

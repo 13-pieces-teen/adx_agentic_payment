@@ -785,52 +785,6 @@ services:
     mem_limit: 256m
     logging: *default-logging
 
-  web:
-    profiles:
-      - legacy-web
-    build:
-      context: .
-      dockerfile: deploy/docker/Dockerfile.web
-      args:
-        NEXT_PUBLIC_API_URL: ${ADX_PUBLIC_APP_URL:?Set ADX_PUBLIC_APP_URL in deploy/.env}
-    restart: unless-stopped
-    init: true
-    environment:
-      NODE_ENV: production
-      NEXT_TELEMETRY_DISABLED: "1"
-      HOSTNAME: 0.0.0.0
-      PORT: "3000"
-      TZ: ${TZ:-Asia/Shanghai}
-    depends_on:
-      api:
-        condition: service_healthy
-    networks:
-      - edge
-    expose:
-      - "3000"
-    read_only: true
-    tmpfs:
-      - /tmp:size=128m,mode=1777
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - >-
-          fetch("http://127.0.0.1:3000/").then(r => {
-            if (!r.ok) process.exit(1)
-          }).catch(() => process.exit(1))
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 45s
-    stop_grace_period: 30s
-    cpus: 0.75
-    mem_limit: 768m
-    logging: *default-logging
-
   caddy:
     image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped

@@ -194,8 +194,7 @@ if ! awk '
   /^\// || /(^|\/)\.\.($|\/)/ { exit 1 }
   /(^|\/)\.env($|\.)/ \
     && $0 != ".env.example" \
-    && $0 != "agent-arena/settlement/.env.example" \
-    && $0 != "frontend/.env.example" { exit 1 }
+    && $0 != "agent-arena/settlement/.env.example" { exit 1 }
   /\.pem$/ || /\.key$/ { exit 1 }
   /^(\.\/)?deploy\/secrets\/.+/ \
     && $0 != "deploy/secrets/README.md" \

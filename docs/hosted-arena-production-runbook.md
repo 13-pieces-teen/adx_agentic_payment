@@ -519,7 +519,7 @@ Compose 常驻容器内存上限：
 所以旧 2C4G 主机不再是支持目标。生产主机必须按实际峰值留出充足 headroom，并在
 100 Agent 验收前完成 CPU、内存、磁盘和网络重新定容；不能通过交换或关闭安全
 边界硬撑。
-Vercel 前端不占用这台服务器；`legacy-web` profile 不得在 MVP 生产机启动。
+Vercel 前端不占用这台服务器；后端 Compose 不包含 Web 服务。
 
 120 个数据库连接是当前起步值。所有服务必须继续满足
 `sum(replica_count × pool_max_size) <= 84`，其余至少 30% 留给 migration、健康

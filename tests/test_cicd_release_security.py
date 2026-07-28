@@ -80,7 +80,6 @@ def test_release_allows_only_the_tracked_environment_templates() -> None:
     for template in (
         '".env.example"',
         '"agent-arena/settlement/.env.example"',
-        '"frontend/.env.example"',
     ):
         assert template in RELEASE
     assert "/(^|\\/)\\.env($|\\.)/" in RELEASE

@@ -6,7 +6,7 @@
 > 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
 > 统一 Runtime 计划：[`hosted-arena-agent-implementation-plan.md`](./hosted-arena-agent-implementation-plan.md)
 > 前端边界：产品 UI 已迁移到外部 `sunruize93-cmyk/arena402` 并计划由 Vercel
-> 部署；本计划中的本地 Next.js/Caddy 是当前 Compose 过渡实现
+> 部署；本仓库只保留 Caddy/FastAPI 后端入口，不包含 Next.js 服务
 
 ## 1. 交付策略
 
@@ -17,7 +17,7 @@
 ### 1.1 当前 beta 成功定义
 
 ```text
-Deploy Caddy + Next.js + FastAPI + PostgreSQL
+Deploy Caddy + FastAPI + PostgreSQL
   → Admin creates one-use invite
   → User runs one installer command
   → Connector creates pairing and opens /connect
@@ -81,21 +81,19 @@ Deploy Caddy + Next.js + FastAPI + PostgreSQL
 | `connector/internal/store/` | 凭据、receipt、staged event、durable outbox 和 singleton lock |
 | `connector/internal/driver/` | 固定 argv Claude/Codex 开发 runner；默认不启用 |
 | `connector/README.md` | Connector 使用与安全边界 |
-| `frontend/src/app/connect/page.tsx` | invite/register/login 和 Pairing 批准页面 |
-| `frontend/src/lib/connector-api.ts` | 同源 Auth/Connector API client |
+| 外部 `sunruize93-cmyk/arena402` | invite/register/login、Pairing 批准与同源 API client |
 | `deploy/install/` | Windows/Linux 安装、凭据目录权限和系统自启动 |
 
 ### 2.3 部署栈
 
 | 文件/目录 | 当前责任 |
 |---|---|
-| `docker-compose.production.yml` | PostgreSQL、migration、单 worker API、Next.js、Caddy、Certbot |
-| `deploy/docker/` | Python 3.12 API 和 Node 22 Web 镜像 |
+| `docker-compose.production.yml` | PostgreSQL、migration、单 worker API、Caddy、Certbot |
+| `deploy/docker/` | Python 3.12 API 镜像 |
 | `deploy/caddy/` | 域名 TLS、IP challenge bootstrap、IP certificate 配置 |
 | `deploy/scripts/` | env 生成、migration、部署、artifact、IP 证书续期、备份、主机硬化 |
 | `deploy/artifacts/` | 平台托管的 installer、Connector 二进制和 `.sha256` |
 | `requirements/production.txt` | 带 hash 的 Python production lock |
-| `frontend/package-lock.json` | Next.js 15.5.21 前端依赖锁 |
 
 详细运行步骤不在本计划重复维护，以 [`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md) 为准。
 
@@ -274,7 +272,6 @@ bundle，不能绕过 self-hosted Auth。
 ```text
 Public 80/443
   → Caddy
-      → Next.js 15.5.21
       → FastAPI / WSS, one Uvicorn worker
       → /downloads
   → PostgreSQL 17 on internal Docker network
@@ -297,7 +294,7 @@ Public 80/443
 3. 在服务器生成 `deploy/.env`；不得把 session secret、数据库密码或明文 invite 写入日志。
 4. 构建或校验四个平台 Connector artifacts 和 `.sha256`。
 5. 启动 PostgreSQL，执行带 advisory lock 与 checksum 的 migration。
-6. 启动单 worker API、Next.js 和 Caddy。
+6. 启动单 worker API 和 Caddy。
 7. 检查 health、证书、下载与 checksum。
 8. 从服务器之外的电脑执行安装和授权 E2E。
 9. 验证 Device revoke、服务重启和数据库恢复。
@@ -374,7 +371,7 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 - [x] Python production Auth、object authorization、rate limit、bounded Pairing 和 durable delivery 有专项测试。
 - [x] 遗留 Supabase 工厂和业务路由已删除，回归测试断言这些路径不再挂载。
 - [x] Go Connector discovery/transport/store/supervisor 有单元测试。
-- [x] Next.js 已固定为 15.5.21，前端使用 lockfile。
+- [x] 产品前端迁至外部仓库，本仓库已移除 Next.js 过渡壳。
 - [x] Docker Compose、Dockerfile、Caddy、migration、installer 和运维脚本已进入仓库。
 - [x] 文档不再把 production Gateway 描述为“仅内存、无认证、Phase 5 未实现”。
 
@@ -474,7 +471,7 @@ docker compose --env-file deploy/.env -f docker-compose.production.yml ps
 
 - 停止签发 invite 和创建新 Pairing；
 - 保持 heartbeat/inventory 只读，停止新 Command；
-- 回滚 API/Web 镜像但不回滚已完成交易或支付记录；
+- 回滚 API/Caddy 镜像但不回滚已完成交易或支付记录；
 - migration 只前滚；需要恢复时使用数据库备份并记录恢复点。
 
 本地侧：

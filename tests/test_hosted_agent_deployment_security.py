@@ -231,7 +231,9 @@ def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:
     assert "ADX_GITHUB_OAUTH_CLIENT_ID:" in compose
     assert "ADX_GITHUB_OAUTH_CLIENT_SECRET:" in compose
     assert "ADX_GITHUB_OAUTH_RELAY_URL:" in compose
-    assert "profiles:\n      - legacy-web" in compose
+    assert "\n  web:" not in compose
+    assert "legacy-web" not in compose
+    assert "Dockerfile.web" not in compose
     assert "compose build --pull api migrate provision-db-roles" in deploy
     assert "compose up -d api caddy" in deploy
     assert "compose up -d api web caddy" not in deploy
