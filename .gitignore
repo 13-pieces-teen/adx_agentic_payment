@@ -11,6 +11,10 @@
 # Tool-local state
 .claude/settings.local.json
 .codex/
+.codex-*/
+.playwright-cli/
+.uv-cache*/
+.go-test-temp-*/
 .tmp/
 
 # Dependencies and build output
@@ -23,7 +27,7 @@ __pycache__/
 
 # Test and analysis caches
 .pytest_cache/
-.pytest-tmp-*/
+.pytest-*/
 .mypy_cache/
 .ruff_cache/
 .coverage

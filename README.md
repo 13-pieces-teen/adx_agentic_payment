@@ -13,33 +13,30 @@
 - **一个 agentic payment 实验场**：把“Agent 做决定”与“付款最终成功”拆成
   可审计的状态，验证从接受报价、冻结支付意图到链上确认、库存提交的边界。
 
-当前仓库的可验证范围是本地开发闭环和 testnet 结算基础设施；新鲜真实 testnet
-交易、公网 Provider/Hosted Agent 验收和生产前端联调仍是独立验收项。这里的
-“上链交易”只指已存在并可核对的链上证据，不把数据库中的 accepted 或 pending
-记录提前描述成已完成支付。
+当前仓库已验证本地开发闭环，并完成一笔经自建 Facilitator 提交的全新 Injective
+EVM testnet 交易、链上确认和库存提交。公网 Provider/Hosted Agent、公共第三方
+Facilitator 兼容性和完整生产联调仍是独立验收项。这里的“上链交易”只指已存在且
+可核对的链上证据，不把数据库中的 `accepted` 或 `pending` 记录提前描述成已完成
+支付。
 
 ## 当前可运行路径
 
-The maintained King's Pawnhouse path now includes the world/event core,
-PostgreSQL market and negotiation state, configurable 1–10 round backend
-orchestration, and 2–12 Hosted Agent development demonstrations. Arena
-automatically opens each round, reveals its event, queues all Decide tasks,
-pairs four-good pools by database-clock FCFS, runs bounded negotiations,
-persists round portfolio snapshots, and freezes final prices and rankings.
+当前维护的王城典当行路径包括世界/事件内核、PostgreSQL 市场与协商状态、可配置
+1–10 回合的后端编排，以及 2–12 个 Hosted Agent 的开发演示。Arena 会自动开启
+回合、揭示事件、创建 Decide 任务、按数据库时钟对四类货物执行 FCFS 配对、运行
+有限轮协商、持久化逐轮资产快照，并冻结终场价格和排名。
 
-Production configuration now admits one Current Game with at most 100 Agents,
-runs four Hosted Worker replicas at 25 task slots each, and deterministically
-routes settlement intents across four independent Facilitator EOA shards.
-This is an implemented capacity foundation, not yet a live capacity claim:
-the verified local evidence remains 12 Agents, and 100-Agent Provider/testnet
-E2E plus four-shard failure recovery still require production acceptance.
+生产配置基础允许一个最多 100 个 Agent 的 Current Game、四个各含 25 个任务槽的
+Hosted Worker 副本，以及四个独立 Facilitator EOA 分片的确定性结算路由。这只是
+已实现的容量基础，不是线上容量结论：当前已验证的本地规模仍为 12 个 Agent，
+100-Agent Provider/testnet E2E 和四分片故障恢复仍需生产验收。
 
 ```powershell
 docker compose -f docker-compose.local.yml up --build -d
 python scripts/run_full_pawnhouse_game_demo.py
 ```
 
-For the dual Hosted Agent path, issue two fresh one-use local invitations:
+双 Hosted Agent 路径需要先签发两个全新、一次性使用的本地邀请码：
 
 ```powershell
 docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1
@@ -49,44 +46,37 @@ $env:ARENA_SELLER_INVITE="<second invite>"
 python scripts/run_dual_hosted_pawnhouse_demo.py
 ```
 
-To run the same two Hosted Agents through all five rounds without fabricating
-an unpaid settlement, use fresh invitations and:
+要让同一组 Hosted Agent 完成五回合、同时不把未付款成交伪装成已结算，请使用
+全新邀请码并执行：
 
 ```powershell
 python scripts/run_full_hosted_pawnhouse_demo.py
 ```
 
-To exercise a larger game, mint invitations as one JSON batch and run 12
-Hosted Agents through the versioned, seed-shuffled 10-round event deck:
+要验证更大规模的游戏，可批量签发 JSON 邀请码，让 12 个 Hosted Agent 运行
+版本化、按 seed 洗牌的十回合事件牌组：
 
 ```powershell
 $env:ARENA_HOSTED_INVITES = docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 12 --json
 python scripts/run_many_hosted_pawnhouse_demo.py --agents 12 --rounds 10
 ```
 
-The full-game models deliberately propose and reject. The accepted-deal demo
-above still stops at `accepted_pending_settlement` until a real payment is
-confirmed.
-
-The script prints only a safe public summary. It uses the deterministic
-`arena-scripted` Provider, which is available only when
-`ADX_HOSTED_LOCAL_DEV=true`; it is not a production model fallback. Both
-demonstrations deliberately avoid moving cash or inventory before a verified
-Injective testnet payment. To exercise the accepted-deal boundary without
-signing or broadcasting a transaction, run:
+完整游戏脚本会刻意覆盖 propose 和 reject；成交演示在真实付款确认前只会停留在
+`accepted_pending_settlement`。脚本只输出安全的公开摘要，并使用仅在
+`ADX_HOSTED_LOCAL_DEV=true` 时可用的确定性 `arena-scripted` Provider；它不是
+生产模型 fallback。所有演示都不会在 Injective testnet 付款确认前移动现金或
+库存。若只验证成交边界而不签名或广播交易，请执行：
 
 ```powershell
 python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
 ```
 
-This freezes one public `SettlementIntent` at
-`authorization_requested`. The local settlement bridge can sign and submit
-that exact intent, but refuses to broadcast unless the operator supplies its
-reviewed `intentHash` and the explicit `--confirm-testnet-transfer` flag.
-Arena records the approval before broadcast and the bridge derives one
-deterministic nonce per Intent, so a restart cannot create a replacement
-payment. Wallet private keys remain in the local settlement process and never
-enter Arena, PostgreSQL, logs, or API responses.
+该命令会把一个公开 `SettlementIntent` 冻结在 `authorization_requested`。本地
+settlement bridge 可以签名并提交该精确 Intent，但只有操作员提供已复核的
+`intentHash` 和显式 `--confirm-testnet-transfer` 标志时才会广播。Arena 会在
+广播前记录批准，bridge 为每个 Intent 派生唯一的确定性 nonce，因此重启不会生成
+替代付款。钱包私钥始终留在本地结算进程中，不进入 Arena、PostgreSQL、日志或
+API 响应。
 
 **Arena 402 的游戏内叙事是“王城典当行”：AI Agent 自主买卖、有限轮砍价，
 并把成交交给受约束的 Injective testnet 结算链路。**
@@ -103,8 +93,9 @@ Injective testnet `arena402-g` 链上转账覆盖，货物仅在链上确认后�
 游客可使用受限、隔离、testnet-only 的平台演示钱包。
 
 本地演示已经验证 Runtime、Result Sink、FCFS、协商、回合快照和排名的组合路径，
-并可冻结成交后的 `SettlementIntent`。结算代码仍是 EIP-3009 direct-relay
-prototype；在新鲜 live testnet 交易和公共 Facilitator 兼容性完成验收前，不能
+并可冻结成交后的 `SettlementIntent`。自建 Facilitator 路径已完成一笔全新
+testnet 交易、确认和库存提交；结算底层仍是 EIP-3009 direct-relay prototype。
+公共第三方 Facilitator 兼容性、真实 Provider 和完整生产恢复尚未验收，因此不能
 把整个产品描述为已经完成的无人值守链上交易服务。
 
 仓库目录和部分实现仍保留旧的 `adx`、`agent-arena`、`ADX_*` 等兼容标识。
@@ -142,8 +133,9 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 
 ## 当前实现状态
 
-仓库已跑通 12 Hosted Agent 的十回合本地开发闭环，以及独立的成交后冻结结算意图
-边界；新鲜 testnet 交易和公网 Hosted Agent/真实 Provider 验收仍未执行：
+仓库已跑通 12 Hosted Agent 的十回合本地开发闭环，并验证成交后冻结结算意图
+边界；自建 Facilitator 的全新 testnet 成交闭环也已完成。公网 Hosted Agent、
+真实 Provider、公共第三方 Facilitator 和完整生产验收仍未完成：
 
 | 模块 | 当前状态 |
 |------|----------|
@@ -196,8 +188,9 @@ commit 的纯 `git archive` 发布到云服务器。远端
 
 ## 本地运行平台 Agent
 
-前置条件只有 Docker Desktop。无需 Supabase、Tencent Secret Manager 或本地 Python
-环境；在仓库根目录执行：
+仅使用本地 Compose 控制面和临时前端壳时，前置条件只有 Docker Desktop，无需
+Supabase 或 Tencent Secret Manager。运行仓库根目录下的 Python 演示脚本时，
+还需要 Python 3；启动本地 Compose 栈请执行：
 
 ```powershell
 docker compose -f docker-compose.local.yml up --build -d
