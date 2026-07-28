@@ -2950,6 +2950,18 @@ class PostgresPawnhouseRepository:
                         negotiation.status.value,
                         completed_at,
                     )
+                    if negotiation.status in {
+                        NegotiationStatus.REJECTED,
+                        NegotiationStatus.TIMEOUT,
+                    }:
+                        await self._pairing_closed_event(
+                            connection,
+                            game_id=row["game_id"],
+                            round_id=row["round_id"],
+                            pairing_id=row["pairing_id"],
+                            negotiation_id=negotiation_id,
+                            status=negotiation.status.value,
+                        )
                     if (
                         negotiation.status
                         is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
@@ -3583,6 +3595,19 @@ class PostgresPawnhouseRepository:
                 if intent["status"] == "authorization_failed":
                     await connection.execute(
                         """
+                        UPDATE arena402.pairings
+                        SET status = 'settlement_failed',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE pairing_id = $1
+                          AND status <> 'settlement_failed'
+                        """,
+                        intent["pairing_id"],
+                    )
+                    await connection.execute(
+                        """
                         UPDATE arena402.negotiations
                         SET status = 'settlement_failed',
                             completed_at = COALESCE(
@@ -3593,6 +3618,15 @@ class PostgresPawnhouseRepository:
                           AND status = 'accepted_pending_settlement'
                         """,
                         intent["negotiation_id"],
+                    )
+                    await self._pairing_closed_event(
+                        connection,
+                        game_id=intent["game_id"],
+                        round_id=intent["round_id"],
+                        pairing_id=intent["pairing_id"],
+                        negotiation_id=intent["negotiation_id"],
+                        status="settlement_failed",
+                        settlement_intent_id=settlement_intent_id,
                     )
                     return
                 if intent["status"] != "authorization_requested":
@@ -3652,9 +3686,20 @@ class PostgresPawnhouseRepository:
                     source_key=f"{settlement_intent_id}:authorization_failed",
                     public_payload={
                         "settlementIntentId": settlement_intent_id,
+                        "pairingId": intent["pairing_id"],
+                        "negotiationId": intent["negotiation_id"],
                         "status": "authorization_failed",
                         "safeErrorCode": safe_error_code,
                     },
+                )
+                await self._pairing_closed_event(
+                    connection,
+                    game_id=intent["game_id"],
+                    round_id=intent["round_id"],
+                    pairing_id=intent["pairing_id"],
+                    negotiation_id=intent["negotiation_id"],
+                    status="settlement_failed",
+                    settlement_intent_id=settlement_intent_id,
                 )
 
     async def record_chain_confirmation(
@@ -3850,6 +3895,19 @@ class PostgresPawnhouseRepository:
                 if row["status"] == "reverted":
                     await connection.execute(
                         """
+                        UPDATE arena402.pairings
+                        SET status = 'settlement_failed',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE pairing_id = $1
+                          AND status <> 'settlement_failed'
+                        """,
+                        row["pairing_id"],
+                    )
+                    await connection.execute(
+                        """
                         UPDATE arena402.negotiations
                         SET status = 'settlement_failed',
                             completed_at = COALESCE(
@@ -3860,6 +3918,15 @@ class PostgresPawnhouseRepository:
                           AND status = 'accepted_pending_settlement'
                         """,
                         row["negotiation_id"],
+                    )
+                    await self._pairing_closed_event(
+                        connection,
+                        game_id=row["game_id"],
+                        round_id=row["round_id"],
+                        pairing_id=row["pairing_id"],
+                        negotiation_id=row["negotiation_id"],
+                        status="settlement_failed",
+                        settlement_intent_id=settlement_intent_id,
                     )
                     value = dict(row)
                     value.update(
@@ -3929,9 +3996,20 @@ class PostgresPawnhouseRepository:
                     source_key=f"{settlement_intent_id}:reverted",
                     public_payload={
                         "settlementIntentId": settlement_intent_id,
+                        "pairingId": row["pairing_id"],
+                        "negotiationId": row["negotiation_id"],
                         "txHash": normalized_tx,
                         "status": "reverted",
                     },
+                )
+                await self._pairing_closed_event(
+                    connection,
+                    game_id=row["game_id"],
+                    round_id=row["round_id"],
+                    pairing_id=row["pairing_id"],
+                    negotiation_id=row["negotiation_id"],
+                    status="settlement_failed",
+                    settlement_intent_id=settlement_intent_id,
                 )
                 value = dict(row)
                 value.update(
@@ -3977,6 +4055,19 @@ class PostgresPawnhouseRepository:
                 if existing is not None:
                     await connection.execute(
                         """
+                        UPDATE arena402.pairings
+                        SET status = 'settled',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE pairing_id = $1
+                          AND status <> 'settled'
+                        """,
+                        intent["pairing_id"],
+                    )
+                    await connection.execute(
+                        """
                         UPDATE arena402.negotiations
                         SET status = 'settled',
                             completed_at = COALESCE(
@@ -3987,6 +4078,15 @@ class PostgresPawnhouseRepository:
                           AND status = 'accepted_pending_settlement'
                         """,
                         intent["negotiation_id"],
+                    )
+                    await self._pairing_closed_event(
+                        connection,
+                        game_id=intent["game_id"],
+                        round_id=intent["round_id"],
+                        pairing_id=intent["pairing_id"],
+                        negotiation_id=intent["negotiation_id"],
+                        status="settled",
+                        settlement_intent_id=settlement_intent_id,
                     )
                     return self._inventory_commit_public(
                         intent=intent,
@@ -4199,6 +4299,15 @@ class PostgresPawnhouseRepository:
                         "amountAtomic": str(intent["amount_atomic"]),
                         "status": "inventory_committed",
                     },
+                )
+                await self._pairing_closed_event(
+                    connection,
+                    game_id=intent["game_id"],
+                    round_id=intent["round_id"],
+                    pairing_id=intent["pairing_id"],
+                    negotiation_id=intent["negotiation_id"],
+                    status="settled",
+                    settlement_intent_id=settlement_intent_id,
                 )
                 updated_intent = dict(intent)
                 updated_intent["status"] = "inventory_committed"
@@ -5246,6 +5355,34 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            pairings = await connection.fetch(
+                """
+                SELECT
+                    pairing_id, round_id, good_id,
+                    buyer_participant_id, seller_participant_id,
+                    pairing_sequence, quantity, status,
+                    paired_at, completed_at
+                FROM arena402.pairings
+                WHERE game_id = $1
+                ORDER BY round_id, pairing_sequence, pairing_id
+                """,
+                game_id,
+            )
+            negotiations = await connection.fetch(
+                """
+                SELECT
+                    negotiation_id, pairing_id, round_id,
+                    max_turns, turn_count, next_role, status,
+                    latest_proposal_price_atomic,
+                    latest_proposal_role,
+                    accepted_price_atomic,
+                    action_deadline_at, created_at, completed_at
+                FROM arena402.negotiations
+                WHERE game_id = $1
+                ORDER BY created_at, negotiation_id
+                """,
+                game_id,
+            )
             rankings = await connection.fetch(
                 """
                 SELECT
@@ -5299,6 +5436,59 @@ class PostgresPawnhouseRepository:
                 for row in participants
             ],
             "rounds": [dict(row) for row in rounds],
+            "pairings": [
+                {
+                    "pairingId": str(row["pairing_id"]),
+                    "roundId": str(row["round_id"]),
+                    "good": str(row["good_id"]),
+                    "buyerParticipantId": str(row["buyer_participant_id"]),
+                    "sellerParticipantId": str(row["seller_participant_id"]),
+                    "sequence": int(row["pairing_sequence"]),
+                    "quantity": int(row["quantity"]),
+                    "status": str(row["status"]),
+                    "pairedAt": row["paired_at"].isoformat(),
+                    "completedAt": (
+                        row["completed_at"].isoformat()
+                        if row["completed_at"] is not None
+                        else None
+                    ),
+                }
+                for row in pairings
+            ],
+            "negotiations": [
+                {
+                    "negotiationId": str(row["negotiation_id"]),
+                    "pairingId": str(row["pairing_id"]),
+                    "roundId": str(row["round_id"]),
+                    "maxTurns": int(row["max_turns"]),
+                    "turnCount": int(row["turn_count"]),
+                    "nextRole": str(row["next_role"]),
+                    "status": str(row["status"]),
+                    "latestProposalPriceAtomic": (
+                        str(int(row["latest_proposal_price_atomic"]))
+                        if row["latest_proposal_price_atomic"] is not None
+                        else None
+                    ),
+                    "latestProposalRole": (
+                        str(row["latest_proposal_role"])
+                        if row["latest_proposal_role"] is not None
+                        else None
+                    ),
+                    "acceptedPriceAtomic": (
+                        str(int(row["accepted_price_atomic"]))
+                        if row["accepted_price_atomic"] is not None
+                        else None
+                    ),
+                    "actionDeadlineAt": row["action_deadline_at"].isoformat(),
+                    "createdAt": row["created_at"].isoformat(),
+                    "completedAt": (
+                        row["completed_at"].isoformat()
+                        if row["completed_at"] is not None
+                        else None
+                    ),
+                }
+                for row in negotiations
+            ],
             "finalPrices": {
                 str(row["good_id"]): str(int(row["price_atomic"]))
                 for row in final_prices
@@ -5648,6 +5838,18 @@ class PostgresPawnhouseRepository:
                 pairing_status,
                 completed_at,
             )
+            if negotiation.status in {
+                NegotiationStatus.REJECTED,
+                NegotiationStatus.TIMEOUT,
+            }:
+                await self._pairing_closed_event(
+                    connection,
+                    game_id=game_id,
+                    round_id=round_id,
+                    pairing_id=row["pairing_id"],
+                    negotiation_id=negotiation.negotiation_id,
+                    status=negotiation.status.value,
+                )
             if (
                 negotiation.status
                 is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
@@ -6716,6 +6918,33 @@ class PostgresPawnhouseRepository:
             event_type,
             _json(public_payload),
             source_key,
+        )
+
+    async def _pairing_closed_event(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        round_id: str,
+        pairing_id: str,
+        negotiation_id: str,
+        status: str,
+        settlement_intent_id: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "pairingId": pairing_id,
+            "negotiationId": negotiation_id,
+            "status": status,
+        }
+        if settlement_intent_id is not None:
+            payload["settlementIntentId"] = settlement_intent_id
+        await self._event(
+            connection,
+            game_id=game_id,
+            round_id=round_id,
+            event_type="pairing.closed",
+            source_key=f"{pairing_id}:closed",
+            public_payload=payload,
         )
 
     @staticmethod

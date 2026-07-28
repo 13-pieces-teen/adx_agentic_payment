@@ -90,6 +90,7 @@ class _CreateConnection:
     def __init__(self) -> None:
         self.queries: list[str] = []
         self.fetchval_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
 
     def transaction(self):
         return _Transaction()
@@ -104,8 +105,9 @@ class _CreateConnection:
         self.fetchval_calls.append((query, (game_id, *_)))
         return game_id
 
-    async def execute(self, query: str, *_: object):
+    async def execute(self, query: str, *arguments: object):
         self.queries.append(query)
+        self.execute_calls.append((query, arguments))
         return "OK"
 
 
@@ -171,6 +173,49 @@ class _HistoricalGameStateConnection(_CreateConnection):
                     "round_index": 1,
                     "phase": "closed",
                     "phase_deadline_at": None,
+                }
+            ]
+        if "FROM arena402.pairings" in query:
+            return [
+                {
+                    "pairing_id": "pair:game-completed:1",
+                    "round_id": "round:game-completed:1",
+                    "good_id": "gems",
+                    "buyer_participant_id": "gp:game-completed:buyer",
+                    "seller_participant_id": "gp:game-completed:seller",
+                    "pairing_sequence": 1,
+                    "quantity": 1,
+                    "status": "settled",
+                    "paired_at": datetime(
+                        2026, 7, 27, 11, 30, tzinfo=timezone.utc
+                    ),
+                    "completed_at": datetime(
+                        2026, 7, 27, 11, 31, tzinfo=timezone.utc
+                    ),
+                }
+            ]
+        if "FROM arena402.negotiations" in query:
+            return [
+                {
+                    "negotiation_id": "neg:pair:game-completed:1",
+                    "pairing_id": "pair:game-completed:1",
+                    "round_id": "round:game-completed:1",
+                    "max_turns": 3,
+                    "turn_count": 3,
+                    "next_role": "none",
+                    "status": "settled",
+                    "latest_proposal_price_atomic": 4_374_844,
+                    "latest_proposal_role": "seller",
+                    "accepted_price_atomic": 4_374_844,
+                    "action_deadline_at": datetime(
+                        2026, 7, 27, 11, 32, tzinfo=timezone.utc
+                    ),
+                    "created_at": datetime(
+                        2026, 7, 27, 11, 30, tzinfo=timezone.utc
+                    ),
+                    "completed_at": datetime(
+                        2026, 7, 27, 11, 31, tzinfo=timezone.utc
+                    ),
                 }
             ]
         if "FROM arena402.rankings" in query:
@@ -310,7 +355,44 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
         }
     ]
     assert value["rankings"][0]["displayName"] == "Player Merchant"
+    assert value["pairings"][0]["status"] == "settled"
+    assert value["negotiations"][0]["status"] == "settled"
+    assert value["negotiations"][0]["acceptedPriceAtomic"] == "4374844"
     assert "userId" not in json.dumps(value)
+
+
+def test_pairing_closed_event_has_a_stable_public_contract() -> None:
+    connection = _CreateConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    asyncio.run(
+        repository._pairing_closed_event(
+            connection,
+            game_id="game-1",
+            round_id="round-1",
+            pairing_id="pair-1",
+            negotiation_id="neg:pair-1",
+            status="settled",
+            settlement_intent_id="settlement:neg:pair-1",
+        )
+    )
+
+    query, arguments = connection.execute_calls[-1]
+    assert "INSERT INTO arena402.game_events" in query
+    assert arguments[0:4] == (
+        "game-1",
+        "round-1",
+        "pairing.closed",
+        (
+            '{"negotiationId":"neg:pair-1","pairingId":"pair-1",'
+            '"settlementIntentId":"settlement:neg:pair-1",'
+            '"status":"settled"}'
+        ),
+    )
+    assert arguments[4] == "pair-1:closed"
 
 
 def test_current_game_reports_blocked_when_official_pool_cannot_fill_deficit() -> None:
