@@ -387,11 +387,14 @@ class ConnectorGateway:
                     reset_at = iso(utc_now())
                     reset_bindings = 0
                     for binding in self.bindings.values():
-                        if binding["device_id"] == device_id and (
-                            binding.get("last_session_id")
-                            or binding.get("last_task_id")
-                        ):
-                            if binding["status"] != BindingStatus.STOPPED.value:
+                        if binding["device_id"] == device_id:
+                            binding["session_generation"] = (
+                                int(binding.get("session_generation", 0)) + 1
+                            )
+                            if binding["status"] != BindingStatus.STOPPED.value and (
+                                binding.get("last_session_id")
+                                or binding.get("last_task_id")
+                            ):
                                 binding["status"] = BindingStatus.DEGRADED.value
                             binding["last_session_id"] = None
                             binding["last_task_id"] = None
@@ -540,8 +543,7 @@ class ConnectorGateway:
         working_directory: Optional[str] = None,
     ) -> dict[str, Any]:
         if working_directory is not None and (
-            not working_directory.strip()
-            or len(working_directory) > 2048
+            not working_directory.strip() or len(working_directory) > 2048
         ):
             raise ConnectorError(
                 422,
@@ -567,13 +569,8 @@ class ConnectorGateway:
                     binding["device_id"] == device_id
                     and binding["runtime_id"] == runtime_id
                 ):
-                    existing_directory = binding.get(
-                        "working_directory"
-                    )
-                    if (
-                        working_directory is not None
-                        and existing_directory is None
-                    ):
+                    existing_directory = binding.get("working_directory")
+                    if working_directory is not None and existing_directory is None:
                         binding["working_directory"] = working_directory
                         binding["updated_at"] = iso(utc_now())
                         self._append_audit(
@@ -607,6 +604,7 @@ class ConnectorGateway:
                 "working_directory": working_directory,
                 "status": BindingStatus.AVAILABLE.value,
                 "binding_epoch": device["binding_epoch"],
+                "session_generation": 0,
                 "created_at": now,
                 "updated_at": now,
                 "last_session_id": None,
@@ -702,19 +700,47 @@ class ConnectorGateway:
                     409,
                     f"Runtime {binding['runtime_id']} does not advertise {action.value}",
                 )
+            if (
+                action == CommandAction.TASK_DISPATCH
+                and isinstance(payload.get("task"), dict)
+                and runtime is not None
+            ):
+                issues = self._arena_runtime_readiness_issues(runtime)
+                if issues:
+                    safe_issues = ", ".join(str(issue)[:128] for issue in issues[:4])
+                    raise ConnectorError(
+                        409,
+                        f"Runtime {binding['runtime_id']} is not ready for Arena "
+                        f"execution: {safe_issues}",
+                    )
             if idempotency_key:
-                for command in self.commands.values():
-                    if (
-                        command["binding_id"] == binding_id
-                        and command["idempotency_key"] == idempotency_key
+                matching_commands = [
+                    command
+                    for command in self.commands.values()
+                    if command["binding_id"] == binding_id
+                    and command["idempotency_key"] == idempotency_key
+                ]
+                if matching_commands:
+                    previous = max(
+                        matching_commands,
+                        key=lambda command: (
+                            self._parse_time(command["created_at"]),
+                            str(command["command_id"]),
+                        ),
+                    )
+                    if previous["request_fingerprint"] == request_fingerprint:
+                        selected_command = previous
+                    elif not (
+                        action == CommandAction.TASK_DISPATCH
+                        and len(matching_commands) < 2
+                        and previous["status"] == CommandStatus.FAILED.value
+                        and isinstance(previous.get("error"), dict)
+                        and previous["error"].get("code") == "connector_restarted"
                     ):
-                        if command["request_fingerprint"] != request_fingerprint:
-                            raise ConnectorError(
-                                409,
-                                "Idempotency key was already used with a different command",
-                            )
-                        selected_command = command
-                        break
+                        raise ConnectorError(
+                            409,
+                            "Idempotency key was already used with a different command",
+                        )
             if selected_command is None:
                 now = utc_now()
                 command_id = new_id("cmd")
@@ -767,6 +793,31 @@ class ConnectorGateway:
         await self.deliver_pending(delivery_device_id)
         async with self._lock:
             return self._public_command(self.commands[command_id])
+
+    @staticmethod
+    def _arena_runtime_readiness_issues(
+        runtime: dict[str, Any],
+    ) -> list[str]:
+        issues: list[str] = []
+        if not bool(runtime.get("task_enabled")):
+            issues.append("task_execution_disabled")
+        if runtime.get("authentication_status") != "configured":
+            issues.append("authentication_unavailable")
+        if not bool(runtime.get("arena_compatible")):
+            issues.append("arena_profile_unsupported")
+        expected_isolation = {
+            "codex": "read_only_ephemeral_schema",
+            "claude-code": "no_tools_safe_mode_schema",
+            "claude_code": "no_tools_safe_mode_schema",
+        }.get(str(runtime.get("kind", "")))
+        if (
+            expected_isolation is None
+            or runtime.get("arena_isolation") != expected_isolation
+        ):
+            issues.append("arena_isolation_unavailable")
+        if not bool(runtime.get("local_execution_ready")):
+            issues.append("runtime_readiness_unknown")
+        return issues
 
     async def _prepare_command_delivery(self, command_id: str) -> None:
         """Persistence hook immediately before any command delivery attempt."""

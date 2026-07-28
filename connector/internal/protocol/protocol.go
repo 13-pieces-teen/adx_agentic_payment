@@ -87,17 +87,23 @@ type HostInfo struct {
 }
 
 type Runtime struct {
-	ID             string    `json:"runtime_id"`
-	Kind           string    `json:"kind"`
-	DisplayName    string    `json:"display_name"`
-	ExecutablePath string    `json:"executable_path"`
-	Version        string    `json:"version,omitempty"`
-	Status         string    `json:"status"`
-	StatusDetail   string    `json:"status_detail,omitempty"`
-	Available      bool      `json:"available"`
-	Capabilities   []string  `json:"capabilities"`
-	AuthModes      []string  `json:"auth_modes"`
-	DetectedAt     time.Time `json:"detected_at"`
+	ID                   string    `json:"runtime_id"`
+	Kind                 string    `json:"kind"`
+	DisplayName          string    `json:"display_name"`
+	ExecutablePath       string    `json:"executable_path"`
+	Version              string    `json:"version,omitempty"`
+	Status               string    `json:"status"`
+	StatusDetail         string    `json:"status_detail,omitempty"`
+	Available            bool      `json:"available"`
+	Capabilities         []string  `json:"capabilities"`
+	AuthModes            []string  `json:"auth_modes"`
+	TaskEnabled          bool      `json:"task_enabled"`
+	AuthenticationStatus string    `json:"authentication_status"`
+	ArenaCompatible      bool      `json:"arena_compatible"`
+	ArenaIsolation       string    `json:"arena_isolation"`
+	LocalExecutionReady  bool      `json:"local_execution_ready"`
+	ReadinessIssues      []string  `json:"readiness_issues,omitempty"`
+	DetectedAt           time.Time `json:"detected_at"`
 }
 
 type InventorySnapshot struct {

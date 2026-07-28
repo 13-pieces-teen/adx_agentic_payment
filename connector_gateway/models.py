@@ -116,6 +116,12 @@ class RuntimeInventoryItem(BaseModel):
     available: bool = True
     capabilities: list[str] = Field(default_factory=list)
     auth_modes: list[str] = Field(default_factory=list)
+    task_enabled: bool = False
+    authentication_status: str = Field(default="unknown", max_length=64)
+    arena_compatible: bool = False
+    arena_isolation: str = Field(default="none", max_length=128)
+    local_execution_ready: bool = False
+    readiness_issues: list[str] = Field(default_factory=list, max_length=16)
     detected_at: Optional[str] = None
 
 

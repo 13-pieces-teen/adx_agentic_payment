@@ -235,3 +235,71 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 	}
 	return canonical, nil
 }
+
+func arenaActionOutputSchema(taskKind string) ([]byte, error) {
+	actionOnly := func(action string) map[string]any {
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"action": map[string]any{"const": action},
+			},
+			"required": []string{"action"},
+		}
+	}
+	var variants []map[string]any
+	switch taskKind {
+	case "arena.decide":
+		variants = []map[string]any{
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action": map[string]any{"enum": []string{"buy", "sell"}},
+					"good": map[string]any{
+						"type":      "string",
+						"maxLength": 128,
+						"pattern":   arenaGoodIDPattern.String(),
+					},
+				},
+				"required": []string{"action", "good"},
+			},
+			actionOnly("pass"),
+		}
+	case "arena.negotiate":
+		message := map[string]any{
+			"type":      "string",
+			"minLength": 1,
+			"maxLength": 100,
+			"pattern":   `.*\S.*`,
+		}
+		variants = []map[string]any{
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action":  map[string]any{"const": "propose"},
+					"price":   map[string]any{"type": "string", "pattern": arenaFixedDecimalPattern.String()},
+					"message": message,
+				},
+				"required": []string{"action", "price", "message"},
+			},
+			actionOnly("accept"),
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action":  map[string]any{"const": "reject"},
+					"message": message,
+				},
+				"required": []string{"action"},
+			},
+		}
+	default:
+		return nil, fmt.Errorf("unsupported Arena task kind %q", taskKind)
+	}
+	return json.Marshal(map[string]any{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"oneOf":   variants,
+	})
+}

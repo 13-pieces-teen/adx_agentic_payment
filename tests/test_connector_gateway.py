@@ -225,6 +225,12 @@ def test_outbound_socket_inventory_binding_command_and_event_flow():
                                 "task.cancel",
                             ],
                             "auth_modes": ["chatgpt"],
+                            "task_enabled": True,
+                            "authentication_status": "configured",
+                            "arena_compatible": True,
+                            "arena_isolation": "read_only_ephemeral_schema",
+                            "local_execution_ready": True,
+                            "readiness_issues": [],
                         }
                     ]
                 },
@@ -237,6 +243,9 @@ def test_outbound_socket_inventory_binding_command_and_event_flow():
         device = client.get(f"/api/connectors/devices/{device_id}").json()
         assert device["status"] == "online"
         assert device["runtimes"][0]["kind"] == "codex"
+        assert device["runtimes"][0]["local_execution_ready"] is True
+        assert device["runtimes"][0]["arena_compatible"] is True
+        assert device["runtimes"][0]["arena_isolation"] == "read_only_ephemeral_schema"
 
         binding_response = client.post(
             f"/api/connectors/devices/{device_id}/bindings",
@@ -525,6 +534,11 @@ async def _enrolled_service():
                 display_name="Codex CLI",
                 executable_path="codex",
                 capabilities=[action.value for action in CommandAction],
+                task_enabled=True,
+                authentication_status="configured",
+                arena_compatible=True,
+                arena_isolation="read_only_ephemeral_schema",
+                local_execution_ready=True,
             )
         ],
     )
@@ -532,6 +546,42 @@ async def _enrolled_service():
         credential["device_id"], "codex-default", None, None
     )
     return service, credential, binding
+
+
+def test_typed_arena_task_rejects_detected_but_not_execution_ready_runtime():
+    async def scenario():
+        service, credential, binding = await _enrolled_service()
+        runtime = service.devices[credential["device_id"]]["runtimes"][0]
+        runtime["arena_compatible"] = False
+        runtime["local_execution_ready"] = True
+        runtime["readiness_issues"] = ["arena_profile_unsupported"]
+
+        start = await service.queue_command(
+            binding["binding_id"],
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "start-not-ready-session",
+            300,
+        )
+        await service.acknowledge_command(
+            credential["device_id"],
+            {
+                "command_id": start["command_id"],
+                "status": "succeeded",
+                "result": {"session_id": "not-ready-session"},
+            },
+        )
+        task = _arena_decide_task()
+        with pytest.raises(ConnectorError, match="not ready for Arena execution"):
+            await service.queue_command(
+                binding["binding_id"],
+                CommandAction.TASK_DISPATCH,
+                {"session_id": "not-ready-session", "task": task},
+                task["idempotencyKey"],
+                300,
+            )
+
+    asyncio.run(scenario())
 
 
 def test_existing_binding_can_freeze_working_directory_once():
@@ -656,6 +706,118 @@ def test_terminal_agent_task_result_is_received_separately_from_command_ack():
     asyncio.run(scenario())
 
 
+def test_typed_arena_task_connector_restart_retry_is_capped_at_two_attempts():
+    async def scenario():
+        service, credential, binding = await _enrolled_service()
+        device_id = credential["device_id"]
+        binding_id = binding["binding_id"]
+        task = _arena_decide_task()
+
+        first_start = await service.queue_command(
+            binding_id,
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "restart-attempt-session-1",
+            300,
+        )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": first_start["command_id"],
+                "status": "succeeded",
+                "result": {"session_id": "restart-attempt-session-1"},
+            },
+        )
+        first_dispatch = await service.queue_command(
+            binding_id,
+            CommandAction.TASK_DISPATCH,
+            {
+                "session_id": "restart-attempt-session-1",
+                "task": task,
+            },
+            task["idempotencyKey"],
+            300,
+        )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": first_dispatch["command_id"],
+                "status": "failed",
+                "error": {
+                    "code": "connector_restarted",
+                    "message": "first Connector process stopped",
+                },
+            },
+        )
+
+        second_start = await service.queue_command(
+            binding_id,
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "restart-attempt-session-2",
+            300,
+        )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": second_start["command_id"],
+                "status": "succeeded",
+                "result": {"session_id": "restart-attempt-session-2"},
+            },
+        )
+        second_dispatch = await service.queue_command(
+            binding_id,
+            CommandAction.TASK_DISPATCH,
+            {
+                "session_id": "restart-attempt-session-2",
+                "task": task,
+            },
+            task["idempotencyKey"],
+            300,
+        )
+        assert second_dispatch["command_id"] != first_dispatch["command_id"]
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": second_dispatch["command_id"],
+                "status": "failed",
+                "error": {
+                    "code": "connector_restarted",
+                    "message": "second Connector process stopped",
+                },
+            },
+        )
+
+        third_start = await service.queue_command(
+            binding_id,
+            CommandAction.SESSION_START,
+            {"working_directory": "E:\\arena-workspace"},
+            "restart-attempt-session-3",
+            300,
+        )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": third_start["command_id"],
+                "status": "succeeded",
+                "result": {"session_id": "restart-attempt-session-3"},
+            },
+        )
+        with pytest.raises(ConnectorError, match="already used"):
+            await service.queue_command(
+                binding_id,
+                CommandAction.TASK_DISPATCH,
+                {
+                    "session_id": "restart-attempt-session-3",
+                    "task": task,
+                },
+                task["idempotencyKey"],
+                300,
+            )
+
+    asyncio.run(scenario())
+
+
 def test_websocket_accepts_agent_task_result_as_its_own_message_type():
     client = TestClient(create_app(connector_demo_enabled=True))
     _, credential = _enroll(client)
@@ -671,6 +833,11 @@ def test_websocket_accepts_agent_task_result_as_its_own_message_type():
                     display_name="Codex CLI",
                     executable_path="codex",
                     capabilities=[action.value for action in CommandAction],
+                    task_enabled=True,
+                    authentication_status="configured",
+                    arena_compatible=True,
+                    arena_isolation="read_only_ephemeral_schema",
+                    local_execution_ready=True,
                 )
             ],
         )

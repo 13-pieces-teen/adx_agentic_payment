@@ -69,8 +69,14 @@ def _gateway() -> ConnectorGateway:
         "runtimes": [
             {
                 "runtime_id": "codex-default",
+                "kind": "codex",
                 "available": True,
                 "capabilities": ["task.dispatch"],
+                "task_enabled": True,
+                "authentication_status": "configured",
+                "arena_compatible": True,
+                "arena_isolation": "read_only_ephemeral_schema",
+                "local_execution_ready": True,
             }
         ],
     }

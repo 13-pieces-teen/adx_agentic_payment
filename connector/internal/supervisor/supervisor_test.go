@@ -34,18 +34,61 @@ type failSaveReceipts struct {
 	failAt    int
 }
 
-type helperDriver struct{}
+type helperDriver struct {
+	kind  string
+	tasks chan driver.TaskSpec
+}
 
-func (helperDriver) Kind() string {
+type arenaSchemaDriver struct{}
+
+func (h helperDriver) Kind() string {
+	if h.kind != "" {
+		return h.kind
+	}
 	return "test_runtime"
 }
 
-func (helperDriver) BuildTask(
+func (h helperDriver) BuildTask(
 	ctx context.Context,
 	_ protocol.Runtime,
 	_ driver.SessionSpec,
-	_ driver.TaskSpec,
+	task driver.TaskSpec,
 ) (*exec.Cmd, error) {
+	if h.tasks != nil {
+		h.tasks <- task
+	}
+	process := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSupervisorHelperProcess", "--")
+	process.Env = append(os.Environ(), "ADX_CONNECTOR_HELPER_PROCESS=1")
+	return process, nil
+}
+
+func (arenaSchemaDriver) Kind() string {
+	return "test_runtime"
+}
+
+func (arenaSchemaDriver) BuildTask(
+	ctx context.Context,
+	_ protocol.Runtime,
+	_ driver.SessionSpec,
+	task driver.TaskSpec,
+) (*exec.Cmd, error) {
+	if task.ArenaKind != "arena.decide" {
+		return nil, fmt.Errorf("missing Arena task kind")
+	}
+	if strings.TrimSpace(task.OutputSchema) == "" || task.OutputSchemaPath == "" {
+		return nil, fmt.Errorf("missing Arena output schema")
+	}
+	if task.IsolatedWorkingDir == "" ||
+		filepath.Dir(task.OutputSchemaPath) != task.IsolatedWorkingDir {
+		return nil, fmt.Errorf("Arena task is not isolated from the user project")
+	}
+	schemaFile, err := os.ReadFile(task.OutputSchemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("read Arena output schema: %w", err)
+	}
+	if string(schemaFile) != task.OutputSchema {
+		return nil, fmt.Errorf("Arena output schema file does not match inline schema")
+	}
 	process := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSupervisorHelperProcess", "--")
 	process.Env = append(os.Environ(), "ADX_CONNECTOR_HELPER_PROCESS=1")
 	return process, nil
@@ -630,6 +673,160 @@ func TestTypedArenaTaskDispatchDoesNotRequireCloudPrompt(t *testing.T) {
 	case <-s.Acks():
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for typed Arena task process")
+	}
+}
+
+func TestTypedArenaTaskProvidesRuntimeWithStrictOutputSchema(t *testing.T) {
+	root := t.TempDir()
+	inventory := protocol.InventorySnapshot{
+		ObservedAt: time.Now().UTC(),
+		Runtimes: []protocol.Runtime{{
+			ID:             "runtime-1",
+			Kind:           "test_runtime",
+			ExecutablePath: os.Args[0],
+			Status:         "ready",
+			Available:      true,
+		}},
+	}
+	s, err := New(
+		fakeScanner{inventory: inventory},
+		&memoryReceipts{values: make(map[string]protocol.CommandAck)},
+		driver.NewRegistry(arenaSchemaDriver{}),
+		[]string{root},
+		nil,
+		inventory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := command(
+		protocol.CommandSessionStart,
+		map[string]any{"working_directory": root},
+	)
+	if result := s.Handle(context.Background(), start); result.Ack.Status != "completed" {
+		t.Fatalf("start failed: %#v", result.Ack)
+	}
+
+	task := arenaDecideTask()
+	dispatch := command(protocol.CommandTaskDispatch, map[string]any{"task": task})
+	dispatch.IdempotencyKey = task["idempotencyKey"].(string)
+	result := s.Handle(context.Background(), dispatch)
+	if result.Ack.Status != "accepted" {
+		t.Fatalf("typed Arena task should have a strict output schema: %#v", result.Ack)
+	}
+}
+
+func TestTypedArenaTaskRejectsLocalRuntimeThatIsNotExecutionReady(t *testing.T) {
+	root := t.TempDir()
+	inventory := protocol.InventorySnapshot{
+		ObservedAt: time.Now().UTC(),
+		Runtimes: []protocol.Runtime{{
+			ID:                   "runtime-1",
+			Kind:                 "codex",
+			ExecutablePath:       os.Args[0],
+			Status:               "ready",
+			Available:            true,
+			TaskEnabled:          true,
+			AuthenticationStatus: "configured",
+			ArenaCompatible:      false,
+			ArenaIsolation:       "read_only_ephemeral_schema",
+			LocalExecutionReady:  true,
+		}},
+	}
+	s, err := New(
+		fakeScanner{inventory: inventory},
+		&memoryReceipts{values: make(map[string]protocol.CommandAck)},
+		driver.NewRegistry(helperDriver{kind: "codex"}),
+		[]string{root},
+		nil,
+		inventory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := command(
+		protocol.CommandSessionStart,
+		map[string]any{"working_directory": root},
+	)
+	if result := s.Handle(context.Background(), start); result.Ack.Status != "completed" {
+		t.Fatalf("start failed: %#v", result.Ack)
+	}
+
+	task := arenaDecideTask()
+	dispatch := command(protocol.CommandTaskDispatch, map[string]any{"task": task})
+	dispatch.IdempotencyKey = task["idempotencyKey"].(string)
+	result := s.Handle(context.Background(), dispatch)
+	if result.Ack.Status != "rejected" || result.Ack.Code != "runtime_not_arena_ready" {
+		t.Fatalf("unready local Runtime must fail closed: %#v", result.Ack)
+	}
+}
+
+func TestTypedArenaTaskRetriesInterruptedReceiptWithNewCommand(t *testing.T) {
+	root := t.TempDir()
+	inventory := protocol.InventorySnapshot{
+		ObservedAt: time.Now().UTC(),
+		Runtimes: []protocol.Runtime{{
+			ID:             "runtime-1",
+			Kind:           "test_runtime",
+			ExecutablePath: os.Args[0],
+			Status:         "ready",
+			Available:      true,
+		}},
+	}
+	durable := &memoryReceipts{
+		values:  make(map[string]protocol.CommandAck),
+		results: make(map[string]protocol.AgentTaskResultEnvelope),
+	}
+	s, err := New(
+		fakeScanner{inventory: inventory},
+		durable,
+		driver.NewRegistry(helperDriver{}),
+		[]string{root},
+		nil,
+		inventory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := command(
+		protocol.CommandSessionStart,
+		map[string]any{"working_directory": root},
+	)
+	if result := s.Handle(context.Background(), start); result.Ack.Status != "completed" {
+		t.Fatalf("start failed: %#v", result.Ack)
+	}
+
+	task := arenaDecideTask()
+	interrupted := command(
+		protocol.CommandTaskDispatch,
+		map[string]any{"task": task},
+	)
+	interrupted.CommandID = "cmd-before-connector-restart"
+	interrupted.IdempotencyKey = task["idempotencyKey"].(string)
+	durable.values[receiptKey(interrupted)] = protocol.CommandAck{
+		CommandID:      interrupted.CommandID,
+		IdempotencyKey: interrupted.IdempotencyKey,
+		BindingEpoch:   interrupted.BindingEpoch,
+		Status:         "failed",
+		Code:           "connector_restarted",
+		RecordedAt:     time.Now().UTC(),
+	}
+
+	retry := command(protocol.CommandTaskDispatch, map[string]any{"task": task})
+	retry.IdempotencyKey = task["idempotencyKey"].(string)
+	result := s.Handle(context.Background(), retry)
+	if result.Ack.Status != "accepted" ||
+		result.Ack.CommandID != retry.CommandID {
+		t.Fatalf("interrupted Arena task was not retried: %#v", result.Ack)
+	}
+
+	select {
+	case terminal := <-s.Results():
+		if terminal.Result.TaskID != task["taskId"] {
+			t.Fatalf("unexpected retried Arena result: %#v", terminal)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for retried Arena task result")
 	}
 }
 

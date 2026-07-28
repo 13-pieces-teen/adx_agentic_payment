@@ -285,16 +285,27 @@ func TestWireAdaptersMatchGatewayContract(t *testing.T) {
 	inventory := protocol.InventorySnapshot{
 		ObservedAt: time.Now().UTC(),
 		Runtimes: []protocol.Runtime{{
-			ID:           "runtime-1",
-			Kind:         "claude_code",
-			DisplayName:  "Claude Code",
-			Available:    true,
-			Capabilities: []string{"session.start"},
+			ID:                   "runtime-1",
+			Kind:                 "claude_code",
+			DisplayName:          "Claude Code",
+			Available:            true,
+			Capabilities:         []string{"session.start"},
+			TaskEnabled:          true,
+			AuthenticationStatus: "configured",
+			ArenaCompatible:      true,
+			ArenaIsolation:       "no_tools_safe_mode_schema",
+			LocalExecutionReady:  true,
 		}},
 	}
 	inventoryPayload := toInventoryWire(inventory)
 	if inventoryPayload.Runtimes[0].Kind != "claude-code" {
 		t.Fatalf("unexpected wire kind: %s", inventoryPayload.Runtimes[0].Kind)
+	}
+	if !inventoryPayload.Runtimes[0].LocalExecutionReady ||
+		inventoryPayload.Runtimes[0].AuthenticationStatus != "configured" ||
+		!inventoryPayload.Runtimes[0].ArenaCompatible ||
+		inventoryPayload.Runtimes[0].ArenaIsolation != "no_tools_safe_mode_schema" {
+		t.Fatalf("runtime readiness was dropped from inventory wire: %#v", inventoryPayload.Runtimes[0])
 	}
 
 	rawResult, _ := json.Marshal(map[string]any{"session_id": "session-1"})

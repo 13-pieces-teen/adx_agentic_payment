@@ -47,15 +47,21 @@ type inventoryWire struct {
 }
 
 type runtimeWire struct {
-	RuntimeID      string    `json:"runtime_id"`
-	Kind           string    `json:"kind"`
-	DisplayName    string    `json:"display_name"`
-	ExecutablePath string    `json:"executable_path"`
-	Version        string    `json:"version,omitempty"`
-	Available      bool      `json:"available"`
-	Capabilities   []string  `json:"capabilities"`
-	AuthModes      []string  `json:"auth_modes"`
-	DetectedAt     time.Time `json:"detected_at"`
+	RuntimeID            string    `json:"runtime_id"`
+	Kind                 string    `json:"kind"`
+	DisplayName          string    `json:"display_name"`
+	ExecutablePath       string    `json:"executable_path"`
+	Version              string    `json:"version,omitempty"`
+	Available            bool      `json:"available"`
+	Capabilities         []string  `json:"capabilities"`
+	AuthModes            []string  `json:"auth_modes"`
+	TaskEnabled          bool      `json:"task_enabled"`
+	AuthenticationStatus string    `json:"authentication_status"`
+	ArenaCompatible      bool      `json:"arena_compatible"`
+	ArenaIsolation       string    `json:"arena_isolation"`
+	LocalExecutionReady  bool      `json:"local_execution_ready"`
+	ReadinessIssues      []string  `json:"readiness_issues,omitempty"`
+	DetectedAt           time.Time `json:"detected_at"`
 }
 
 type commandAckWire struct {
@@ -806,15 +812,21 @@ func toInventoryWire(inventory protocol.InventorySnapshot) inventoryWire {
 			kind = "claude-code"
 		}
 		wire.Runtimes = append(wire.Runtimes, runtimeWire{
-			RuntimeID:      runtimeInfo.ID,
-			Kind:           kind,
-			DisplayName:    runtimeInfo.DisplayName,
-			ExecutablePath: runtimeInfo.ExecutablePath,
-			Version:        runtimeInfo.Version,
-			Available:      runtimeInfo.Available,
-			Capabilities:   append([]string(nil), runtimeInfo.Capabilities...),
-			AuthModes:      append([]string(nil), runtimeInfo.AuthModes...),
-			DetectedAt:     runtimeInfo.DetectedAt,
+			RuntimeID:            runtimeInfo.ID,
+			Kind:                 kind,
+			DisplayName:          runtimeInfo.DisplayName,
+			ExecutablePath:       runtimeInfo.ExecutablePath,
+			Version:              runtimeInfo.Version,
+			Available:            runtimeInfo.Available,
+			Capabilities:         append([]string(nil), runtimeInfo.Capabilities...),
+			AuthModes:            append([]string(nil), runtimeInfo.AuthModes...),
+			TaskEnabled:          runtimeInfo.TaskEnabled,
+			AuthenticationStatus: runtimeInfo.AuthenticationStatus,
+			ArenaCompatible:      runtimeInfo.ArenaCompatible,
+			ArenaIsolation:       runtimeInfo.ArenaIsolation,
+			LocalExecutionReady:  runtimeInfo.LocalExecutionReady,
+			ReadinessIssues:      append([]string(nil), runtimeInfo.ReadinessIssues...),
+			DetectedAt:           runtimeInfo.DetectedAt,
 		})
 	}
 	return wire

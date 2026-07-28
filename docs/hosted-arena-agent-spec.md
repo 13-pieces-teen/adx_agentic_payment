@@ -1323,8 +1323,8 @@ External:
 | Credential validation/lifecycle jobs | 核心路径已实现 | durable validation、claim/CAS、Credential Controller 和创建/Runtime PATCH 已实现；其余生命周期操作仍待完成 |
 | Hosted Worker | 已实现 | 独立无公网端口 Worker 已进入 Compose，并通过本地多回合恢复路径 |
 | Game Agent 单局唯一 | 已实现 | 数据库约束、入局快照和当前 Runtime/config 冻结已实现 |
-| Arena `decide`/`negotiate` adapter | Hosted/rule 已实现；Connector transport/result 基础已实现 | Local identity/session/task dispatcher 与 mixed-Runtime coordinator 仍未实现 |
-| Local Connector 控制面 | Self-hosted beta 已实现 | typed task/result、durable result outbox 与 Result Sink 已接线；完整游戏编排待完成 |
+| Arena `decide`/`negotiate` adapter | Hosted/rule/Connector 已实现 | Local identity、session generation、leased task dispatcher、typed Task/Result、Result Sink 与 mixed-Runtime coordinator 已接线；真实 CC/Codex 完整比赛待验收 |
+| Local Connector 控制面 | Self-hosted beta 已实现 | durable command/event/result outbox、进程重启后的 session 重建、单次 Task retry、Arena 隔离 profile 与分层 readiness/fail-closed 已实现；Codex CLI 无等价 no-tools 开关，真实生产重连与完整比赛 E2E 待验收 |
 | Native A2A Endpoint | 未实现 | 作为后续第三 Adapter |
 | EIP-3009 testnet direct settlement | 原型存在 | 不等于完整 x402 或 PaymentMandate |
 

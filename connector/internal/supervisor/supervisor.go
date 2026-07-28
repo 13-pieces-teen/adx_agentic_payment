@@ -62,6 +62,7 @@ type task struct {
 	cancelled   atomic.Bool
 	arenaTask   *arenaTaskEnvelope
 	arenaAction *arenaActionCapture
+	cleanup     func()
 }
 
 type CommandUpdate struct {
@@ -205,7 +206,7 @@ func (s *Supervisor) Handle(ctx context.Context, command protocol.Command) Handl
 				PersistenceError: fmt.Errorf("lookup durable command receipt: %w", err),
 			}
 		}
-		if found {
+		if found && !canRetryInterruptedArenaTask(command, receipt) {
 			return HandleResult{Ack: receipt}
 		}
 	}
@@ -448,33 +449,63 @@ func (s *Supervisor) dispatchTask(command protocol.Command, trackAck bool) proto
 	if !runtimeFound {
 		return protocol.NewAck(command, "rejected", "runtime_not_found", "session runtime is no longer available", nil)
 	}
+	if typedArenaTask &&
+		(runtimeInfo.Kind == "codex" || runtimeInfo.Kind == "claude_code") &&
+		!runtimeIsArenaReady(runtimeInfo) {
+		return protocol.NewAck(
+			command,
+			"rejected",
+			"runtime_not_arena_ready",
+			"local Runtime has not passed task, authentication, and Arena isolation readiness checks",
+			nil,
+		)
+	}
 	runtimeDriver, supported := s.drivers.Driver(runtimeInfo.Kind)
 	if !supported {
 		return protocol.NewAck(command, "rejected", "driver_not_supported", "no managed driver exists for this runtime", nil)
 	}
 
 	taskContext, cancel := context.WithTimeout(context.Background(), timeout)
-	process, err := runtimeDriver.BuildTask(taskContext, runtimeInfo, sessionSpec, driver.TaskSpec{
+	taskSpec := driver.TaskSpec{
 		TaskID: payload.TaskID,
 		Prompt: payload.Prompt,
-	})
+	}
+	cleanup := func() {}
+	if arenaTask != nil {
+		outputSchema, outputSchemaPath, isolatedWorkingDirectory, schemaCleanup, schemaErr :=
+			prepareArenaOutputSchema(arenaTask.Kind)
+		if schemaErr != nil {
+			cancel()
+			return protocol.NewAck(command, "rejected", "driver_error", schemaErr.Error(), nil)
+		}
+		taskSpec.ArenaKind = arenaTask.Kind
+		taskSpec.OutputSchema = outputSchema
+		taskSpec.OutputSchemaPath = outputSchemaPath
+		taskSpec.IsolatedWorkingDir = isolatedWorkingDirectory
+		cleanup = schemaCleanup
+	}
+	process, err := runtimeDriver.BuildTask(taskContext, runtimeInfo, sessionSpec, taskSpec)
 	if err != nil {
 		cancel()
+		cleanup()
 		return protocol.NewAck(command, "rejected", "driver_error", err.Error(), nil)
 	}
 	stdout, err := process.StdoutPipe()
 	if err != nil {
 		cancel()
+		cleanup()
 		return protocol.NewAck(command, "rejected", "process_pipe_error", err.Error(), nil)
 	}
 	stderr, err := process.StderrPipe()
 	if err != nil {
 		cancel()
+		cleanup()
 		return protocol.NewAck(command, "rejected", "process_pipe_error", err.Error(), nil)
 	}
 	containment, err := startManagedProcess(process)
 	if err != nil {
 		cancel()
+		cleanup()
 		return protocol.NewAck(command, "rejected", "process_start_error", redact.Text(err.Error()), nil)
 	}
 	running := &task{
@@ -486,6 +517,7 @@ func (s *Supervisor) dispatchTask(command protocol.Command, trackAck bool) proto
 		cancel:      cancel,
 		context:     taskContext,
 		arenaTask:   arenaTask,
+		cleanup:     cleanup,
 	}
 	if arenaTask != nil {
 		running.arenaAction = &arenaActionCapture{}
@@ -620,6 +652,9 @@ func (s *Supervisor) observeTask(
 	stdout io.Reader,
 	stderr io.Reader,
 ) {
+	if running.cleanup != nil {
+		defer running.cleanup()
+	}
 	var streams sync.WaitGroup
 	streams.Add(2)
 	go func() {
@@ -890,6 +925,71 @@ func (s *Supervisor) record(
 
 func receiptKey(command protocol.Command) string {
 	return command.BindingID + "\x1f" + command.IdempotencyKey
+}
+
+func canRetryInterruptedArenaTask(
+	command protocol.Command,
+	receipt protocol.CommandAck,
+) bool {
+	if command.CommandKind() != protocol.CommandTaskDispatch ||
+		receipt.Status != "failed" ||
+		receipt.Code != "connector_restarted" ||
+		receipt.CommandID == command.CommandID {
+		return false
+	}
+	var payload dispatchTaskPayload
+	if err := json.Unmarshal(command.Payload, &payload); err != nil {
+		return false
+	}
+	return len(payload.Task) != 0
+}
+
+func runtimeIsArenaReady(runtimeInfo protocol.Runtime) bool {
+	expectedIsolation := ""
+	switch runtimeInfo.Kind {
+	case "codex":
+		expectedIsolation = "read_only_ephemeral_schema"
+	case "claude_code":
+		expectedIsolation = "no_tools_safe_mode_schema"
+	}
+	return runtimeInfo.TaskEnabled &&
+		runtimeInfo.AuthenticationStatus == "configured" &&
+		runtimeInfo.ArenaCompatible &&
+		expectedIsolation != "" &&
+		runtimeInfo.ArenaIsolation == expectedIsolation &&
+		runtimeInfo.LocalExecutionReady
+}
+
+func prepareArenaOutputSchema(
+	taskKind string,
+) (string, string, string, func(), error) {
+	schema, err := arenaActionOutputSchema(taskKind)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	directory, err := os.MkdirTemp("", "arena402-task-*")
+	if err != nil {
+		return "", "", "", nil, fmt.Errorf("create Arena task directory: %w", err)
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(directory)
+	}
+	path := filepath.Join(directory, "action-schema.json")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		cleanup()
+		return "", "", "", nil, fmt.Errorf("create Arena output schema: %w", err)
+	}
+	if _, err := file.Write(schema); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", "", "", nil, fmt.Errorf("write Arena output schema: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", "", "", nil, fmt.Errorf("close Arena output schema: %w", err)
+	}
+	return string(schema), path, directory, cleanup, nil
 }
 
 func (s *Supervisor) emit(event protocol.RuntimeEvent) {

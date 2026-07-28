@@ -18,8 +18,12 @@ type SessionSpec struct {
 }
 
 type TaskSpec struct {
-	TaskID string
-	Prompt string
+	TaskID             string
+	Prompt             string
+	ArenaKind          string
+	OutputSchema       string
+	OutputSchemaPath   string
+	IsolatedWorkingDir string
 }
 
 type Driver interface {
@@ -68,11 +72,28 @@ func (ClaudeDriver) BuildTask(
 		"--output-format", "stream-json",
 		"--verbose",
 	}
-	if session.ResumeToken != "" {
+	workingDirectory := session.WorkingDir
+	if task.ArenaKind != "" {
+		if task.OutputSchema == "" || task.IsolatedWorkingDir == "" {
+			return nil, errors.New("Arena output schema and isolated working directory are required")
+		}
+		workingDirectory = task.IsolatedWorkingDir
+		args = append(
+			args,
+			"--safe-mode",
+			"--strict-mcp-config",
+			"--mcp-config", `{"mcpServers":{}}`,
+			"--tools", "",
+			"--disable-slash-commands",
+			"--no-session-persistence",
+			"--permission-mode", "dontAsk",
+			"--json-schema", task.OutputSchema,
+		)
+	} else if session.ResumeToken != "" {
 		args = append(args, "--resume", session.ResumeToken)
 	}
 	command := exec.CommandContext(ctx, runtimeInfo.ExecutablePath, args...)
-	command.Dir = session.WorkingDir
+	command.Dir = workingDirectory
 	command.Stdin = strings.NewReader(task.Prompt)
 	command.Env = append([]string(nil), session.Environment...)
 	return command, nil
@@ -94,12 +115,27 @@ func (CodexDriver) BuildTask(
 		return nil, err
 	}
 	args := []string{"exec", "--json"}
-	if session.ResumeToken != "" {
+	workingDirectory := session.WorkingDir
+	if task.ArenaKind != "" {
+		if task.OutputSchemaPath == "" || task.IsolatedWorkingDir == "" {
+			return nil, errors.New("Arena output schema and isolated working directory are required")
+		}
+		workingDirectory = task.IsolatedWorkingDir
+		args = append(
+			args,
+			"--sandbox", "read-only",
+			"--ephemeral",
+			"--ignore-user-config",
+			"--ignore-rules",
+			"--cd", task.IsolatedWorkingDir,
+			"--output-schema", task.OutputSchemaPath,
+		)
+	} else if session.ResumeToken != "" {
 		args = append(args, "resume", session.ResumeToken)
 	}
 	args = append(args, "-")
 	command := exec.CommandContext(ctx, runtimeInfo.ExecutablePath, args...)
-	command.Dir = session.WorkingDir
+	command.Dir = workingDirectory
 	command.Stdin = strings.NewReader(task.Prompt)
 	command.Env = append([]string(nil), session.Environment...)
 	return command, nil

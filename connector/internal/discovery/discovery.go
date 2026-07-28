@@ -26,15 +26,19 @@ type Candidate struct {
 
 type LookPathFunc func(string) (string, error)
 type VersionFunc func(context.Context, string) (string, error)
+type AuthStatusFunc func(context.Context, string, string) error
+type CompatibilityFunc func(context.Context, string, string) error
 
 type Scanner struct {
-	Version         string
-	Timeout         time.Duration
-	Candidates      []Candidate
-	LookPath        LookPathFunc
-	ReadVersion     VersionFunc
-	Hostname        func() (string, error)
-	AdditionalPaths []string
+	Version                string
+	Timeout                time.Duration
+	Candidates             []Candidate
+	LookPath               LookPathFunc
+	ReadVersion            VersionFunc
+	ReadAuthStatus         AuthStatusFunc
+	ReadArenaCompatibility CompatibilityFunc
+	Hostname               func() (string, error)
+	AdditionalPaths        []string
 }
 
 var executionCapabilities = map[string][]string{
@@ -56,6 +60,11 @@ var executionCapabilities = map[string][]string{
 		protocol.CommandSessionResume,
 		"events.jsonl",
 	},
+}
+
+var arenaIsolationProfiles = map[string]string{
+	"claude_code": "no_tools_safe_mode_schema",
+	"codex":       "read_only_ephemeral_schema",
 }
 
 func NewScanner(connectorVersion string, timeout time.Duration) *Scanner {
@@ -81,9 +90,11 @@ func NewScanner(connectorVersion string, timeout time.Duration) *Scanner {
 				AuthModes:    []string{"unverified_local_auth"},
 			},
 		},
-		LookPath:    exec.LookPath,
-		ReadVersion: defaultReadVersion,
-		Hostname:    os.Hostname,
+		LookPath:               exec.LookPath,
+		ReadVersion:            defaultReadVersion,
+		ReadAuthStatus:         defaultReadAuthStatus,
+		ReadArenaCompatibility: defaultReadArenaCompatibility,
+		Hostname:               os.Hostname,
 	}
 }
 
@@ -152,7 +163,67 @@ func (s *Scanner) Scan(ctx context.Context) protocol.InventorySnapshot {
 			runtimeInfo.Status = "degraded"
 			runtimeInfo.Available = false
 			runtimeInfo.StatusDetail = "executable found but version probe failed: " + versionErr.Error()
+			runtimeInfo.AuthenticationStatus = "unavailable"
+		} else {
+			authCtx, authCancel := context.WithTimeout(ctx, s.Timeout)
+			authErr := s.ReadAuthStatus(authCtx, path, candidate.Kind)
+			authCancel()
+			if authErr == nil {
+				runtimeInfo.AuthenticationStatus = "configured"
+			} else {
+				runtimeInfo.AuthenticationStatus = "unavailable"
+			}
+			compatibilityCtx, compatibilityCancel := context.WithTimeout(
+				ctx,
+				s.Timeout,
+			)
+			compatibilityErr := s.ReadArenaCompatibility(
+				compatibilityCtx,
+				path,
+				candidate.Kind,
+			)
+			compatibilityCancel()
+			runtimeInfo.ArenaCompatible = compatibilityErr == nil
 		}
+		runtimeInfo.TaskEnabled = contains(
+			runtimeInfo.Capabilities,
+			protocol.CommandTaskDispatch,
+		)
+		runtimeInfo.ArenaIsolation = "none"
+		if runtimeInfo.TaskEnabled && runtimeInfo.ArenaCompatible {
+			runtimeInfo.ArenaIsolation = arenaIsolationProfiles[candidate.Kind]
+		}
+		if !runtimeInfo.TaskEnabled {
+			runtimeInfo.ReadinessIssues = append(
+				runtimeInfo.ReadinessIssues,
+				"task_execution_disabled",
+			)
+		}
+		if runtimeInfo.AuthenticationStatus != "configured" {
+			runtimeInfo.ReadinessIssues = append(
+				runtimeInfo.ReadinessIssues,
+				"authentication_unavailable",
+			)
+		}
+		if !runtimeInfo.ArenaCompatible {
+			runtimeInfo.ReadinessIssues = append(
+				runtimeInfo.ReadinessIssues,
+				"arena_profile_unsupported",
+			)
+		}
+		if runtimeInfo.ArenaIsolation == "" ||
+			runtimeInfo.ArenaIsolation == "none" {
+			runtimeInfo.ReadinessIssues = append(
+				runtimeInfo.ReadinessIssues,
+				"arena_isolation_unavailable",
+			)
+		}
+		runtimeInfo.LocalExecutionReady = runtimeInfo.Available &&
+			runtimeInfo.TaskEnabled &&
+			runtimeInfo.AuthenticationStatus == "configured" &&
+			runtimeInfo.ArenaCompatible &&
+			runtimeInfo.ArenaIsolation != "" &&
+			runtimeInfo.ArenaIsolation != "none"
 		inventory.Runtimes = append(inventory.Runtimes, runtimeInfo)
 	}
 
@@ -198,6 +269,73 @@ func defaultReadVersion(ctx context.Context, executable string) (string, error) 
 		return "", err
 	}
 	return text, nil
+}
+
+func defaultReadAuthStatus(ctx context.Context, executable, kind string) error {
+	var args []string
+	switch kind {
+	case "codex":
+		args = []string{"login", "status"}
+	case "claude_code":
+		args = []string{"auth", "status"}
+	default:
+		return fmt.Errorf("authentication status is unsupported for %s", kind)
+	}
+	return exec.CommandContext(ctx, executable, args...).Run()
+}
+
+func defaultReadArenaCompatibility(
+	ctx context.Context,
+	executable string,
+	kind string,
+) error {
+	var args []string
+	var required []string
+	switch kind {
+	case "codex":
+		args = []string{"exec", "--help"}
+		required = []string{
+			"--sandbox",
+			"--ephemeral",
+			"--ignore-user-config",
+			"--ignore-rules",
+			"--output-schema",
+			"--cd",
+		}
+	case "claude_code":
+		args = []string{"--help"}
+		required = []string{
+			"--safe-mode",
+			"--strict-mcp-config",
+			"--tools",
+			"--disable-slash-commands",
+			"--no-session-persistence",
+			"--permission-mode",
+			"--json-schema",
+		}
+	default:
+		return fmt.Errorf("Arena compatibility is unsupported for %s", kind)
+	}
+	output, err := exec.CommandContext(ctx, executable, args...).Output()
+	if err != nil {
+		return err
+	}
+	text := string(output)
+	for _, flag := range required {
+		if !strings.Contains(text, flag) {
+			return fmt.Errorf("required Arena flag is unavailable")
+		}
+	}
+	return nil
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalPath(path string) string {

@@ -141,7 +141,8 @@ class ConnectorArenaTaskDispatcher:
                     (
                         "arena-session:"
                         f"{claim.connector_binding_id}:"
-                        f"{claim.connector_binding_epoch}"
+                        f"{claim.connector_binding_epoch}:"
+                        f"{int(binding.get('session_generation', 0))}"
                     ),
                     max(1, min(3600, math.ceil(remaining))),
                 )

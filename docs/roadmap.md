@@ -287,6 +287,16 @@ create game
 - [x] Local Arena Agent identity 创建、owner-scoped Connector route 解析、
       Connector-owned Arena session 启动、leased AgentTask 自动 dispatch，以及
       Hosted/Connector mixed-Runtime 回合编排已实现。
+- [x] Connector 进程重启会递增持久化的 `session_generation`，使原进程的
+      Session 失效并用新的 session incarnation 重建；处理中 typed AgentTask 仅在
+      旧 receipt 明确为 `connector_restarted` 时以新 Command 重试一次，总 Attempt
+      仍限制为两次，普通 Command 的幂等语义不变。
+- [x] typed AgentTask 已使用 Arena 专用隔离 profile：Claude 强制 no-tools、
+      safe-mode、空 MCP、无会话持久化及严格 JSON Schema；Codex 强制独立临时目录、
+      read-only sandbox、ephemeral、忽略用户 config/rules 及严格 JSON Schema。
+      inventory 分离 installed/task-enabled/auth-status/compatible/isolation/
+      local-ready，Gateway 与 Connector 交叉校验并对未就绪 Runtime fail closed。Codex CLI
+      当前没有等价 no-tools 开关，该差异保留为明确限制。
 - [ ] 使用真实 CC/Codex 跑通 Connector-only 与 Hosted/Connector mixed 完整比赛，
       并保存断线重连、deadline default 与 Result replay 证据。
 - [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等

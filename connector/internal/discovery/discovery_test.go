@@ -74,3 +74,50 @@ func TestScannerKeepsExecutableWhenVersionProbeFails(t *testing.T) {
 		t.Fatalf("expected degraded status, got %s", inventory.Runtimes[0].Status)
 	}
 }
+
+func TestScannerReportsLocalExecutionReadinessSeparatelyFromDetection(t *testing.T) {
+	paths := map[string]string{
+		"claude": filepath.Join(t.TempDir(), "claude"),
+		"codex":  filepath.Join(t.TempDir(), "codex"),
+	}
+	scanner := NewScanner("test", time.Second)
+	scanner.LookPath = func(command string) (string, error) {
+		return paths[command], nil
+	}
+	scanner.ReadVersion = func(context.Context, string) (string, error) {
+		return "1.2.3", nil
+	}
+	scanner.ReadAuthStatus = func(_ context.Context, _ string, kind string) error {
+		if kind == "codex" {
+			return nil
+		}
+		return errors.New("not authenticated")
+	}
+	scanner.ReadArenaCompatibility = func(context.Context, string, string) error {
+		return nil
+	}
+	scanner.Hostname = func() (string, error) { return "test-host", nil }
+	scanner.EnableTaskExecution("codex")
+
+	inventory := scanner.Scan(context.Background())
+	for _, runtimeInfo := range inventory.Runtimes {
+		switch runtimeInfo.Kind {
+		case "codex":
+			if !runtimeInfo.TaskEnabled ||
+				runtimeInfo.AuthenticationStatus != "configured" ||
+				!runtimeInfo.ArenaCompatible ||
+				runtimeInfo.ArenaIsolation != "read_only_ephemeral_schema" ||
+				!runtimeInfo.LocalExecutionReady {
+				t.Fatalf("Codex readiness was not reported accurately: %#v", runtimeInfo)
+			}
+		case "claude_code":
+			if runtimeInfo.TaskEnabled ||
+				runtimeInfo.AuthenticationStatus != "unavailable" ||
+				!runtimeInfo.ArenaCompatible ||
+				runtimeInfo.ArenaIsolation != "none" ||
+				runtimeInfo.LocalExecutionReady {
+				t.Fatalf("Claude detection must not imply task readiness: %#v", runtimeInfo)
+			}
+		}
+	}
+}

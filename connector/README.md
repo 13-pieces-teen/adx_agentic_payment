@@ -18,7 +18,10 @@ It now accepts versioned `arena.decide` and `arena.negotiate` payloads inside
 the existing top-level `task.dispatch` action and returns a separate
 `arena.agent-result.v1` terminal result. The local result is durably stored
 before transport, replayed after reconnect, and removed only after
-`agent_task.result.ack`.
+`agent_task.result.ack`. A new Connector process increments the binding's
+durable session generation, creates a new Connector-owned session, and may
+retry one typed Arena task whose prior receipt ended as
+`connector_restarted`; the total Runtime attempt count remains capped at two.
 
 The backend integration now includes owner-scoped Local Arena Agent
 registration, frozen Connector binding epochs, authenticated game
@@ -164,25 +167,47 @@ newer instance replaced it exits instead of entering a reconnect fight.
 ## Runtime discovery and drivers
 
 Discovery checks `PATH` plus a small set of common per-user install
-directories, then runs a bounded `--version` probe. Every detected runtime has
-a stable path-derived `runtime_id`, availability, and locally enabled
-capabilities. Authentication is reported as `unverified_local_auth`; the MVP
-does not inspect or upload local provider credentials.
+directories, then runs bounded `--version` and local CLI authentication-status
+probes (`codex login status` or `claude auth status`). Probe output is discarded
+and credentials are never read or uploaded. Every detected runtime has a stable
+path-derived `runtime_id`, availability, locally enabled capabilities,
+`task_enabled`, `authentication_status`, `arena_isolation`, and
+`arena_compatible` / `local_execution_ready`. Compatibility is checked with a
+bounded CLI `--help` probe for every required Arena safety flag.
+Authentication remains classified as
+`unverified_local_auth`: `configured` only means the local CLI reports a usable
+login configuration, not that provider quota, model access, subscription
+compliance, or a paid inference has been verified.
 
-After the corresponding local task flag is enabled, the drivers use fixed
-command shapes:
+Generic managed tasks retain the fixed CLI command shapes below:
 
 - Claude Code: `claude --print --output-format stream-json --verbose`
 - Codex: `codex exec --json -`
+
+Typed Arena tasks use a separate, non-resumable execution profile. The
+Connector creates a short-lived empty working directory containing only a
+`0600` output Schema and removes it after the process exits:
+
+- Claude Code adds safe mode, an empty strict MCP config, `--tools ""`,
+  disabled slash commands, no session persistence, `dontAsk`, and the strict
+  JSON Schema. This is the Arena no-tools profile.
+- Codex adds read-only sandboxing, ephemeral execution, ignored user
+  configuration and exec-policy rules, an isolated `--cd`, and the strict
+  output Schema. The current Codex CLI has no equivalent no-tools switch, so
+  this profile still must not be described as tool-free.
 
 Prompts are delivered over stdin. Runtime resume identifiers are captured from
 structured output and used only through the runtimes' fixed resume flags. The
 Connector never uses `sh -c`, `cmd /c`, a cloud-provided executable, or
 cloud-provided process arguments.
 
-Fixed argv is not a general safety sandbox: a prompt can still cause an enabled
-Agent runtime to invoke its own tools. Keep task flags off unless the Gateway,
-workspace, runtime permissions, and account are trusted.
+Gateway and Connector both fail closed for typed Arena tasks unless the local
+task flag, CLI authentication status, CLI safety-flag compatibility, expected
+isolation profile, and the derived readiness bit all agree. Merely being
+installed, version-readable,
+online, or bound is not Arena execution readiness. Codex's read-only profile
+can still invoke model tools within its sandbox, so task flags must remain off
+unless the local account and operating-system read boundary are trusted.
 
 Managed child processes inherit a small platform environment allowlist plus
 locally resolved names explicitly listed in `environment_refs`. The platform

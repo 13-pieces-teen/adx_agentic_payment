@@ -83,6 +83,9 @@ chain-of-thought；Provider 若返回 reasoning text 或私有推理载荷，应
 3. 用户在浏览器批准 Device；
 4. 平台显示本地 Runtime inventory；
 5. 用户选择 Runtime、允许目录和本地能力；
+   inventory 会分别展示任务开关、CLI 本地认证状态、安全 flags 兼容性、Arena
+   隔离 profile 和 `local_execution_ready`；仅安装、在线或版本可读不等于可执行
+   Arena Task。
 6. Connector Gateway 通过
    `POST /api/connectors/devices/{device_id}/bindings` 创建自己的 Binding，并记录
    `working_directory`；旧 Binding 可补齐一次该目录，已冻结目录不能静默修改。
@@ -96,6 +99,9 @@ chain-of-thought；Provider 若返回 reasoning text 或私有推理载荷，应
 9. 回合创建 AgentTask 后，Dispatcher 在没有 Session 时先幂等排队
    `session.start`，获得 Connector-owned `session_id` 后再排队 typed
    `task.dispatch`。Session 和本地 `working_directory` 不复制进 Arena 业务状态。
+   typed Task 实际在 Connector 创建的短生命周期空目录运行，不继承参赛时冻结目录
+   中的项目指令；Claude 使用 no-tools profile，Codex 使用 read-only sandbox
+   profile。两端都会在 readiness 字段不一致时拒绝执行。
 
 `adx-connector`、`ADX_*` 和现有协议消息名属于兼容标识，不做破坏性重命名。
 Connector 路径的模型凭据、OAuth、钱包私钥和本地环境秘密始终留在用户设备上，
