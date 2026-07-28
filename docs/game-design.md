@@ -157,7 +157,7 @@ Factory 在同一数据库事务中冻结 participant view、Game Agent 配置�
 - `sell`：选择一种已有货物，进入卖方池；
 - `pass`：本回合不交易。
 
-Hosted Prompt v4 要求 Agent 把 `market` 视为已包含当前 market-target 事件效果，
+Hosted Prompt v5 要求 Agent 把 `market` 视为已包含当前 market-target 事件效果，
 不得重复应用；逐一比较全部允许货物，并按照冻结的私有策略画像计算 `fairValue`、
 买卖触发阈值和作为保留价的 `limitPrice`。官方池按优先级循环十种数值画像，覆盖
 买方偏向、卖方偏向和双边策略，并使用不同的现金保留比例、库存目标、商品同分

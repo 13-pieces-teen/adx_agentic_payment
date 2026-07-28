@@ -963,7 +963,8 @@ Provider、Prompt、余额、持仓、排名和凭据不得放入公开 Agent id
 - `provider`、`model`、`thinking_enabled`；
 - 私有 `strategy_instructions`；
 - 当前平台 Prompt policy version 与 schema version；Prompt policy 由服务端统一推进，
-  当前固定为 `arena.hosted-prompt.v4`，不允许单个 Agent 选择旧版本；
+  当前固定为 `arena.hosted-prompt.v5`，不允许单个 Agent 选择旧版本；买方首轮报价
+  可以低于自身硬限价，以保留有限砍价空间，但永远不能越过该限价；
 - `credential_id`；
 - Token/输出长度等平台上限；
 - `created_at`、`updated_at`。

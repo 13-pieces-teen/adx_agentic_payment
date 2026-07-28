@@ -528,7 +528,7 @@ create game
       Provider key 的情况下以 `market-v4` 刷新并重新验证官方配置。
 - [x] 历史 Game 公共投影返回冻结优先的 `displayName + agentId`，独立前端结果页
       以 Agent 名称为主、短 ID 为辅，不再把 UUID-like `agentId` 当作名称。
-- [x] FCFS 改为价格兼容订单内配对；Hosted Prompt v4 明确事件不得重复计价、
+- [x] FCFS 改为价格兼容订单内配对；Hosted Prompt v5 明确事件不得重复计价、
       全货物比较、保留价语义和确定性协商收敛规则，越过自身限价的结构化动作只
       允许一次有界修正 Attempt，Arena 的独立限价、余额与库存校验保持不变。
 - [x] 产品 Current Game 默认从五回合调整为八回合，从十张版本化事件牌组中按

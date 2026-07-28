@@ -19,7 +19,7 @@ from arena_core.ingress_security import (
 
 # Hosted prompt policy is server-owned and intentionally advances globally.
 # Frozen Game Agent snapshots do not select an older prompt implementation.
-PROMPT_VERSION_V4: Final[str] = "arena.hosted-prompt.v4"
+PROMPT_VERSION_V5: Final[str] = "arena.hosted-prompt.v5"
 OUTPUT_VERSION_V1: Final[str] = "arena.agent-action.v1"
 MAX_STRATEGY_BYTES: Final[int] = 4 * 1024
 MAX_PROMPT_BYTES: Final[int] = 64 * 1024
@@ -28,10 +28,13 @@ DEFAULT_STRATEGY_INSTRUCTIONS: Final[str] = (
     "remaining rounds, cash, and inventory. Never reuse an expired event "
     "price. Estimate final value conservatively, prefer executable prices "
     "near the current market, and avoid stale or impossible orders. During "
-    "negotiation, treat limitPrice as a hard role-specific boundary, move "
-    "counteroffers toward the latest quote, use your own limitPrice as the "
-    "maximum buyer concession or minimum seller concession, and close the "
-    "final turn with accept or reject."
+    "negotiation, treat limitPrice as a hard role-specific boundary. A buyer "
+    "opening without a private numeric rule should offer 95% of limitPrice, "
+    "rounded down to the allowed precision and kept positive, so the opening "
+    "does not reveal the full reservation price. Move later counteroffers "
+    "toward the latest quote, use your own limitPrice as the maximum buyer "
+    "concession or minimum seller concession, and close the final turn with "
+    "accept or reject."
 )
 
 PromptBuildErrorCode: TypeAlias = Literal[
@@ -95,10 +98,14 @@ _SYSTEM_INSTRUCTIONS = (
     "limitPrice as a hard numeric boundary. A "
     "buyer may propose or accept only at or below limitPrice. A seller may "
     "propose or accept only at or above limitPrice. If there is no latest "
-    "counterparty quote, propose exactly your own limitPrice. If the latest "
-    "quote is within your boundary, accept immediately. If it is outside your "
-    "boundary and remainingTurns is greater than 1, counter exactly at your "
-    "own limitPrice; this must narrow and never widen the gap. If "
+    "counterparty quote, the buyer must make a positive opening proposal at or "
+    "below limitPrice. Follow a private numeric opening rule when present; "
+    "otherwise, when more than 1 turn remains, open at 95% of limitPrice, "
+    "rounded down to the allowed precision and kept positive. Do not reveal "
+    "the reservation boundary in the public message. If the latest quote is "
+    "within your boundary, accept immediately. If it is outside your boundary "
+    "and remainingTurns is greater than 1, counter exactly at your own "
+    "limitPrice; this must narrow and never widen the gap. If "
     "remainingTurns is 1 or 0, accept an in-bound quote or reject an "
     "out-of-bound quote. Never accept without a latest counterparty quote. "
     "Think privately in a bounded way, but never output private reasoning. "
@@ -307,7 +314,7 @@ class PromptBuilder:
         envelope = {
             "contextVersion": task.schema_version,
             "outputVersion": OUTPUT_VERSION_V1,
-            "promptVersion": PROMPT_VERSION_V4,
+            "promptVersion": PROMPT_VERSION_V5,
             "privateStrategyInstructions": effective_strategy,
             "task": {
                 "deadlineAt": task.deadline_at.isoformat(),
@@ -323,7 +330,7 @@ class PromptBuilder:
         input_json = _canonical_json(envelope)
         output_schema_json = _canonical_json(output_schema)
         built = BuiltPrompt(
-            prompt_version=PROMPT_VERSION_V4,
+            prompt_version=PROMPT_VERSION_V5,
             context_version=task.schema_version,
             output_version=OUTPUT_VERSION_V1,
             system_instructions=_SYSTEM_INSTRUCTIONS,
@@ -353,9 +360,11 @@ class PromptBuilder:
             ),
             "negotiation_rule_violation": (
                 "Your previous candidate violated the deterministic "
-                "negotiation rules. Correct it once: on turn 1 propose exactly "
-                "limitPrice; accept any latest quote within your boundary; "
-                "when an outside quote has more than 1 remaining turn counter "
+                "negotiation rules. Correct it once: on turn 1 propose a "
+                "positive price at or below limitPrice, using a private "
+                "numeric opening rule when present or 95% of limitPrice by "
+                "default; accept any latest quote within your boundary; when "
+                "an outside quote has more than 1 remaining turn counter "
                 "exactly at limitPrice; with 1 or 0 remaining turn reject it. "
                 "Return only the corrected JSON action."
             ),
@@ -398,7 +407,7 @@ __all__ = [
     "MAX_PROMPT_BYTES",
     "MAX_STRATEGY_BYTES",
     "OUTPUT_VERSION_V1",
-    "PROMPT_VERSION_V4",
+    "PROMPT_VERSION_V5",
     "PromptBuildError",
     "PromptBuilder",
 ]

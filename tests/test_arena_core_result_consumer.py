@@ -84,6 +84,53 @@ def test_result_sink_sanitizes_before_persistence_and_consumer_applies_once():
     asyncio.run(scenario())
 
 
+def test_buyer_can_open_below_reservation_limit_to_leave_bargaining_room():
+    async def scenario():
+        repository = MemoryArenaCoreRepository()
+        participant = negotiate_input(turn_sequence=1).model_copy(
+            update={"limit_price": Decimal("12.500000")}
+        )
+        task = await ArenaTaskFactory(
+            repository,
+            clock=lambda: NOW,
+        ).create_negotiate_task(
+            game_agent_id="game-agent-1",
+            participant_view=participant,
+            config_snapshot={},
+        )
+        await ArenaResultSink(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=1),
+        ).submit(
+            AgentTaskResultV1(
+                result_id="discounted-opening-result",
+                task_id=task.task.task_id,
+                schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                status="succeeded",
+                action=ProposeAction(
+                    action="propose",
+                    price="11.875000",
+                    message="I will open below my ceiling.",
+                ),
+            )
+        )
+
+        applied = await ArenaResultConsumer(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=2),
+        ).consume_pending()
+        stored = await repository.get_result_for_task(task.task.task_id)
+
+        assert len(applied) == 1
+        assert applied[0].outcome == "candidate"
+        assert applied[0].action is not None
+        assert applied[0].action["price"] == "11.875000"
+        assert stored is not None
+        assert stored.rejection_reason is None
+
+    asyncio.run(scenario())
+
+
 def test_wrong_kind_candidate_converges_to_one_negotiation_timeout():
     async def scenario():
         repository = MemoryArenaCoreRepository()

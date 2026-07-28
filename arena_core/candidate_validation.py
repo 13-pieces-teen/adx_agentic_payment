@@ -34,7 +34,6 @@ NegotiationCandidateViolation: TypeAlias = Literal[
     "counterparty_proposal_required",
     "final_turn_must_close",
     "limit_price_violation",
-    "opening_price_must_equal_limit",
     "in_bound_quote_must_accept",
     "final_out_of_bound_quote_must_reject",
     "out_of_bound_quote_must_counter",
@@ -126,12 +125,6 @@ def negotiation_candidate_violation(
 
     quote = task_input.latest_counterparty_quote
     if quote is None:
-        if (
-            isinstance(action, ProposeAction)
-            and limit_price is not None
-            and action.price != limit_price
-        ):
-            return "opening_price_must_equal_limit"
         return None
 
     if _quote_is_within_boundary(task_input):

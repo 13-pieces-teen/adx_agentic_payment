@@ -114,6 +114,12 @@ SEMANTIC_CANDIDATE_POLICY_SQL_PATH = (
     / "migrations"
     / "047_arena_semantic_candidate_policy.sql"
 )
+BARGAINING_OPENING_POLICY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "048_arena_bargaining_opening_offer.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -538,6 +544,17 @@ def test_semantic_candidate_policy_converges_sql_with_python() -> None:
     assert "out_of_bound_quote_must_counter" in sql
     assert "final_out_of_bound_quote_must_reject" in sql
     assert "counter_must_equal_limit" in sql
+
+
+def test_bargaining_opening_policy_preserves_bounds_without_forcing_ceiling():
+    sql = BARGAINING_OPENING_POLICY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE OR REPLACE FUNCTION apply_arena_agent_task_result" in sql
+    assert "buyer_opening_proposal_required" in sql
+    assert "limit_price_violation" in sql
+    assert "in_bound_quote_must_accept" in sql
+    assert "counter_must_equal_limit" in sql
+    assert "opening_price_must_equal_limit" not in sql
 
 
 def test_platform_account_wallet_migration_is_selected_by_arena_scope(
