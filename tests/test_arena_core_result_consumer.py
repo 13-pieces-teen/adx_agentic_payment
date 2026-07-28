@@ -1,5 +1,6 @@
 import asyncio
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -7,6 +8,7 @@ from arena_agent_contracts import (
     AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
     AcceptAction,
     AgentTaskResultV1,
+    ArenaCounterpartyQuoteV1,
     BuyAction,
     ProposeAction,
     RejectAction,
@@ -257,6 +259,66 @@ def test_proposal_on_final_turn_converges_to_timeout():
         assert applied[0].action is None
         assert stored is not None
         assert stored.rejection_reason == "final_turn_must_close"
+
+    asyncio.run(scenario())
+
+
+def test_in_bound_quote_rejection_converges_to_timeout():
+    async def scenario():
+        repository = MemoryArenaCoreRepository()
+        participant = negotiate_input(
+            turn_sequence=2,
+            remaining_turns=2,
+        ).model_copy(
+            update={
+                "role": "seller",
+                "limit_price": Decimal("5.400000"),
+                "latest_counterparty_quote": (
+                    ArenaCounterpartyQuoteV1.model_validate(
+                        {
+                            "turnSequence": 1,
+                            "from": "buyer",
+                            "price": "7.500000",
+                        }
+                    )
+                ),
+            }
+        )
+        task = await ArenaTaskFactory(
+            repository,
+            clock=lambda: NOW,
+        ).create_negotiate_task(
+            game_agent_id="game-agent-1",
+            participant_view=participant,
+            config_snapshot={},
+        )
+        await ArenaResultSink(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=1),
+        ).submit(
+            AgentTaskResultV1(
+                result_id="invalid-in-bound-reject",
+                task_id=task.task.task_id,
+                schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                status="succeeded",
+                action=RejectAction(
+                    action="reject",
+                    message="Quote too low.",
+                ),
+            )
+        )
+
+        applied = await ArenaResultConsumer(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=2),
+        ).consume_pending()
+        stored = await repository.get_result_for_task(task.task.task_id)
+
+        assert len(applied) == 1
+        assert applied[0].outcome == "negotiation_timeout"
+        assert applied[0].action is None
+        assert stored is not None
+        assert stored.rejection_reason == "in_bound_quote_must_accept"
 
     asyncio.run(scenario())
 

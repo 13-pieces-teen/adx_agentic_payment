@@ -178,7 +178,7 @@ def test_negotiation_prompt_defines_numeric_limit_and_convergence_rules() -> Non
     assert "accept immediately" in built.system_instructions
     assert "counter exactly at your own limitPrice" in built.system_instructions
     assert "never widen the gap" in built.system_instructions
-    assert "remainingTurns is 0" in built.system_instructions
+    assert "remainingTurns is 1 or 0" in built.system_instructions
 
 
 @pytest.mark.parametrize(

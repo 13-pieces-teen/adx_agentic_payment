@@ -2898,7 +2898,16 @@ class PostgresPawnhouseRepository:
                         latest_proposal_price_atomic = $5,
                         latest_proposal_role = $6,
                         accepted_price_atomic = $7,
-                        completed_at = $8
+                        completed_at = $8,
+                        action_deadline_at = CASE
+                            WHEN $4::text = 'active'
+                            THEN clock_timestamp() + (
+                                SELECT action_timeout_ms
+                                FROM arena402.games
+                                WHERE game_id = $9
+                            ) * interval '1 millisecond'
+                            ELSE action_deadline_at
+                        END
                     WHERE negotiation_id = $1
                     """,
                     negotiation_id,
@@ -2921,6 +2930,7 @@ class PostgresPawnhouseRepository:
                     ),
                     negotiation.accepted_price_atomic,
                     completed_at,
+                    row["game_id"],
                 )
                 if negotiation.status is not NegotiationStatus.ACTIVE:
                     await connection.execute(
@@ -3571,6 +3581,19 @@ class PostgresPawnhouseRepository:
                         "settlement_intent_not_found"
                     )
                 if intent["status"] == "authorization_failed":
+                    await connection.execute(
+                        """
+                        UPDATE arena402.negotiations
+                        SET status = 'settlement_failed',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE negotiation_id = $1
+                          AND status = 'accepted_pending_settlement'
+                        """,
+                        intent["negotiation_id"],
+                    )
                     return
                 if intent["status"] != "authorization_requested":
                     raise PawnhouseRepositoryError(
@@ -3595,6 +3618,19 @@ class PostgresPawnhouseRepository:
                     WHERE pairing_id = $1
                     """,
                     intent["pairing_id"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.negotiations
+                    SET status = 'settlement_failed',
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
+                    WHERE negotiation_id = $1
+                      AND status = 'accepted_pending_settlement'
+                    """,
+                    intent["negotiation_id"],
                 )
                 await connection.execute(
                     """
@@ -3812,6 +3848,19 @@ class PostgresPawnhouseRepository:
                         "confirmation_transaction_mismatch"
                     )
                 if row["status"] == "reverted":
+                    await connection.execute(
+                        """
+                        UPDATE arena402.negotiations
+                        SET status = 'settlement_failed',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE negotiation_id = $1
+                          AND status = 'accepted_pending_settlement'
+                        """,
+                        row["negotiation_id"],
+                    )
                     value = dict(row)
                     value.update(
                         {
@@ -3846,6 +3895,19 @@ class PostgresPawnhouseRepository:
                     WHERE pairing_id = $1
                     """,
                     row["pairing_id"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.negotiations
+                    SET status = 'settlement_failed',
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
+                    WHERE negotiation_id = $1
+                      AND status = 'accepted_pending_settlement'
+                    """,
+                    row["negotiation_id"],
                 )
                 await connection.execute(
                     """
@@ -3913,6 +3975,19 @@ class PostgresPawnhouseRepository:
                     settlement_intent_id,
                 )
                 if existing is not None:
+                    await connection.execute(
+                        """
+                        UPDATE arena402.negotiations
+                        SET status = 'settled',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE negotiation_id = $1
+                          AND status = 'accepted_pending_settlement'
+                        """,
+                        intent["negotiation_id"],
+                    )
                     return self._inventory_commit_public(
                         intent=intent,
                         commit=existing,
@@ -4087,6 +4162,19 @@ class PostgresPawnhouseRepository:
                     WHERE pairing_id = $1
                     """,
                     intent["pairing_id"],
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.negotiations
+                    SET status = 'settled',
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
+                    WHERE negotiation_id = $1
+                      AND status = 'accepted_pending_settlement'
+                    """,
+                    intent["negotiation_id"],
                 )
                 await connection.execute(
                     """

@@ -15,6 +15,10 @@ from arena_agent_contracts import (
     SellAction,
 )
 
+from .candidate_validation import (
+    decide_candidate_violation,
+    negotiation_candidate_violation,
+)
 from .models import ArenaApplication
 
 
@@ -54,33 +58,9 @@ def derive_application(
         and isinstance(task.input, ArenaDecideInputV1)
         and isinstance(action, (BuyAction, SellAction, PassAction))
     ):
-        if isinstance(action, (BuyAction, SellAction)):
-            limits = task.input.limits
-            if action.action not in limits.allowed_actions:
-                return _default_application(
-                    task, reason="action_not_allowed"
-                )
-            if limits.allowed_goods and action.good not in limits.allowed_goods:
-                return _default_application(
-                    task, reason="good_not_allowed"
-                )
-            if (
-                isinstance(action, SellAction)
-                and task.input.holdings.get(action.good, 0) < action.quantity
-            ):
-                return _default_application(
-                    task, reason="insufficient_inventory"
-                )
-            if (
-                isinstance(action, BuyAction)
-                and action.limit_price is not None
-                and action.limit_price * action.quantity > task.input.cash
-            ):
-                return _default_application(
-                    task, reason="insufficient_cash"
-                )
-        elif action.action not in task.input.limits.allowed_actions:
-            return _default_application(task, reason="action_not_allowed")
+        violation = decide_candidate_violation(task.input, action)
+        if violation is not None:
+            return _default_application(task, reason=violation)
         return ArenaApplication(
             accepted=True,
             outcome="candidate",
@@ -92,27 +72,9 @@ def derive_application(
         and isinstance(task.input, ArenaNegotiateInputV1)
         and isinstance(action, (ProposeAction, AcceptAction, RejectAction))
     ):
-        if task.input.turn_sequence == 1 and not isinstance(
-            action, ProposeAction
-        ):
-            return _default_application(
-                task,
-                reason="buyer_opening_proposal_required",
-            )
-        if isinstance(action, AcceptAction) and (
-            task.input.latest_counterparty_quote is None
-        ):
-            return _default_application(
-                task,
-                reason="counterparty_proposal_required",
-            )
-        if task.input.remaining_turns <= 1 and isinstance(
-            action, ProposeAction
-        ):
-            return _default_application(
-                task,
-                reason="final_turn_must_close",
-            )
+        violation = negotiation_candidate_violation(task.input, action)
+        if violation is not None:
+            return _default_application(task, reason=violation)
         return ArenaApplication(
             accepted=True,
             outcome="candidate",

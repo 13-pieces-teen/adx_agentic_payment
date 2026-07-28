@@ -13,6 +13,7 @@ import pytest
 from arena_agent_contracts import (
     AGENT_TASK_SCHEMA_VERSION_V1,
     ArenaAgentTaskV1,
+    ArenaCounterpartyQuoteV1,
 )
 from arena_core.hashing import sha256_identifier
 from hosted_agent_runtime.capabilities import (
@@ -162,8 +163,6 @@ async def _build_driver(
         (FakeProviderScenario.SELL, False, "sell"),
         (FakeProviderScenario.PASS, False, "pass"),
         (FakeProviderScenario.PROPOSE, True, "propose"),
-        (FakeProviderScenario.ACCEPT, True, "accept"),
-        (FakeProviderScenario.REJECT, True, "reject"),
     ],
 )
 def test_driver_returns_each_strict_action(
@@ -219,6 +218,47 @@ def test_transient_or_invalid_output_retries_once_then_succeeds(
     asyncio.run(scenario_run())
 
 
+def test_driver_returns_reject_for_final_out_of_bound_quote() -> None:
+    async def scenario_run() -> None:
+        task = _task(negotiate=True)
+        task_input = task.input.model_copy(
+            update={
+                "role": "seller",
+                "turn_sequence": 2,
+                "remaining_turns": 1,
+                "limit_price": Decimal("10.000000"),
+                "latest_counterparty_quote": (
+                    ArenaCounterpartyQuoteV1.model_validate(
+                        {
+                            "turnSequence": 1,
+                            "from": "buyer",
+                            "price": "9.000000",
+                        }
+                    )
+                ),
+            }
+        )
+        task = task.model_copy(
+            update={
+                "input": task_input,
+                "input_hash": sha256_identifier(task_input),
+            }
+        )
+        driver, fake, recorder, _, _ = await _build_driver(
+            [FakeProviderScenario.REJECT]
+        )
+
+        result = await driver.execute(task, task.deadline_at)
+
+        assert result.status == "succeeded"
+        assert result.action is not None
+        assert result.action.action == "reject"
+        assert len(fake.requests) == 1
+        assert recorder.records[0].status == "succeeded"
+
+    asyncio.run(scenario_run())
+
+
 def test_limit_violating_negotiation_action_gets_one_bounded_correction() -> None:
     async def scenario_run() -> None:
         task = _task(negotiate=True)
@@ -251,6 +291,100 @@ def test_limit_violating_negotiation_action_gets_one_bounded_correction() -> Non
         assert correction == {
             "attempt": 2,
             "code": "limit_price_violation",
+        }
+        assert [record.status for record in recorder.records] == [
+            "failed",
+            "succeeded",
+        ]
+
+    asyncio.run(scenario_run())
+
+
+def test_in_bound_quote_rejection_gets_one_semantic_correction() -> None:
+    async def scenario_run() -> None:
+        task = _task(negotiate=True)
+        task_input = task.input.model_copy(
+            update={
+                "role": "seller",
+                "turn_sequence": 2,
+                "remaining_turns": 2,
+                "limit_price": Decimal("5.400000"),
+                "latest_counterparty_quote": (
+                    ArenaCounterpartyQuoteV1.model_validate(
+                        {
+                            "turnSequence": 1,
+                            "from": "buyer",
+                            "price": "7.500000",
+                        }
+                    )
+                ),
+            }
+        )
+        task = task.model_copy(
+            update={
+                "input": task_input,
+                "input_hash": sha256_identifier(task_input),
+            }
+        )
+        driver, fake, recorder, _, _ = await _build_driver(
+            [
+                FakeProviderScenario.REJECT,
+                FakeProviderScenario.ACCEPT,
+            ]
+        )
+
+        result = await driver.execute(task, task.deadline_at)
+
+        assert result.status == "succeeded"
+        assert result.action is not None
+        assert result.action.action == "accept"
+        assert len(fake.requests) == 2
+        correction = json.loads(fake.requests[1].input_json)[
+            "boundedCorrection"
+        ]
+        assert correction == {
+            "attempt": 2,
+            "code": "negotiation_rule_violation",
+        }
+        assert [record.status for record in recorder.records] == [
+            "failed",
+            "succeeded",
+        ]
+
+    asyncio.run(scenario_run())
+
+
+def test_illegal_sell_gets_one_decision_constraint_correction() -> None:
+    async def scenario_run() -> None:
+        task = _task()
+        task_input = task.input.model_copy(
+            update={"holdings": {"ruby": 0}}
+        )
+        task = task.model_copy(
+            update={
+                "input": task_input,
+                "input_hash": sha256_identifier(task_input),
+            }
+        )
+        driver, fake, recorder, _, _ = await _build_driver(
+            [
+                FakeProviderScenario.SELL,
+                FakeProviderScenario.PASS,
+            ]
+        )
+
+        result = await driver.execute(task, task.deadline_at)
+
+        assert result.status == "succeeded"
+        assert result.action is not None
+        assert result.action.action == "pass"
+        assert len(fake.requests) == 2
+        correction = json.loads(fake.requests[1].input_json)[
+            "boundedCorrection"
+        ]
+        assert correction == {
+            "attempt": 2,
+            "code": "decision_constraint_violation",
         }
         assert [record.status for record in recorder.records] == [
             "failed",

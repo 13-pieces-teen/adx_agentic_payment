@@ -20,7 +20,7 @@ from hosted_agent_runtime.production_providers import (
 from scripts.bootstrap_official_agent_pool import _strategy
 
 
-STRATEGY_VERSION = "market-v4"
+STRATEGY_VERSION = "market-v5"
 
 
 def _required_environment(name: str) -> str:

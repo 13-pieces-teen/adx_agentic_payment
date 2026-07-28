@@ -74,8 +74,20 @@ class HttpX402SettlementExecutor:
         try:
             value = response.json()
         except ValueError:
-            value = {}
-        if response.status_code != 200 or not isinstance(value, dict):
+            value = None
+        if response.status_code >= 500 or response.status_code in {
+            408,
+            425,
+            429,
+        }:
+            return X402ExecutionResult(
+                success=False,
+                status="unknown",
+                transaction=None,
+                network=f"eip155:{terms.chain_id}",
+                error_reason="settlement_service_response_unknown",
+            )
+        if response.status_code != 200:
             return X402ExecutionResult(
                 success=False,
                 status="failed",
@@ -83,13 +95,27 @@ class HttpX402SettlementExecutor:
                 network=f"eip155:{terms.chain_id}",
                 error_reason="settlement_service_rejected",
             )
+        if (
+            not isinstance(value, dict)
+            or type(value.get("success")) is not bool
+            or value.get("status") not in {"submitted", "unknown", "failed"}
+            or not isinstance(value.get("transaction"), str)
+            or not isinstance(value.get("network"), str)
+        ):
+            return X402ExecutionResult(
+                success=False,
+                status="unknown",
+                transaction=None,
+                network=f"eip155:{terms.chain_id}",
+                error_reason="settlement_service_response_unknown",
+            )
         return X402ExecutionResult(
-            success=bool(value.get("success")),
-            status=str(value.get("status", "failed")),
+            success=value["success"],
+            status=value["status"],
             transaction=(
                 str(value["transaction"]) if value.get("transaction") else None
             ),
-            network=str(value.get("network", f"eip155:{terms.chain_id}")),
+            network=value["network"],
             payer=str(value["payer"]) if value.get("payer") else None,
             error_reason=(
                 str(value["errorReason"]) if value.get("errorReason") else None

@@ -211,10 +211,11 @@ Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，�
 rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
 Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不在
 Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
-Provider、Model 或 Runtime。结构合法但违反自身 `limitPrice` 的 Hosted 候选动作
-可在同一 AgentTask、同一冻结输入和 deadline 内触发唯一一次带安全错误码的修正
-Attempt；第二次仍越界则失败收敛，且 Arena 后端的独立限价、余额和库存校验继续
-保留。
+Provider、Model 或 Runtime。结构合法但违反自身 `limitPrice`、确定性协商规则，
+或冻结的 allowed action、余额、库存约束的 Hosted 候选动作，可在同一
+AgentTask、同一冻结输入和 deadline 内触发唯一一次带安全错误码的修正 Attempt；
+第二次仍非法则失败收敛，且 Arena 后端会独立重复相同的限价、协商语义、余额和
+库存校验。
 
 `failedNegotiations` 是对手可见的模糊信号，不直接扣分、不扣现金，也不改变
 FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
@@ -226,6 +227,8 @@ FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
 
 任一方接受最近报价后，协商进入 `accepted_pending_settlement`，但货物尚未
 转移。`accept` 是候选 Runtime 动作，只有 Arena 校验并应用后才能进入该状态。
+链上确认并完成库存提交后，协商进入 `settled`；授权失败或链上回滚后进入
+`settlement_failed`，不再长期停留在待结算状态。
 Arena 将冻结：
 
 - `gameId`、`roundId`、`negotiationId`；

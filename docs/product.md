@@ -173,7 +173,9 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Founding 402 纪念 NFT 是与游戏资产和 settlement 隔离的 ERC-721
   soulbound 发行面：后端按持久化 GitHub 注册顺序固化前 402 名，业务库只保存
   token ID、公开地址和确认凭据；助记词及私钥仅保留在仓库外。合约、分配、
-  公开批次和状态 API 已实现，但尚未部署或广播纪念 NFT testnet 交易。
+  公开批次和状态 API 已实现。2026-07-27 经显式人工确认完成首批 token ID
+  `0..11` 的 Injective EVM testnet 铸造，12 笔交易、链上 owner 与业务库记录均已
+  复核；持续实时铸造仍保持显式 opt-in 且当前关闭。
 - 产品前端已迁移到外部
   [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由
   Vercel 部署到 `www.arena402.com`。后端支持平台用户名/密码账号以及可选

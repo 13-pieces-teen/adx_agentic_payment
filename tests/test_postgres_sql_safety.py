@@ -57,3 +57,31 @@ def test_game_start_and_final_ranking_exclude_pending_participants() -> None:
     assert "SET status = 'cancelled'" in start_source
     assert "SET status = 'active'" in start_source
     assert "AND readiness = 'ready'" in finalize_source
+
+
+def test_settlement_terminal_state_updates_pairing_and_negotiation() -> None:
+    commit_source = inspect.getsource(
+        PostgresPawnhouseRepository.commit_confirmed_inventory
+    )
+    automatic_failure_source = inspect.getsource(
+        PostgresPawnhouseRepository.record_automatic_failure
+    )
+    reverted_source = inspect.getsource(
+        PostgresPawnhouseRepository.record_chain_reverted
+    )
+
+    assert "UPDATE arena402.negotiations" in commit_source
+    assert "SET status = 'settled'" in commit_source
+    for source in (automatic_failure_source, reverted_source):
+        assert "UPDATE arena402.negotiations" in source
+        assert "SET status = 'settlement_failed'" in source
+
+
+def test_each_nonterminal_negotiation_turn_refreshes_its_action_deadline() -> None:
+    source = inspect.getsource(
+        PostgresPawnhouseRepository.apply_hosted_negotiation_action
+    )
+
+    assert "action_deadline_at = CASE" in source
+    assert "SELECT action_timeout_ms" in source
+    assert "clock_timestamp()" in source

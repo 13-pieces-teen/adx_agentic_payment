@@ -704,7 +704,8 @@ Credential validation 状态机：
 - Arena participant view；
 - 当前 Task；
 - 对手公开消息以 untrusted data 编码；
-- Prompt/schema version 写入 Game 配置快照；
+- schema version 写入 Game 配置快照；Prompt policy version 可作为诊断事实记录，
+  但不作为单 Agent 版本选择器，Hosted Worker 统一使用当前 v4；
 - 不把 Secret、对手私有状态或历史 CoT 放入 Prompt。
 - 创建页明确提示所选 Provider 将接收策略说明和最小 participant view，并要求用户
   不在策略说明中粘贴额外凭据或个人敏感信息。

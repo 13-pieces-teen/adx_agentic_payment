@@ -18,6 +18,8 @@ class NegotiationError(ValueError):
 class NegotiationStatus(str, Enum):
     ACTIVE = "active"
     ACCEPTED_PENDING_SETTLEMENT = "accepted_pending_settlement"
+    SETTLED = "settled"
+    SETTLEMENT_FAILED = "settlement_failed"
     REJECTED = "rejected"
     TIMEOUT = "timeout"
 

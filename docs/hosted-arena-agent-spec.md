@@ -963,7 +963,8 @@ Provider、Prompt、余额、持仓、排名和凭据不得放入公开 Agent id
 - `id`、`agent_id`；
 - `provider`、`model`、`thinking_enabled`；
 - 私有 `strategy_instructions`；
-- 平台 Prompt/schema version；
+- 当前平台 Prompt policy version 与 schema version；Prompt policy 由服务端统一推进，
+  当前固定为 `arena.hosted-prompt.v4`，不允许单个 Agent 选择旧版本；
 - `credential_id`；
 - Token/输出长度等平台上限；
 - `created_at`、`updated_at`。
@@ -999,8 +1000,10 @@ MVP 使用 `WHERE disabled_at IS NULL` 的 partial unique index，保证一个 A
 - `UNIQUE(game_id, agent_id)`。
 
 `config_snapshot` 至少冻结 Provider/immutable model id、effective thinking、
-adapter version、Prompt version、Task/action schema version、capability version、
-input/output/token 上限、strategy instructions/hash 和精确 `credential_id`。
+adapter version、Task/action schema version、capability version、input/output/token
+上限、strategy instructions/hash 和精确 `credential_id`。快照可记录创建时观察到的
+Prompt policy version 作为诊断事实，但它不是运行时版本选择器；Hosted Worker 始终
+使用平台当前唯一 Prompt policy，当前为 v4。
 Attempt 另记录 Provider 实际返回的 model/version。安全 revoke 可以令当前 Game
 default，但不会偷偷改用新 Credential。
 

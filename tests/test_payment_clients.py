@@ -1,7 +1,9 @@
 import asyncio
 
+import httpx
 import pytest
 
+from arena_payments.executor import HttpX402SettlementExecutor
 from arena_payments.facilitator import (
     FacilitatorSettlement,
     HttpX402FacilitatorClient,
@@ -9,6 +11,7 @@ from arena_payments.facilitator import (
     build_facilitator_client,
 )
 from arena_payments.signer import HttpWalletSignerClient
+from tests.test_arena_payments import _terms
 
 
 def test_cloud_payment_clients_allow_only_https_or_named_internal_services() -> None:
@@ -64,6 +67,37 @@ def _requirement(index: int) -> dict[str, object]:
             "arena402IntentHash": f"sha256:{index:064x}",
         },
     }
+
+
+class _StaticResponseClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def post(self, *_: object, **__: object) -> httpx.Response:
+        return self._response
+
+
+def _patch_internal_settlement_response(
+    monkeypatch: pytest.MonkeyPatch,
+    response: httpx.Response,
+) -> None:
+    monkeypatch.setattr(
+        "arena_payments.executor.httpx.AsyncClient",
+        lambda **_: _StaticResponseClient(response),
+    )
+
+
+def _internal_executor() -> HttpX402SettlementExecutor:
+    return HttpX402SettlementExecutor(
+        "http://settlement-worker:8000",
+        bearer_token="x" * 32,
+    )
 
 
 def test_four_facilitator_shards_route_each_intent_stably() -> None:
@@ -161,3 +195,76 @@ def test_production_facilitator_builder_rejects_missing_or_duplicate_eoa() -> No
     environment["ADX_X402_FACILITATOR_2_EOA"] = "0x" + "11" * 20
     with pytest.raises(RuntimeError, match="facilitator shard EOAs must be unique"):
         build_facilitator_client(environment)
+
+
+def test_internal_settlement_service_5xx_is_an_unknown_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_internal_settlement_response(
+        monkeypatch,
+        httpx.Response(
+            503,
+            json={"detail": "temporarily unavailable"},
+            request=httpx.Request("POST", "http://settlement-worker"),
+        ),
+    )
+
+    result = asyncio.run(
+        _internal_executor().execute(
+            terms=_terms(),
+            mandate_id="mandate-1",
+            payment_payload={},
+        )
+    )
+
+    assert result.success is False
+    assert result.status == "unknown"
+    assert result.error_reason == "settlement_service_response_unknown"
+
+
+def test_internal_settlement_service_invalid_success_body_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_internal_settlement_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={},
+            request=httpx.Request("POST", "http://settlement-worker"),
+        ),
+    )
+
+    result = asyncio.run(
+        _internal_executor().execute(
+            terms=_terms(),
+            mandate_id="mandate-1",
+            payment_payload={},
+        )
+    )
+
+    assert result.status == "unknown"
+    assert result.error_reason == "settlement_service_response_unknown"
+
+
+def test_internal_settlement_service_explicit_rejection_is_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_internal_settlement_response(
+        monkeypatch,
+        httpx.Response(
+            409,
+            json={"detail": "payment_mandate_not_active"},
+            request=httpx.Request("POST", "http://settlement-worker"),
+        ),
+    )
+
+    result = asyncio.run(
+        _internal_executor().execute(
+            terms=_terms(),
+            mandate_id="mandate-1",
+            payment_payload={},
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error_reason == "settlement_service_rejected"

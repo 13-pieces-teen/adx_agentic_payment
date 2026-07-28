@@ -8,20 +8,24 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal, Protocol, TypeAlias, runtime_checkable
+from typing import Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError
 
 from arena_agent_contracts import (
     AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
-    AcceptAction,
     AgentActionV1,
     AgentTaskResultV1,
     ArenaAgentTaskV1,
+    ArenaDecideInputV1,
     ArenaNegotiateInputV1,
     DecideActionV1,
     NegotiateActionV1,
-    ProposeAction,
+)
+from arena_core.candidate_validation import (
+    CandidateViolation,
+    decide_candidate_violation,
+    negotiation_candidate_violation,
 )
 from arena_core.hashing import sha256_identifier
 
@@ -30,7 +34,12 @@ from .capabilities import (
     CapabilityRegistry,
     ResolvedModelCapability,
 )
-from .prompt_builder import BuiltPrompt, PromptBuildError, PromptBuilder
+from .prompt_builder import (
+    BoundedCorrectionCode,
+    BuiltPrompt,
+    PromptBuildError,
+    PromptBuilder,
+)
 from .providers import (
     MAX_POSTGRES_BIGINT,
     ProviderAdapter,
@@ -86,31 +95,22 @@ def _require_aware(value: datetime, *, label: str) -> datetime:
     return value
 
 
-def _violates_negotiation_limit(
+def _candidate_violation(
     task: ArenaAgentTaskV1,
     action: AgentActionV1,
-) -> bool:
+) -> CandidateViolation | None:
     task_input = task.input
-    if (
-        not isinstance(task_input, ArenaNegotiateInputV1)
-        or task_input.limit_price is None
-    ):
-        return False
-    price = None
-    if isinstance(action, ProposeAction):
-        price = action.price
-    elif (
-        isinstance(action, AcceptAction)
-        and task_input.latest_counterparty_quote is not None
-    ):
-        price = task_input.latest_counterparty_quote.price
-    if price is None:
-        return False
-    return (
-        task_input.role == "buyer" and price > task_input.limit_price
-    ) or (
-        task_input.role == "seller" and price < task_input.limit_price
-    )
+    if isinstance(task_input, ArenaDecideInputV1):
+        return decide_candidate_violation(
+            task_input,
+            cast(DecideActionV1, action),
+        )
+    if isinstance(task_input, ArenaNegotiateInputV1):
+        return negotiation_candidate_violation(
+            task_input,
+            cast(NegotiateActionV1, action),
+        )
+    raise TypeError("unsupported Arena task input")
 
 
 class DirectModelInfrastructureError(RuntimeError):
@@ -501,7 +501,7 @@ class DirectModelDriver:
         except PromptBuildError:
             return self._result(task_snapshot, status="failed")
 
-        correction_code: Literal["limit_price_violation"] | None = None
+        correction_code: BoundedCorrectionCode | None = None
         for attempt_number in range(
             first_attempt_number,
             MAX_PROVIDER_ATTEMPTS + 1,
@@ -744,7 +744,8 @@ class DirectModelDriver:
                     continue
                 return self._terminal_after_failure(task_snapshot, budget)
 
-            if _violates_negotiation_limit(task_snapshot, action):
+            violation = _candidate_violation(task_snapshot, action)
+            if violation is not None:
                 validation_error = ProviderInvocationError(
                     "invalid_structured_output"
                 )
@@ -758,7 +759,15 @@ class DirectModelDriver:
                     provider_request_id=response.provider_request_id,
                 )
                 if should_retry:
-                    correction_code = "limit_price_violation"
+                    correction_code = (
+                        "decision_constraint_violation"
+                        if task_snapshot.kind == "arena.decide"
+                        else (
+                            "limit_price_violation"
+                            if violation == "limit_price_violation"
+                            else "negotiation_rule_violation"
+                        )
+                    )
                     continue
                 return self._terminal_after_failure(task_snapshot, budget)
 

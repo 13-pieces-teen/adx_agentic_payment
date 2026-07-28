@@ -64,11 +64,13 @@ Arena 402 的对外叙事固定为三层：
 - [x] Founding 402 claim launch: the soulbound ERC-721 is deployed on Injective
   EVM testnet, all 402 public wallet addresses are active, GitHub registrations
   allocate ranks and token IDs, and the external claim/status UI is live.
-- [ ] Founding 402 mint acceptance: the opt-in real-time minter is implemented
-  with an isolated read-only owner-key mount, a single-process advisory lock,
-  deterministic signed-transaction recovery, and automatic receipt recording.
-  Production enablement and the first mint transaction still require explicit
-  human approval; no memorial NFT has been minted yet.
+- [x] Founding 402 mint acceptance: the opt-in real-time minter uses an isolated
+  read-only owner-key mount, a single-process advisory lock, deterministic
+  signed-transaction recovery, and automatic receipt recording. On 2026-07-27,
+  explicit human approval authorized a bounded production run that minted token
+  IDs `0..11` in 12 confirmed Injective EVM testnet transactions. Blockscout
+  receipts, on-chain `ownerOf` results, and PostgreSQL records were reconciled
+  before the minter container was removed. Continuous minting remains disabled.
 
 The Milestone 2 demonstration is:
 

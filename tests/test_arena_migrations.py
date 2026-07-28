@@ -102,6 +102,18 @@ SETTLEMENT_FENCING_SQL_PATH = (
 PLATFORM_ACCOUNT_WALLETS_SQL_PATH = (
     ROOT / "db" / "migrations" / "045_arena_platform_account_wallets.sql"
 )
+NEGOTIATION_SETTLEMENT_STATUS_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "046_arena_negotiation_settlement_status.sql"
+)
+SEMANTIC_CANDIDATE_POLICY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "047_arena_semantic_candidate_policy.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -507,6 +519,25 @@ def test_platform_account_wallet_migration_removes_github_as_a_requirement():
     assert "ALTER COLUMN github_subject DROP NOT NULL" in sql
     assert "user_id is the platform wallet authority" in sql
     assert "private_key" not in sql.lower()
+
+
+def test_negotiation_settlement_status_migration_adds_terminal_states() -> None:
+    sql = NEGOTIATION_SETTLEMENT_STATUS_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "DROP CONSTRAINT IF EXISTS negotiations_status_check" in sql
+    assert "'settled'" in sql
+    assert "'settlement_failed'" in sql
+
+
+def test_semantic_candidate_policy_converges_sql_with_python() -> None:
+    sql = SEMANTIC_CANDIDATE_POLICY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE OR REPLACE FUNCTION apply_arena_agent_task_result" in sql
+    assert "limit_price_violation" in sql
+    assert "in_bound_quote_must_accept" in sql
+    assert "out_of_bound_quote_must_counter" in sql
+    assert "final_out_of_bound_quote_must_reject" in sql
+    assert "counter_must_equal_limit" in sql
 
 
 def test_platform_account_wallet_migration_is_selected_by_arena_scope(

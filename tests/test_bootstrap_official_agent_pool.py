@@ -42,16 +42,21 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
     assert any("TWO_SIDED" in strategy for strategy in first_cycle)
     assert all("expired event price" in strategy for strategy in first_cycle)
     assert all(
+        "build the legal candidate set" in strategy for strategy in first_cycle
+    )
+    assert all("zero-holding good" in strategy for strategy in first_cycle)
+    assert all("next legal good" in strategy for strategy in first_cycle)
+    assert all(
         len(strategy.encode("utf-8")) <= MAX_STRATEGY_BYTES
         for strategy in first_cycle
     )
 
 
 def test_official_strategy_refresh_has_a_versioned_stable_idempotency_key() -> None:
-    assert STRATEGY_VERSION == "market-v4"
+    assert STRATEGY_VERSION == "market-v5"
     assert (
         _update_idempotency_key("agent-official-001")
-        == "official-strategy-market-v4-agent-official-001"
+        == "official-strategy-market-v5-agent-official-001"
     )
 
 
