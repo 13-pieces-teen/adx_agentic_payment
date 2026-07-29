@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from db_pool_config import api_pool_max_size
+
 from .repository import DuplicateIdentityError, InvalidInviteError
 
 
@@ -68,8 +70,8 @@ class PostgresConnectorRepository:
                 ) from exc
             self._pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=1,
-                max_size=5,
+                min_size=0,
+                max_size=api_pool_max_size(),
                 command_timeout=30,
             )
 
@@ -379,6 +381,15 @@ class PostgresConnectorRepository:
 
     async def save_gateway_state(self, state: dict[str, Any]) -> None:
         pool = self._require_pool()
+        replace_runtime_device_ids = {
+            str(value)
+            for value in state.get("_replace_runtime_device_ids", [])
+        }
+        if not state.get("_incremental", False):
+            replace_runtime_device_ids.update(
+                str(device["device_id"])
+                for device in state.get("devices", [])
+            )
         async with pool.acquire() as connection:
             async with connection.transaction():
                 for pairing in state["pairings"]:
@@ -428,24 +439,25 @@ class PostgresConnectorRepository:
                         _optional_timestamp(device.get("revoked_at")),
                         json.dumps(device),
                     )
-                    await connection.execute(
-                        "DELETE FROM connector_runtimes WHERE device_id = $1",
-                        device["device_id"],
-                    )
-                    for runtime in device.get("runtimes", []):
+                    if device["device_id"] in replace_runtime_device_ids:
                         await connection.execute(
-                            """
-                            INSERT INTO connector_runtimes (
-                                device_id, runtime_id, kind, available, record
-                            )
-                            VALUES ($1,$2,$3,$4,$5::jsonb)
-                            """,
+                            "DELETE FROM connector_runtimes WHERE device_id = $1",
                             device["device_id"],
-                            runtime["runtime_id"],
-                            runtime["kind"],
-                            runtime.get("available", True),
-                            json.dumps(runtime),
                         )
+                        for runtime in device.get("runtimes", []):
+                            await connection.execute(
+                                """
+                                INSERT INTO connector_runtimes (
+                                    device_id, runtime_id, kind, available, record
+                                )
+                                VALUES ($1,$2,$3,$4,$5::jsonb)
+                                """,
+                                device["device_id"],
+                                runtime["runtime_id"],
+                                runtime["kind"],
+                                runtime.get("available", True),
+                                json.dumps(runtime),
+                            )
                 for binding in state["bindings"]:
                     await connection.execute(
                         """
@@ -541,37 +553,44 @@ class PostgresConnectorRepository:
                         _timestamp(item["occurred_at"]),
                         json.dumps(item),
                     )
-                # Pairing codes are short-lived, unauthenticated ingress state.
-                # Purging terminal expired rows keeps snapshot writes bounded.
-                await connection.execute(
-                    """
-                    DELETE FROM connector_pairings
-                    WHERE status IN ('pending', 'approved', 'expired')
-                      AND expires_at <= now()
-                    """
-                )
-                # Match the in-memory observability window. These tables are
-                # append-only, so prune oldest rows after each incremental
-                # write and keep restart memory/disk use bounded.
-                await connection.execute(
-                    """
-                    DELETE FROM connector_events
-                    WHERE event_id IN (
-                        SELECT event_id
-                        FROM connector_events
-                        ORDER BY received_at DESC, event_id DESC
-                        OFFSET 10000
+                if (
+                    not state.get("_incremental", False)
+                    or "pairings"
+                    in state.get("_replace_collections", [])
+                ):
+                    # Pairing codes are short-lived, unauthenticated ingress
+                    # state. Purge only when this collection changed.
+                    await connection.execute(
+                        """
+                        DELETE FROM connector_pairings
+                        WHERE status IN ('pending', 'approved', 'expired')
+                          AND expires_at <= now()
+                        """
                     )
-                    """
-                )
-                await connection.execute(
-                    """
-                    DELETE FROM connector_audit
-                    WHERE audit_id IN (
-                        SELECT audit_id
-                        FROM connector_audit
-                        ORDER BY occurred_at DESC, audit_id DESC
-                        OFFSET 10000
+                # Match the in-memory observability window. Pruning only when
+                # the corresponding stream appended avoids two table scans on
+                # every heartbeat.
+                if state["events"]:
+                    await connection.execute(
+                        """
+                        DELETE FROM connector_events
+                        WHERE event_id IN (
+                            SELECT event_id
+                            FROM connector_events
+                            ORDER BY received_at DESC, event_id DESC
+                            OFFSET 10000
+                        )
+                        """
                     )
-                    """
-                )
+                if state["audit"]:
+                    await connection.execute(
+                        """
+                        DELETE FROM connector_audit
+                        WHERE audit_id IN (
+                            SELECT audit_id
+                            FROM connector_audit
+                            ORDER BY occurred_at DESC, audit_id DESC
+                            OFFSET 10000
+                        )
+                        """
+                    )

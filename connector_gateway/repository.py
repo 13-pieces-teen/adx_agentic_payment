@@ -286,14 +286,33 @@ class MemoryConnectorRepository:
             for item in state.get("audit", []):
                 current_audit[str(item["audit_id"])] = copy.deepcopy(item)
 
+            key_fields = {
+                "pairings": "pairing_id",
+                "devices": "device_id",
+                "bindings": "binding_id",
+                "commands": "command_id",
+                "agent_task_results": "task_id",
+            }
+            replace_collections = set(state.get("_replace_collections", []))
+            mutable: dict[str, list[dict[str, Any]]] = {}
+            for collection, key_field in key_fields.items():
+                incoming = copy.deepcopy(state.get(collection, []))
+                if (
+                    not state.get("_incremental", False)
+                    or collection in replace_collections
+                ):
+                    mutable[collection] = incoming
+                    continue
+                merged = {
+                    str(item[key_field]): copy.deepcopy(item)
+                    for item in self.gateway_state.get(collection, [])
+                }
+                for item in incoming:
+                    merged[str(item[key_field])] = item
+                mutable[collection] = list(merged.values())
+
             self.gateway_state = {
-                "pairings": copy.deepcopy(state.get("pairings", [])),
-                "devices": copy.deepcopy(state.get("devices", [])),
-                "bindings": copy.deepcopy(state.get("bindings", [])),
-                "commands": copy.deepcopy(state.get("commands", [])),
-                "agent_task_results": copy.deepcopy(
-                    state.get("agent_task_results", [])
-                ),
+                **mutable,
                 "events": list(current_events.values())[-10_000:],
                 "audit": list(current_audit.values())[-10_000:],
             }

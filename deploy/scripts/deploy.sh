@@ -381,7 +381,7 @@ fi
 
 compose config --quiet
 compose pull postgres caddy certbot
-compose build --pull api migrate provision-db-roles
+compose build --pull api connector-api migrate provision-db-roles
 if [ "${enable_hosted_runtime}" = "true" ]; then
   compose --profile hosted build --pull hosted-worker credential-controller
 fi
@@ -407,7 +407,7 @@ if [ "${enable_gamecoin_provisioner}" = "true" ]; then
 fi
 compose up -d postgres
 compose run --rm migrate
-compose up -d api caddy
+compose up -d api connector-api caddy
 if [ "${enable_hosted_runtime}" = "true" ]; then
   compose --profile hosted up -d --scale hosted-worker="${hosted_worker_replicas}" hosted-worker credential-controller
 fi

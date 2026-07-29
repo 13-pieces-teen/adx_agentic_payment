@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import threading
 from datetime import datetime, timedelta, timezone
@@ -1019,6 +1020,60 @@ def test_observability_streams_are_persisted_as_deltas_and_survive_restart():
         assert restarted.events[0]["event_id"] == "event_incremental"
         assert restarted.audit[0]["audit_id"] == "audit_incremental"
         assert restarted.event_ack_watermarks["device_incremental"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_heartbeat_persists_only_the_touched_device_without_runtime_rewrite():
+    class RecordingRepository(MemoryConnectorRepository):
+        def __init__(self):
+            super().__init__()
+            self.states: list[dict] = []
+
+        async def save_gateway_state(self, state):
+            self.states.append(copy.deepcopy(state))
+            await super().save_gateway_state(state)
+
+    repository = RecordingRepository()
+    service = PersistentConnectorGateway(repository)
+
+    async def scenario():
+        await service.initialize()
+        now = datetime.now(timezone.utc).isoformat()
+        async with service._lock:
+            for device_id in ("device-heartbeat", "device-unrelated"):
+                service.devices[device_id] = {
+                    "device_id": device_id,
+                    "owner_id": f"owner-{device_id}",
+                    "token_hash": "0" * 64,
+                    "status": "offline",
+                    "created_at": now,
+                    "revoked_at": None,
+                    "_connection_generation": 0,
+                    "event_ack_watermark": 0,
+                    "event_pending_sequences": [],
+                    "runtimes": [
+                        {
+                            "runtime_id": "codex",
+                            "kind": "codex",
+                            "display_name": "Codex",
+                        }
+                    ],
+                }
+        await service._persist_current()
+        repository.states.clear()
+
+        await service.heartbeat("device-heartbeat", {"active_sessions": 2})
+
+        state = repository.states[-1]
+        assert state["_incremental"] is True
+        assert [item["device_id"] for item in state["devices"]] == [
+            "device-heartbeat"
+        ]
+        assert state["_replace_runtime_device_ids"] == []
+        assert state["pairings"] == []
+        assert state["bindings"] == []
+        assert state["commands"] == []
 
     asyncio.run(scenario())
 

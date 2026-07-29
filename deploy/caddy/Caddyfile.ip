@@ -50,10 +50,19 @@ https://{$ADX_PUBLIC_HOST} {
 		file_server
 	}
 
+	@connector path /api/connectors* /api/auth*
+	handle @connector {
+		reverse_proxy connector-api:8000 {
+			health_uri /api/ready
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
 	@api path /api/*
 	handle @api {
 		reverse_proxy api:8000 {
-			health_uri /api/health
+			health_uri /api/ready
 			health_interval 30s
 			health_timeout 5s
 		}

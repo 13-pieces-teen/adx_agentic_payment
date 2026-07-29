@@ -122,8 +122,10 @@ export class Facilitator {
       gasPrice,
       gas: 150_000n,
     });
-    const res = await waitViaBlockscout(hash);
-    return { ...res, txHash: hash };
+    // Release the signer nonce queue as soon as the node accepts the
+    // transaction. Arena owns confirmation/recovery and will not move
+    // inventory until the configured chain confirmation threshold is met.
+    return { status: "pending", txHash: hash };
   }
 
   /** /faucet：给地址发 mUSDC（expo 现场用） */

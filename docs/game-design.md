@@ -5,10 +5,12 @@
 > Local Connector 的 identity、冻结 route、Connector-owned session、数据库 Task
 > dispatcher、typed Task/Result、Result Sink 和 Hosted/Connector mixed-Runtime
 > 回合编排已接线；PaymentMandate 与 x402 V2 自动链路已实现并通过 Fake E2E。
-> 真实 CC/Codex 完整比赛、新鲜真实 testnet 交易和真实生产验收尚未完成。
+> 经自建 Facilitator 的新鲜 Injective EVM testnet 交易、链上确认和库存提交已完成；
+> 真实 CC/Codex 完整比赛、公共第三方 Facilitator 兼容和完整生产验收尚未完成。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
-> 本文维护游戏规则、跨模块状态和 Agent I/O 契约。产品边界见
+> 第一次参赛见 [`player-guide.md`](player-guide.md)。本文维护游戏规则、跨模块状态
+> 和 Agent I/O 契约。产品边界见
 > [`product.md`](product.md)，实施状态见 [`roadmap.md`](roadmap.md)，结算接线见
 > [`arena-settlement-integration.md`](arena-settlement-integration.md)。
 
@@ -34,8 +36,9 @@ Prompt、决策速度和谈判质量。
 默认模式下，每笔被接受的交易都必须进入一笔点对点的 Injective testnet
 `arena402-g` 链上结算。该币只允许已登记参赛钱包间转账；平台负责组织回合、
 配对和记录，不托管用户自带钱包
-或真实资金。当前实现已接入 EIP-3009 direct-relay 基础和确认门控，但新鲜 live
-testnet 交易与生产 Facilitator 兼容性仍未完成验收。
+或真实资金。当前实现已接入 EIP-3009 direct-relay 基础和确认门控，并已完成经
+自建 Facilitator 的新鲜 testnet 交易；公共第三方 Facilitator 兼容性和完整生产
+恢复仍未完成验收。
 
 游客模式是明确例外：平台 signer service 可管理隔离、限额、可过期和可撤销的
 testnet-only 演示密钥。它不承载真实资金，也不能被宣传为非托管主网钱包。
@@ -252,8 +255,8 @@ settlement account、单笔 20 gold、累计 `20 gold × roundCount`、24 小时
 
 当前实现已校验 PaymentMandate 的 network、Token、Game、payee、单笔/累计额度、
 有效期、撤销和并发 `reserve / consume / release`，并用 x402 V2 header 完成自动
-提交编排。底层 EIP-3009 direct relay 仍是 testnet 原型，标准公共 Facilitator
-和新鲜真实交易尚待验收。
+提交编排。底层 EIP-3009 direct relay 仍是 testnet 原型；经自建 Facilitator 的
+新鲜真实交易已经完成，标准公共 Facilitator 仍待验收。
 
 授权、提交、链上确认或数据库提交任一步失败，都不得转移货物。详细契约见
 [`arena-settlement-integration.md`](arena-settlement-integration.md)。

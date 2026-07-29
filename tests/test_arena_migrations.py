@@ -120,6 +120,24 @@ BARGAINING_OPENING_POLICY_SQL_PATH = (
     / "migrations"
     / "048_arena_bargaining_opening_offer.sql"
 )
+BATCHED_FINALIZER_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "049_arena_batch_deadline_finalizer.sql"
+)
+PROVIDER_CAPACITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "050_hosted_provider_capacity_and_fair_claim.sql"
+)
+RUNTIME_RUN_FENCING_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "051_arena_runtime_run_lease_fencing.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -648,3 +666,19 @@ def test_empty_current_game_refresh_never_cancels_a_joined_game():
     assert "NOT EXISTS" in sql
     assert "FROM arena402.game_participants AS participant" in sql
     assert "participant.game_id = game.game_id" in sql
+
+
+def test_concurrency_migrations_are_bounded_fair_and_fenced():
+    finalizer = BATCHED_FINALIZER_SQL_PATH.read_text(encoding="utf-8")
+    capacity = PROVIDER_CAPACITY_SQL_PATH.read_text(encoding="utf-8")
+    fencing = RUNTIME_RUN_FENCING_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "finalize_expired_agent_tasks_batch" in finalizer
+    assert "FOR UPDATE SKIP LOCKED" in finalizer
+    assert "p_limit > 1000" in finalizer
+    assert "hosted_provider_capacity" in capacity
+    assert "pg_advisory_xact_lock" in capacity
+    assert "PARTITION BY task.game_id" in capacity
+    assert "capacity.max_inflight" in capacity
+    assert "ADD COLUMN lease_epoch BIGINT" in fencing
+    assert "CHECK (lease_epoch >= 0)" in fencing

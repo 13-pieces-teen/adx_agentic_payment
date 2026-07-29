@@ -19,6 +19,7 @@ from arena_agent_contracts import (
     ArenaAgentTaskV1,
     ArenaNegotiateInputV1,
 )
+from db_pool_config import api_pool_max_size
 
 from .hashing import (
     canonical_json_bytes,
@@ -268,8 +269,8 @@ class PostgresArenaCoreRepository:
                 ) from exc
             self._pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=1,
-                max_size=5,
+                min_size=0,
+                max_size=api_pool_max_size(),
                 command_timeout=30,
                 init=self._initialize_connection,
                 setup=self._setup_connection,
@@ -672,6 +673,25 @@ class PostgresArenaCoreRepository:
         )
         return None if row is None else _result_record(row)
 
+    async def get_results_for_tasks(
+        self, task_ids: list[str]
+    ) -> dict[str, ArenaResultRecord]:
+        """Fetch a round's terminal results in one database round trip."""
+        if not task_ids:
+            return {}
+        rows = await self._require_pool().fetch(
+            f"""
+            SELECT {_RESULT_COLUMNS}
+            FROM arena_agent_task_results
+            WHERE task_id = ANY($1::text[])
+            """,
+            task_ids,
+        )
+        return {
+            str(_mapping(row)["task_id"]): _result_record(row)
+            for row in rows
+        }
+
     async def submit_result(
         self,
         *,
@@ -760,43 +780,14 @@ class PostgresArenaCoreRepository:
         if limit <= 0:
             return []
         pool = self._require_pool()
-        records: list[ArenaResultRecord] = []
-        async with pool.acquire() as connection:
-            async with connection.transaction():
-                tasks = await connection.fetch(
-                    """
-                    SELECT task_id
-                    FROM arena_agent_tasks
-                    WHERE status IN ('queued', 'leased', 'running')
-                      AND deadline_at <= clock_timestamp()
-                    ORDER BY deadline_at, task_id
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT $1
-                    """,
-                    limit,
-                )
-                for task_row in tasks:
-                    task_id = _mapping(task_row)["task_id"]
-                    finalized = await connection.fetchval(
-                        "SELECT finalize_expired_agent_task($1)",
-                        task_id,
-                    )
-                    if not finalized:
-                        continue
-                    result_row = await connection.fetchrow(
-                        f"""
-                        SELECT {_RESULT_COLUMNS}
-                        FROM arena_agent_task_results
-                        WHERE task_id = $1
-                        """,
-                        task_id,
-                    )
-                    if result_row is None:
-                        raise ArenaRepositoryError(
-                            "Finalizer completed without a Result"
-                        )
-                    records.append(_result_record(result_row))
-        return records
+        rows = await pool.fetch(
+            f"""
+            SELECT {_RESULT_COLUMNS}
+            FROM finalize_expired_agent_tasks_batch($1)
+            """,
+            min(limit, 1000),
+        )
+        return [_result_record(row) for row in rows]
 
     async def pending_results(self, *, limit: int) -> list[ArenaResultRecord]:
         if limit <= 0:

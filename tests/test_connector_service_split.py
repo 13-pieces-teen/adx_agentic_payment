@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from web.api import _connector_surface_enabled
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_connector_surface_flag_defaults_on_and_can_be_disabled(monkeypatch):
+    monkeypatch.delenv("ADX_CONNECTOR_SURFACE_ENABLED", raising=False)
+    assert _connector_surface_enabled() is True
+    monkeypatch.setenv("ADX_CONNECTOR_SURFACE_ENABLED", "false")
+    assert _connector_surface_enabled() is False
+
+
+def test_production_routes_connector_to_one_dedicated_worker():
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    caddy = (ROOT / "deploy/caddy/Caddyfile.domain").read_text(
+        encoding="utf-8"
+    )
+    entrypoint = (ROOT / "deploy/scripts/api-entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "  connector-api:\n" in compose
+    assert "ADX_ASGI_APP: web.connector_api:create_app" in compose
+    assert 'ADX_API_WORKERS: "1"' in compose
+    assert 'ADX_CONNECTOR_SURFACE_ENABLED: "false"' in compose
+    assert "${ADX_API_WORKERS:-2}" in compose
+    assert caddy.index("@connector path") < caddy.index("@api path")
+    assert "reverse_proxy connector-api:8000" in caddy
+    assert '--workers "${workers}"' in entrypoint

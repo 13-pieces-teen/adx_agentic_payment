@@ -4,6 +4,10 @@
 > 公平开局，在事件驱动的王城典当行中自主决定买、卖或观望，按先到先得进入
 > 市场并进行有限轮协商，最终以可复核的净资产排名。接受的交易进入受约束的
 > Injective EVM testnet 结算链路；链上确认前不改变游戏库存。
+>
+> **第一次打开网站？** 从
+> [`docs/player-guide.md`](docs/player-guide.md) 开始，按
+> `Play → Agent → Current Game → Game/Result/Ledger` 完成第一局。
 
 它同时承担三种产品角色：
 
@@ -327,6 +331,7 @@ python deploy/scripts/mark_memorial_credential_claimed.py `
 
 ## 当前文档
 
+- 网站游玩指南：[`docs/player-guide.md`](docs/player-guide.md)
 - 游戏机制：[`docs/game-design.md`](docs/game-design.md)
 - 产品范围：[`docs/product.md`](docs/product.md)
 - 实施路线：[`docs/roadmap.md`](docs/roadmap.md)

@@ -6,6 +6,8 @@ from typing import Any
 
 import asyncpg
 
+from db_pool_config import api_pool_max_size
+
 from .models import MemorialAward, MemorialStats
 
 
@@ -20,8 +22,8 @@ class PostgresMemorialRepository:
         if self._pool is None:
             self._pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=1,
-                max_size=4,
+                min_size=0,
+                max_size=api_pool_max_size(),
                 command_timeout=15,
             )
 

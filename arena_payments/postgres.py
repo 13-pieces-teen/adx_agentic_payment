@@ -7,6 +7,8 @@ import json
 from datetime import datetime
 from typing import Any
 
+from db_pool_config import api_pool_max_size
+
 from .models import (
     MandateLimits,
     PaymentMandate,
@@ -91,8 +93,8 @@ class PostgresPaymentRepository:
                 ) from exc
             self._pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=1,
-                max_size=5,
+                min_size=0,
+                max_size=api_pool_max_size(),
                 command_timeout=30,
             )
 

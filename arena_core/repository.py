@@ -65,6 +65,10 @@ class ArenaCoreRepository(Protocol):
 
     async def get_result_for_task(self, task_id: str) -> ArenaResultRecord | None: ...
 
+    async def get_results_for_tasks(
+        self, task_ids: list[str]
+    ) -> dict[str, ArenaResultRecord]: ...
+
     async def submit_result(
         self,
         *,
@@ -208,6 +212,16 @@ class MemoryArenaCoreRepository:
         async with self._lock:
             result_id = self._result_by_task.get(task_id)
             return self._copy(self._results[result_id]) if result_id else None
+
+    async def get_results_for_tasks(
+        self, task_ids: list[str]
+    ) -> dict[str, ArenaResultRecord]:
+        async with self._lock:
+            return {
+                task_id: self._copy(self._results[result_id])
+                for task_id in task_ids
+                if (result_id := self._result_by_task.get(task_id)) is not None
+            }
 
     def _create_timeout_result_locked(
         self, task: ArenaTaskRecord, now: datetime

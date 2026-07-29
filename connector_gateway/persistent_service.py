@@ -109,14 +109,93 @@ class PersistentConnectorGateway(ConnectorGateway):
                 self._remove_expired_pairings(datetime.now(timezone.utc))
                 self._rebuild_event_watermarks()
             self._initialized = True
-            await self._persist_current()
+            # Startup recovery can touch every loaded device and command.
+            await self._persist_current(full=True)
 
     async def close(self) -> None:
         await self.repository.close()
 
-    async def _persist_current(self) -> None:
+    async def _persist_current(
+        self,
+        *,
+        full: bool | None = None,
+        pairing_ids: set[str] | None = None,
+        device_ids: set[str] | None = None,
+        runtime_device_ids: set[str] | None = None,
+        binding_ids: set[str] | None = None,
+        command_ids: set[str] | None = None,
+        result_task_ids: set[str] | None = None,
+        replace_pairings: bool = False,
+    ) -> None:
+        """Persist only the entities touched by one completed transition.
+
+        Events and audit records are append-only deltas.  Mutable records use
+        idempotent upserts in PostgreSQL; limiting those upserts is important
+        because heartbeats are frequent and the complete Connector snapshot
+        grows with every enrolled device, binding and command.
+        """
+        if full is None:
+            # Preserve the private helper's historical "snapshot now"
+            # behavior for maintenance callers. Production transitions always
+            # pass an explicit entity scope below.
+            full = not any(
+                (
+                    pairing_ids,
+                    device_ids,
+                    runtime_device_ids,
+                    binding_ids,
+                    command_ids,
+                    result_task_ids,
+                    replace_pairings,
+                )
+            )
         async with self._persistence_lock:
             async with self._lock:
+                selected_pairings = (
+                    list(self.pairings.values())
+                    if full or replace_pairings
+                    else [
+                        item
+                        for item in self.pairings.values()
+                        if str(item["pairing_id"]) in (pairing_ids or set())
+                    ]
+                )
+                selected_devices = (
+                    list(self.devices.values())
+                    if full
+                    else [
+                        self.devices[item_id]
+                        for item_id in device_ids or set()
+                        if item_id in self.devices
+                    ]
+                )
+                selected_bindings = (
+                    list(self.bindings.values())
+                    if full
+                    else [
+                        self.bindings[item_id]
+                        for item_id in binding_ids or set()
+                        if item_id in self.bindings
+                    ]
+                )
+                selected_commands = (
+                    list(self.commands.values())
+                    if full
+                    else [
+                        self.commands[item_id]
+                        for item_id in command_ids or set()
+                        if item_id in self.commands
+                    ]
+                )
+                selected_results = (
+                    list(self.agent_task_results.values())
+                    if full
+                    else [
+                        self.agent_task_results[item_id]
+                        for item_id in result_task_ids or set()
+                        if item_id in self.agent_task_results
+                    ]
+                )
                 new_events = [
                     event
                     for event in self.events
@@ -128,13 +207,20 @@ class PersistentConnectorGateway(ConnectorGateway):
                     if str(item["audit_id"]) not in self._persisted_audit_ids
                 ]
                 state = {
-                    "pairings": copy.deepcopy(list(self.pairings.values())),
-                    "devices": copy.deepcopy(list(self.devices.values())),
-                    "bindings": copy.deepcopy(list(self.bindings.values())),
-                    "commands": copy.deepcopy(list(self.commands.values())),
-                    "agent_task_results": copy.deepcopy(
-                        list(self.agent_task_results.values())
+                    "_incremental": not full,
+                    "_replace_collections": (
+                        ["pairings"] if replace_pairings and not full else []
                     ),
+                    "_replace_runtime_device_ids": (
+                        [str(item["device_id"]) for item in selected_devices]
+                        if full
+                        else sorted(runtime_device_ids or set())
+                    ),
+                    "pairings": copy.deepcopy(selected_pairings),
+                    "devices": copy.deepcopy(selected_devices),
+                    "bindings": copy.deepcopy(selected_bindings),
+                    "commands": copy.deepcopy(selected_commands),
+                    "agent_task_results": copy.deepcopy(selected_results),
                     # Append-only streams are sent as deltas. Replaying every
                     # historical event on each 15-second heartbeat becomes
                     # quadratic and can exhaust the small beta host.
@@ -189,19 +275,25 @@ class PersistentConnectorGateway(ConnectorGateway):
     ) -> dict[str, Any]:
         await self.initialize()
         result = await super().create_pairing(requested_owner_id, device_name)
-        await self._persist_current()
+        # Creating a pairing also removes expired pairings, so replace this
+        # bounded collection while keeping every other entity incremental.
+        await self._persist_current(replace_pairings=True)
         return result
 
     async def approve_pairing(self, user_code: str, owner_id: str) -> dict[str, Any]:
         await self.initialize()
         result = await super().approve_pairing(user_code, owner_id)
-        await self._persist_current()
+        await self._persist_current(pairing_ids={str(result["pairing_id"])})
         return result
 
     async def exchange_pairing(self, device_code: str) -> dict[str, Any]:
         await self.initialize()
         result = await super().exchange_pairing(device_code)
-        await self._persist_current()
+        await self._persist_current(
+            device_ids={str(result["device_id"])},
+            runtime_device_ids={str(result["device_id"])},
+            replace_pairings=True,
+        )
         return result
 
     async def authenticate_device(self, device_id: str, token: str) -> dict[str, Any]:
@@ -211,13 +303,22 @@ class PersistentConnectorGateway(ConnectorGateway):
     async def connect_device(self, device_id: str, websocket: Any) -> int:
         await self.initialize()
         result = await super().connect_device(device_id, websocket)
-        await self._persist_current()
+        async with self._lock:
+            command_ids = {
+                str(item["command_id"])
+                for item in self.commands.values()
+                if item["device_id"] == device_id
+            }
+        await self._persist_current(
+            device_ids={device_id},
+            command_ids=command_ids,
+        )
         return result
 
     async def disconnect_device(self, device_id: str, websocket: Any) -> None:
         await self.initialize()
         await super().disconnect_device(device_id, websocket)
-        await self._persist_current()
+        await self._persist_current(device_ids={device_id})
 
     async def apply_hello(
         self,
@@ -227,7 +328,16 @@ class PersistentConnectorGateway(ConnectorGateway):
     ) -> dict[str, Any]:
         await self.initialize()
         result = await super().apply_hello(device_id, payload, expected_generation)
-        await self._persist_current()
+        async with self._lock:
+            binding_ids = {
+                str(item["binding_id"])
+                for item in self.bindings.values()
+                if item["device_id"] == device_id
+            }
+        await self._persist_current(
+            device_ids={device_id},
+            binding_ids=binding_ids,
+        )
         return result
 
     async def heartbeat(
@@ -238,7 +348,7 @@ class PersistentConnectorGateway(ConnectorGateway):
     ) -> None:
         await self.initialize()
         await super().heartbeat(device_id, payload, expected_generation)
-        await self._persist_current()
+        await self._persist_current(device_ids={device_id})
 
     async def update_inventory(
         self,
@@ -251,7 +361,10 @@ class PersistentConnectorGateway(ConnectorGateway):
         result = await super().update_inventory(
             device_id, runtimes, host, expected_generation
         )
-        await self._persist_current()
+        await self._persist_current(
+            device_ids={device_id},
+            runtime_device_ids={device_id},
+        )
         return result
 
     async def list_devices(
@@ -267,7 +380,16 @@ class PersistentConnectorGateway(ConnectorGateway):
     async def revoke_device(self, device_id: str, owner_id: str) -> dict[str, Any]:
         await self.initialize()
         result = await super().revoke_device(device_id, owner_id)
-        await self._persist_current()
+        async with self._lock:
+            binding_ids = {
+                str(item["binding_id"])
+                for item in self.bindings.values()
+                if item["device_id"] == device_id
+            }
+        await self._persist_current(
+            device_ids={device_id},
+            binding_ids=binding_ids,
+        )
         return result
 
     async def create_binding(
@@ -286,7 +408,7 @@ class PersistentConnectorGateway(ConnectorGateway):
             display_name,
             working_directory,
         )
-        await self._persist_current()
+        await self._persist_current(binding_ids={str(result["binding_id"])})
         return result
 
     async def list_bindings(
@@ -311,18 +433,24 @@ class PersistentConnectorGateway(ConnectorGateway):
             idempotency_key,
             expires_in_seconds,
         )
-        await self._persist_current()
+        await self._persist_current(command_ids={str(result["command_id"])})
         return result
 
     async def _prepare_command_delivery(self, command_id: str) -> None:
         # The full queued command, its idempotency key and its audit record must
         # be committed before the active WebSocket can observe the command.
-        await self._persist_current()
+        await self._persist_current(command_ids={command_id})
 
     async def deliver_pending(self, device_id: str) -> int:
         await self.initialize()
         result = await super().deliver_pending(device_id)
-        await self._persist_current()
+        async with self._lock:
+            command_ids = {
+                str(item["command_id"])
+                for item in self.commands.values()
+                if item["device_id"] == device_id
+            }
+        await self._persist_current(command_ids=command_ids)
         return result
 
     async def observe_inbound_sequence(
@@ -333,7 +461,7 @@ class PersistentConnectorGateway(ConnectorGateway):
     ) -> None:
         await self.initialize()
         await super().observe_inbound_sequence(device_id, sequence, expected_generation)
-        await self._persist_current()
+        await self._persist_current(device_ids={device_id})
 
     async def acknowledge_command(
         self,
@@ -345,7 +473,10 @@ class PersistentConnectorGateway(ConnectorGateway):
         result = await super().acknowledge_command(
             device_id, payload, expected_generation
         )
-        await self._persist_current()
+        await self._persist_current(
+            command_ids={str(result["command_id"])},
+            binding_ids={str(result["binding_id"])},
+        )
         return result
 
     async def append_runtime_event(
@@ -358,7 +489,7 @@ class PersistentConnectorGateway(ConnectorGateway):
         result = await super().append_runtime_event(
             device_id, payload, expected_generation
         )
-        await self._persist_current()
+        await self._persist_current(device_ids={device_id})
         return result
 
     async def submit_agent_task_result(
@@ -376,7 +507,15 @@ class PersistentConnectorGateway(ConnectorGateway):
         # Persist the immutable Gateway inbox before calling Arena. If the
         # Sink is unavailable, a process restart can still replay the exact
         # result while the Connector retains its own unacknowledged copy.
-        await self._persist_current()
+        result_payload = payload.get("result")
+        task_id = (
+            str(result_payload.get("taskId", ""))
+            if isinstance(result_payload, dict)
+            else ""
+        )
+        await self._persist_current(
+            result_task_ids={task_id} if task_id else set(),
+        )
         if self._agent_task_result_sink is not None:
             # Re-submit exact Gateway replays to the Arena-owned idempotent
             # sink. This closes a crash window where Arena committed but the

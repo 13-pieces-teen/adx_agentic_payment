@@ -29,6 +29,8 @@ def test_default_surface_exposes_current_capabilities_and_health(monkeypatch):
 
     client = TestClient(create_app())
     health = client.get("/api/health")
+    ready = client.get("/api/ready")
+    metrics = client.get("/metrics")
 
     assert health.status_code == 200
     assert health.json() == {
@@ -41,6 +43,10 @@ def test_default_surface_exposes_current_capabilities_and_health(monkeypatch):
         "arena_memorial": False,
         "pawnhouse": "off",
     }
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ready", "dependencies": {}}
+    assert "arena_http_requests_total" in metrics.text
+    assert "arena_http_request_duration_seconds" in metrics.text
     assert client.get("/api/hosted-agents/capabilities").status_code == 200
 
 

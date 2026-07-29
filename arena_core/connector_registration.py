@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from db_pool_config import api_pool_max_size
+
 
 class ConnectorRegistrationError(RuntimeError):
     def __init__(self, code: str) -> None:
@@ -48,8 +50,8 @@ class PostgresConnectorArenaRegistrar:
             ) from exc
         self._pool = await asyncpg.create_pool(
             self._dsn,
-            min_size=1,
-            max_size=5,
+            min_size=0,
+            max_size=api_pool_max_size(),
             command_timeout=30,
         )
 

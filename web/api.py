@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from arena_core import (
@@ -69,7 +69,9 @@ from web.arena_participation_api import create_arena_participation_router
 from web.game_operator_api import create_game_operator_router
 from web.hosted_agent_api import create_hosted_agent_router
 from web.ledger_api import create_ledger_router, load_ledger_metadata_from_env
+from web.metrics import ApiMetrics, ApiMetricsMiddleware, postgres_readiness
 from web.pawnhouse_api import (
+    SharedGameEventFanout,
     create_pawnhouse_participation_router,
     create_pawnhouse_read_router,
     create_pawnhouse_router,
@@ -153,6 +155,13 @@ def _production_connector_enabled(
     return connector_mode == "production" or environment == "production"
 
 
+def _connector_surface_enabled() -> bool:
+    return os.getenv(
+        "ADX_CONNECTOR_SURFACE_ENABLED",
+        "true",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _hosted_agents_requested() -> bool:
     return os.getenv(
         "ADX_HOSTED_AGENTS_ENABLED",
@@ -227,6 +236,9 @@ def _allowed_origins(production: bool) -> list[str]:
 
 def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     production_connector = _production_connector_enabled(connector_demo_enabled)
+    connector_surface_enabled = (
+        production_connector and _connector_surface_enabled()
+    )
     environment = os.getenv("ADX_ENV", "").strip().lower()
     pawnhouse_dev_enabled = _pawnhouse_dev_requested()
     pawnhouse_core_enabled = _pawnhouse_core_requested() or pawnhouse_dev_enabled
@@ -242,7 +254,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     connector_bundle: ProductionConnectorBundle | None = None
     connector_arena_registrar: PostgresConnectorArenaRegistrar | None = None
     if production_connector:
-        if _arena_participation_requested():
+        if connector_surface_enabled and _arena_participation_requested():
             registrar_dsn = (
                 os.getenv("ADX_ARENA_API_DATABASE_URL")
                 or os.getenv("ADX_HOSTED_CONTROL_DATABASE_URL")
@@ -343,6 +355,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         wallet_service = load_wallet_service_from_env()
 
     pawnhouse_repository: PostgresPawnhouseRepository | None = None
+    pawnhouse_event_fanout: SharedGameEventFanout | None = None
     connector_result_core: PostgresArenaCoreRepository | None = None
     connector_task_dispatcher: ConnectorArenaTaskDispatcher | None = None
     connector_task_dispatcher_task: asyncio.Task[None] | None = None
@@ -364,7 +377,10 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 "ADX_ARENA_CORE_DATABASE_URL is required when Arena Core is enabled"
             )
         pawnhouse_repository = PostgresPawnhouseRepository(pawnhouse_dsn)
-        if connector_bundle is not None:
+        pawnhouse_event_fanout = SharedGameEventFanout(
+            pawnhouse_repository
+        )
+        if connector_bundle is not None and connector_surface_enabled:
             connector_result_core = PostgresArenaCoreRepository(pawnhouse_dsn)
             connector_bundle.service.bind_agent_task_result_sink(
                 ArenaResultSink(connector_result_core)
@@ -471,7 +487,13 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if connector_bundle is not None:
-            await connector_bundle.initialize()
+            if connector_surface_enabled:
+                await connector_bundle.initialize()
+            else:
+                # Stateless API workers need only shared session/auth data.
+                # WebSocket ownership and task dispatch remain in the
+                # dedicated Connector service.
+                await connector_bundle.auth.initialize()
         if connector_arena_registrar is not None:
             await connector_arena_registrar.initialize()
         if hosted_bundle is not None:
@@ -530,6 +552,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                     pawnhouse_coordinator_task = None
                 await pawnhouse_coordinator.close()
             if pawnhouse_repository is not None:
+                if pawnhouse_event_fanout is not None:
+                    await pawnhouse_event_fanout.close()
                 await pawnhouse_repository.close()
             if arena_participation is not None:
                 await arena_participation.close()
@@ -555,6 +579,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    api_metrics = ApiMetrics()
+    app.add_middleware(ApiMetricsMiddleware, metrics=api_metrics)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_allowed_origins(production_connector),
@@ -576,12 +602,16 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         ],
     )
 
-    if connector_bundle is not None:
+    if connector_bundle is not None and connector_surface_enabled:
         app.state.connector_gateway_enabled = True
         app.state.connector_gateway_mode = "production"
         app.state.connector_gateway = connector_bundle.service
         app.state.connector_auth = connector_bundle.auth
         app.include_router(connector_bundle.router)
+    elif connector_bundle is not None:
+        app.state.connector_gateway_enabled = False
+        app.state.connector_gateway_mode = "auth_only"
+        app.state.connector_auth = connector_bundle.auth
     else:
         _mount_connector_gateway(app, connector_demo_enabled)
         app.state.connector_gateway_mode = (
@@ -709,6 +739,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                     dev_token=pawnhouse_dev_token,
                     auth=connector_bundle.auth if connector_bundle is not None else None,
                     confirmation_reader=settlement_confirmation_reader,
+                    event_fanout=pawnhouse_event_fanout,
                 )
             )
         else:
@@ -723,6 +754,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                         if connector_bundle is not None
                         else None
                     ),
+                    event_fanout=pawnhouse_event_fanout,
                 )
             )
             if connector_bundle is not None:
@@ -745,6 +777,54 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "arena_memorial": memorial_repository is not None,
             "pawnhouse": app.state.pawnhouse_mode,
         }
+
+    readiness_repositories: dict[str, object] = {}
+    if connector_bundle is not None:
+        readiness_repositories["connector"] = connector_bundle.repository
+    if connector_arena_registrar is not None:
+        readiness_repositories["connector_registrar"] = connector_arena_registrar
+    if isinstance(hosted_bundle, ProductionHostedControlBundle):
+        readiness_repositories["hosted_control"] = hosted_bundle.repository
+    if arena_participation is not None:
+        readiness_repositories["participation"] = arena_participation
+    if payment_repository is not None:
+        readiness_repositories["payments"] = payment_repository
+    if memorial_repository is not None:
+        readiness_repositories["memorial"] = memorial_repository
+    if wallet_repository is not None:
+        readiness_repositories["wallets"] = wallet_repository
+    if pawnhouse_repository is not None:
+        readiness_repositories["pawnhouse"] = pawnhouse_repository
+    if connector_result_core is not None:
+        readiness_repositories["result_sink"] = connector_result_core
+
+    @app.get("/api/ready")
+    async def ready() -> JSONResponse:
+        try:
+            dependencies = await postgres_readiness(readiness_repositories)
+        except (TimeoutError, asyncio.TimeoutError):
+            dependencies = {
+                name: "unavailable" for name in readiness_repositories
+            }
+        ready_now = all(
+            status == "ok" for status in dependencies.values()
+        )
+        if not ready_now:
+            api_metrics.readiness_failures += 1
+        return JSONResponse(
+            {
+                "status": "ready" if ready_now else "unavailable",
+                "dependencies": dependencies,
+            },
+            status_code=200 if ready_now else 503,
+        )
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> PlainTextResponse:
+        return PlainTextResponse(
+            api_metrics.render(readiness_repositories),
+            media_type="text/plain; version=0.0.4",
+        )
 
     return app
 

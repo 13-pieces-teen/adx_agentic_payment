@@ -96,7 +96,8 @@ class OpenAICompatibleChatAdapter:
         body = self._request_body(request)
         key = credential.reveal_for_worker()
         try:
-            response = await self._client.post(
+            async with self._client.stream(
+                "POST",
                 self._settings.endpoint,
                 headers={
                     "Authorization": f"Bearer {key}",
@@ -108,7 +109,26 @@ class OpenAICompatibleChatAdapter:
                     request.request_timeout_ms / 1000,
                     connect=min(10.0, request.request_timeout_ms / 1000),
                 ),
-            )
+            ) as response:
+                if response.status_code in {401, 403}:
+                    raise ProviderInvocationError("authentication_failed")
+                if response.status_code == 429:
+                    raise ProviderInvocationError("rate_limited")
+                if response.status_code >= 500:
+                    raise ProviderInvocationError("provider_unavailable")
+                if response.status_code >= 400:
+                    raise ProviderInvocationError("permanent_request")
+
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > _MAX_RESPONSE_BYTES:
+                        raise ProviderInvocationError("invalid_json")
+                try:
+                    payload = json.loads(content)
+                except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                    raise ProviderInvocationError("invalid_json") from None
+                return self._parse_response(payload, response)
         except (httpx.ConnectError, httpx.ConnectTimeout):
             raise ProviderInvocationError(
                 "transport_failure_before_send"
@@ -129,23 +149,6 @@ class OpenAICompatibleChatAdapter:
             ) from None
         finally:
             key = ""
-
-        if response.status_code in {401, 403}:
-            raise ProviderInvocationError("authentication_failed")
-        if response.status_code == 429:
-            raise ProviderInvocationError("rate_limited")
-        if response.status_code >= 500:
-            raise ProviderInvocationError("provider_unavailable")
-        if response.status_code >= 400:
-            raise ProviderInvocationError("permanent_request")
-        if len(response.content) > _MAX_RESPONSE_BYTES:
-            raise ProviderInvocationError("invalid_json")
-
-        try:
-            payload = response.json()
-        except (ValueError, json.JSONDecodeError):
-            raise ProviderInvocationError("invalid_json") from None
-        return self._parse_response(payload, response)
 
     def _request_body(self, request: ProviderRequest) -> dict[str, object]:
         try:

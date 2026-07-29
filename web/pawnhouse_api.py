@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import re
 from collections.abc import AsyncIterator
@@ -263,6 +264,230 @@ _SSE_POLL_SECONDS = 0.75
 _SSE_HEARTBEAT_SECONDS = 15.0
 
 
+class _SlowEventSubscriber(RuntimeError):
+    pass
+
+
+class SharedGameEventFanout:
+    """Share one timeline poller across all SSE subscribers for a game.
+
+    This is deliberately process-local: the realtime process can be scaled
+    independently later, while a single process no longer multiplies database
+    polling by the number of connected browsers.
+    """
+
+    def __init__(
+        self,
+        repository: PostgresPawnhouseRepository,
+        *,
+        poll_seconds: float = _SSE_POLL_SECONDS,
+        heartbeat_seconds: float = _SSE_HEARTBEAT_SECONDS,
+        subscriber_queue_size: int = 256,
+    ) -> None:
+        self._repository = repository
+        self._poll_seconds = poll_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+        self._subscriber_queue_size = subscriber_queue_size
+        self._lock = asyncio.Lock()
+        self._channels: dict[str, dict[str, object]] = {}
+        self._closed = False
+
+    async def close(self) -> None:
+        async with self._lock:
+            self._closed = True
+            tasks = [
+                channel["task"]
+                for channel in self._channels.values()
+                if isinstance(channel.get("task"), asyncio.Task)
+            ]
+            self._channels.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def stream(
+        self,
+        *,
+        game_id: str,
+        after_sequence: int,
+        is_disconnected: Callable[[], Awaitable[bool]],
+    ) -> AsyncIterator[str]:
+        queue: asyncio.Queue[dict[str, object] | Exception] = asyncio.Queue(
+            maxsize=self._subscriber_queue_size
+        )
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("event fanout is closed")
+            channel = self._channels.get(game_id)
+            if channel is None:
+                subscribers: set[asyncio.Queue] = {queue}
+                channel = {
+                    "cursor": after_sequence,
+                    "subscribers": subscribers,
+                    "task": None,
+                }
+                self._channels[game_id] = channel
+                channel["task"] = asyncio.create_task(
+                    self._poll_game(game_id, channel),
+                    name=f"arena-sse-fanout:{game_id}",
+                )
+            else:
+                subscribers = channel["subscribers"]
+                assert isinstance(subscribers, set)
+                subscribers.add(queue)
+
+        cursor = after_sequence
+        idle_seconds = 0.0
+        try:
+            # One replay query per connection is bounded work and preserves
+            # Last-Event-ID semantics. Ongoing polling is shared below.
+            replay = await self._repository.timeline(
+                game_id,
+                after_sequence=cursor,
+            )
+            for event in replay:
+                cursor = max(cursor, int(event["sequence"]))
+                yield _encode_sse_event(event)
+
+            while not await is_disconnected():
+                try:
+                    item = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=self._poll_seconds,
+                    )
+                except TimeoutError:
+                    idle_seconds += self._poll_seconds
+                    if idle_seconds >= self._heartbeat_seconds:
+                        idle_seconds = 0.0
+                        yield ": keep-alive\n\n"
+                    continue
+                if isinstance(item, Exception):
+                    raise item
+                sequence = int(item["sequence"])
+                if sequence <= cursor:
+                    continue
+                idle_seconds = 0.0
+                cursor = sequence
+                yield _encode_sse_event(item)
+        finally:
+            await self._unsubscribe(game_id, queue)
+
+    async def _unsubscribe(
+        self,
+        game_id: str,
+        queue: asyncio.Queue[dict[str, object] | Exception],
+    ) -> None:
+        task: asyncio.Task | None = None
+        async with self._lock:
+            channel = self._channels.get(game_id)
+            if channel is None:
+                return
+            subscribers = channel["subscribers"]
+            assert isinstance(subscribers, set)
+            subscribers.discard(queue)
+            if not subscribers:
+                candidate = channel.get("task")
+                task = candidate if isinstance(candidate, asyncio.Task) else None
+                self._channels.pop(game_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _poll_game(
+        self,
+        game_id: str,
+        channel: dict[str, object],
+    ) -> None:
+        try:
+            while True:
+                cursor = int(channel["cursor"])
+                events = await self._repository.timeline(
+                    game_id,
+                    after_sequence=cursor,
+                )
+                if not events:
+                    await asyncio.sleep(self._poll_seconds)
+                    continue
+                for event in events:
+                    sequence = int(event["sequence"])
+                    channel["cursor"] = max(int(channel["cursor"]), sequence)
+                    subscribers = list(channel["subscribers"])
+                    for queue in subscribers:
+                        try:
+                            queue.put_nowait(event)
+                        except asyncio.QueueFull:
+                            # Let the client reconnect with Last-Event-ID
+                            # instead of letting one slow browser stall every
+                            # subscriber for the game.
+                            while not queue.empty():
+                                queue.get_nowait()
+                            queue.put_nowait(
+                                _SlowEventSubscriber(
+                                    "event subscriber fell behind"
+                                )
+                            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            subscribers = list(channel.get("subscribers", set()))
+            for queue in subscribers:
+                if queue.full():
+                    queue.get_nowait()
+                queue.put_nowait(exc)
+
+
+class GameStateReadCache:
+    """Short single-flight cache for the multi-query public game projection."""
+
+    def __init__(
+        self,
+        repository: PostgresPawnhouseRepository,
+        *,
+        ttl_seconds: float = 0.25,
+        max_games: int = 128,
+    ) -> None:
+        self._repository = repository
+        self._ttl_seconds = ttl_seconds
+        self._max_games = max_games
+        self._lock = asyncio.Lock()
+        self._values: dict[str, tuple[float, dict[str, object]]] = {}
+        self._inflight: dict[str, asyncio.Task[dict[str, object]]] = {}
+
+    async def get(self, game_id: str) -> dict[str, object]:
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        async with self._lock:
+            cached = self._values.get(game_id)
+            if cached is not None and cached[0] > now:
+                return copy.deepcopy(cached[1])
+            task = self._inflight.get(game_id)
+            if task is None:
+                task = asyncio.create_task(
+                    self._repository.game_state(game_id),
+                    name=f"arena-game-state:{game_id}",
+                )
+                self._inflight[game_id] = task
+        try:
+            value = await asyncio.shield(task)
+        finally:
+            async with self._lock:
+                if self._inflight.get(game_id) is task and task.done():
+                    self._inflight.pop(game_id, None)
+        async with self._lock:
+            self._values[game_id] = (
+                loop.time() + self._ttl_seconds,
+                copy.deepcopy(value),
+            )
+            if len(self._values) > self._max_games:
+                oldest = min(
+                    self._values,
+                    key=lambda item: self._values[item][0],
+                )
+                self._values.pop(oldest, None)
+        return copy.deepcopy(value)
+
+
 def _idempotency_digest(request: Request) -> str:
     key = request.headers.get("idempotency-key", "")
     if not _IDEMPOTENCY_KEY.fullmatch(key):
@@ -301,7 +526,16 @@ async def _public_game_event_stream(
     is_disconnected: Callable[[], Awaitable[bool]],
     poll_seconds: float = _SSE_POLL_SECONDS,
     heartbeat_seconds: float = _SSE_HEARTBEAT_SECONDS,
+    fanout: SharedGameEventFanout | None = None,
 ) -> AsyncIterator[str]:
+    if fanout is not None:
+        async for frame in fanout.stream(
+            game_id=game_id,
+            after_sequence=after_sequence,
+            is_disconnected=is_disconnected,
+        ):
+            yield frame
+        return
     cursor = after_sequence
     idle_seconds = 0.0
     while not await is_disconnected():
@@ -327,10 +561,15 @@ def create_pawnhouse_read_router(
     *,
     repository: PostgresPawnhouseRepository,
     auth: ConnectorAuth | None = None,
+    event_fanout: SharedGameEventFanout | None = None,
+    game_state_cache: GameStateReadCache | None = None,
 ) -> APIRouter:
     """Expose public, read-only game state without mounting dev mutations."""
 
     router = APIRouter(tags=["pawnhouse"])
+    resolved_game_state_cache = game_state_cache or GameStateReadCache(
+        repository
+    )
 
     @router.get("/api/v1/games/current")
     async def current_game(
@@ -363,7 +602,7 @@ def create_pawnhouse_read_router(
     @router.get("/api/v1/pawnhouse/games/{game_id}")
     async def game_state(game_id: _Id) -> dict[str, object]:
         try:
-            return await repository.game_state(game_id)
+            return await resolved_game_state_cache.get(game_id)
         except PawnhouseRepositoryError as exc:
             raise _repository_error(exc) from None
 
@@ -408,6 +647,7 @@ def create_pawnhouse_read_router(
                 game_id=game_id,
                 after_sequence=cursor,
                 is_disconnected=request.is_disconnected,
+                fanout=event_fanout,
             ),
             media_type="text/event-stream",
             headers={
@@ -732,6 +972,7 @@ def create_pawnhouse_router(
     dev_token: str,
     auth: ConnectorAuth | None = None,
     confirmation_reader: EvmJsonRpcConfirmationReader | None = None,
+    event_fanout: SharedGameEventFanout | None = None,
 ) -> APIRouter:
     if len(dev_token) < 16:
         raise RuntimeError("ADX_ARENA_DEV_TOKEN must contain at least 16 characters")
@@ -741,6 +982,7 @@ def create_pawnhouse_router(
         create_pawnhouse_read_router(
             repository=repository,
             auth=auth,
+            event_fanout=event_fanout,
         )
     )
     if auth is not None:
@@ -1020,5 +1262,7 @@ def create_pawnhouse_router(
 __all__ = [
     "create_pawnhouse_participation_router",
     "create_pawnhouse_read_router",
+    "GameStateReadCache",
+    "SharedGameEventFanout",
     "create_pawnhouse_router",
 ]

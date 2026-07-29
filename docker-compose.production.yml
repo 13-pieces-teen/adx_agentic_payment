@@ -207,7 +207,10 @@ services:
     init: true
     environment:
       <<: *api-environment
-      ADX_API_MAX_CONCURRENCY: ${ADX_API_MAX_CONCURRENCY:-64}
+      ADX_API_MAX_CONCURRENCY: ${ADX_API_MAX_CONCURRENCY:-256}
+      ADX_API_DB_POOL_MAX_SIZE: ${ADX_API_DB_POOL_MAX_SIZE:-3}
+      ADX_API_WORKERS: ${ADX_API_WORKERS:-2}
+      ADX_CONNECTOR_SURFACE_ENABLED: "false"
       ADX_FORWARDED_ALLOW_IPS: "*"
     depends_on:
       provision-db-roles:
@@ -234,7 +237,7 @@ services:
         - -c
         - >-
           import urllib.request;
-          urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3)
+          urllib.request.urlopen("http://127.0.0.1:8000/api/ready", timeout=3)
       interval: 15s
       timeout: 5s
       retries: 10
@@ -242,6 +245,49 @@ services:
     stop_grace_period: 30s
     cpus: 0.50
     mem_limit: 512m
+    logging: *default-logging
+
+  connector-api:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    environment:
+      <<: *api-environment
+      ADX_ASGI_APP: web.connector_api:create_app
+      ADX_API_WORKERS: "1"
+      ADX_API_MAX_CONCURRENCY: ${ADX_CONNECTOR_MAX_CONCURRENCY:-512}
+      ADX_API_DB_POOL_MAX_SIZE: ${ADX_API_DB_POOL_MAX_SIZE:-3}
+      ADX_FORWARDED_ALLOW_IPS: "*"
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen("http://127.0.0.1:8000/api/ready", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    stop_grace_period: 30s
+    cpus: 0.40
+    mem_limit: 384m
     logging: *default-logging
 
   hosted-worker:
@@ -268,7 +314,7 @@ services:
       ADX_OPENAI_COMPATIBLE_MODELS: ${ADX_OPENAI_COMPATIBLE_MODELS:-}
       ADX_HOSTED_WORKER_LEASE_SECONDS: ${ADX_HOSTED_WORKER_LEASE_SECONDS:-600}
       ADX_HOSTED_WORKER_POLL_SECONDS: ${ADX_HOSTED_WORKER_POLL_SECONDS:-1}
-      ADX_HOSTED_WORKER_TASK_CONCURRENCY: ${ADX_HOSTED_WORKER_TASK_CONCURRENCY:-25}
+      ADX_HOSTED_WORKER_TASK_CONCURRENCY: ${ADX_HOSTED_WORKER_TASK_CONCURRENCY:-8}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       provision-db-roles:
@@ -790,6 +836,8 @@ services:
     restart: unless-stopped
     depends_on:
       api:
+        condition: service_healthy
+      connector-api:
         condition: service_healthy
     environment:
       ADX_PUBLIC_HOST: ${ADX_PUBLIC_HOST:?Set ADX_PUBLIC_HOST in deploy/.env}

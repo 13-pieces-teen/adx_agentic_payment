@@ -57,6 +57,15 @@ Arena 402 的对外叙事固定为三层：
   repository-wide upper bound, with
   database enforcement, batch invitation issuance, and 12-agent local Hosted
   execution.
+- [x] Concurrency hardening foundation: Connector entity-level incremental
+  persistence, batched decide-result polling/application, batched FCFS pairing
+  writes and Deadline Finalizer, shared per-Game SSE fan-out, bounded API
+  database pools, a dedicated single-worker Connector/WebSocket service plus
+  multi-worker stateless API, cross-replica Provider admission/fair
+  scheduling, Runtime Run lease fencing/renewal, broadcast/confirmation
+  decoupling, readiness and Prometheus metrics, plus a read-only load probe.
+  This is implementation evidence, not 100-Agent production capacity
+  acceptance.
 - [x] Founding 402 backend foundation: isolated soulbound ERC-721 contract,
   402 pre-generated testnet wallets, deterministic first-402 GitHub
   registration allocation, public-only inventory import, authenticated user

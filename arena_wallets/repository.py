@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from db_pool_config import api_pool_max_size
+
 from .crypto import normalize_address
 
 
@@ -80,7 +82,10 @@ class PostgresWalletRepository:
             except ImportError as exc:  # pragma: no cover
                 raise RuntimeError("asyncpg is required for wallet persistence") from exc
             self._pool = await asyncpg.create_pool(
-                self.database_url, min_size=1, max_size=5, command_timeout=30
+                self.database_url,
+                min_size=0,
+                max_size=api_pool_max_size(),
+                command_timeout=30,
             )
 
     async def close(self) -> None:

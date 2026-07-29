@@ -537,12 +537,11 @@ def test_finalize_and_apply_ignore_server_clock_and_map_database_rows():
         }
 
         def handler(method, sql, args):
-            if method == "fetch" and "FOR UPDATE SKIP LOCKED" in sql:
-                return [{"task_id": task.task_id}]
-            if method == "fetchval" and "finalize_expired_agent_task" in sql:
-                return True
-            if method == "fetchrow" and "arena_agent_task_results" in sql:
-                return result_row
+            if (
+                method == "fetch"
+                and "finalize_expired_agent_tasks_batch" in sql
+            ):
+                return [result_row]
             if method == "fetchval" and "apply_arena_agent_task_result" in sql:
                 return True
             if method == "fetchrow" and "arena_applied_agent_actions" in sql:

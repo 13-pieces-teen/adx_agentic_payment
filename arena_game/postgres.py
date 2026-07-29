@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
+from db_pool_config import api_pool_max_size
 
 from .events import (
     EffectKind,
@@ -102,8 +103,8 @@ class PostgresPawnhouseRepository:
 
             self._pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=1,
-                max_size=5,
+                min_size=0,
+                max_size=api_pool_max_size(),
                 command_timeout=30,
                 setup=self._setup_connection,
             )
@@ -2026,6 +2027,7 @@ class PostgresPawnhouseRepository:
             UPDATE arena402.runtime_runs AS run
             SET status = 'leased',
                 leased_by = $1,
+                lease_epoch = lease_epoch + 1,
                 lease_expires_at = (
                     clock_timestamp()
                     + $2 * interval '1 second'
@@ -2034,7 +2036,8 @@ class PostgresPawnhouseRepository:
             FROM candidate
             WHERE run.runtime_run_id = candidate.runtime_run_id
             RETURNING
-                run.runtime_run_id, run.game_id, run.round_id, run.stage
+                run.runtime_run_id, run.game_id, run.round_id, run.stage,
+                run.lease_epoch
             """,
             worker_id,
             lease_seconds,
@@ -2046,6 +2049,7 @@ class PostgresPawnhouseRepository:
         *,
         runtime_run_id: str,
         worker_id: str,
+        lease_epoch: int,
         stage: str,
         lease_seconds: int,
     ) -> None:
@@ -2060,12 +2064,44 @@ class PostgresPawnhouseRepository:
                 )
             WHERE runtime_run_id = $1
               AND leased_by = $2
+              AND lease_epoch = $5
               AND status IN ('leased', 'running')
             RETURNING true
             """,
             runtime_run_id,
             worker_id,
             stage,
+            lease_seconds,
+            lease_epoch,
+        )
+        if not changed:
+            raise PawnhouseRepositoryError("runtime_run_lease_lost")
+
+    async def renew_hosted_run_lease(
+        self,
+        *,
+        runtime_run_id: str,
+        worker_id: str,
+        lease_epoch: int,
+        lease_seconds: int,
+    ) -> None:
+        changed = await self._require_pool().fetchval(
+            """
+            UPDATE arena402.runtime_runs
+            SET lease_expires_at = (
+                    clock_timestamp()
+                    + $4 * interval '1 second'
+                )
+            WHERE runtime_run_id = $1
+              AND leased_by = $2
+              AND lease_epoch = $3
+              AND status IN ('leased', 'running')
+              AND lease_expires_at > clock_timestamp()
+            RETURNING true
+            """,
+            runtime_run_id,
+            worker_id,
+            lease_epoch,
             lease_seconds,
         )
         if not changed:
@@ -2076,6 +2112,7 @@ class PostgresPawnhouseRepository:
         *,
         runtime_run_id: str,
         worker_id: str,
+        lease_epoch: int,
         error_code: str | None = None,
     ) -> None:
         status = "completed" if error_code is None else "failed"
@@ -2091,6 +2128,7 @@ class PostgresPawnhouseRepository:
                 completed_at = clock_timestamp()
             WHERE runtime_run_id = $1
               AND leased_by = $2
+              AND lease_epoch = $5
               AND status IN ('leased', 'running')
             RETURNING game_id, round_id
             """,
@@ -2098,6 +2136,7 @@ class PostgresPawnhouseRepository:
             worker_id,
             status,
             error_code,
+            lease_epoch,
         )
         if changed is None:
             raise PawnhouseRepositoryError("runtime_run_lease_lost")
@@ -5592,70 +5631,133 @@ class PostgresPawnhouseRepository:
             """,
             game_id,
         )
-        for pairing in pairings:
-            await connection.execute(
-                """
-                INSERT INTO arena402.pairings (
-                    pairing_id, game_id, round_id, good_id,
-                    buyer_entry_id, seller_entry_id,
-                    buyer_participant_id, seller_participant_id,
-                    pairing_sequence, quantity,
-                    buyer_limit_price_atomic, seller_limit_price_atomic
+        if not pairings:
+            return pairings
+
+        pairing_rows = [
+            {
+                "pairing_id": pairing.pairing_id,
+                "game_id": pairing.game_id,
+                "round_id": pairing.round_id,
+                "good_id": pairing.good,
+                "buyer_entry_id": pairing.buyer_entry_id,
+                "seller_entry_id": pairing.seller_entry_id,
+                "buyer_participant_id": pairing.buyer_participant_id,
+                "seller_participant_id": pairing.seller_participant_id,
+                "pairing_sequence": pairing.sequence,
+                "quantity": pairing.quantity,
+                "buyer_limit_price_atomic": pairing.buyer_limit_price_atomic,
+                "seller_limit_price_atomic": pairing.seller_limit_price_atomic,
+            }
+            for pairing in pairings
+        ]
+        await connection.execute(
+            """
+            INSERT INTO arena402.pairings (
+                pairing_id, game_id, round_id, good_id,
+                buyer_entry_id, seller_entry_id,
+                buyer_participant_id, seller_participant_id,
+                pairing_sequence, quantity,
+                buyer_limit_price_atomic, seller_limit_price_atomic
+            )
+            SELECT
+                item.pairing_id, item.game_id, item.round_id, item.good_id,
+                item.buyer_entry_id, item.seller_entry_id,
+                item.buyer_participant_id, item.seller_participant_id,
+                item.pairing_sequence, item.quantity,
+                item.buyer_limit_price_atomic,
+                item.seller_limit_price_atomic
+            FROM jsonb_to_recordset($1::jsonb) AS item(
+                pairing_id text,
+                game_id text,
+                round_id text,
+                good_id text,
+                buyer_entry_id text,
+                seller_entry_id text,
+                buyer_participant_id text,
+                seller_participant_id text,
+                pairing_sequence integer,
+                quantity integer,
+                buyer_limit_price_atomic numeric,
+                seller_limit_price_atomic numeric
+            )
+            """,
+            _json(pairing_rows),
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.pool_entries
+            SET status = 'paired'
+            WHERE pool_entry_id = ANY($1::text[])
+            """,
+            [
+                entry_id
+                for pairing in pairings
+                for entry_id in (
+                    pairing.buyer_entry_id,
+                    pairing.seller_entry_id,
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                """,
-                pairing.pairing_id,
-                pairing.game_id,
-                pairing.round_id,
-                pairing.good,
-                pairing.buyer_entry_id,
-                pairing.seller_entry_id,
-                pairing.buyer_participant_id,
-                pairing.seller_participant_id,
-                pairing.sequence,
-                pairing.quantity,
-                pairing.buyer_limit_price_atomic,
-                pairing.seller_limit_price_atomic,
+            ],
+        )
+        await connection.execute(
+            """
+            INSERT INTO arena402.negotiations (
+                negotiation_id, pairing_id, game_id, round_id,
+                buyer_participant_id, seller_participant_id, max_turns,
+                action_deadline_at
             )
-            await connection.execute(
-                """
-                UPDATE arena402.pool_entries
-                SET status = 'paired'
-                WHERE pool_entry_id = ANY($1::text[])
-                """,
-                [pairing.buyer_entry_id, pairing.seller_entry_id],
+            SELECT
+                'neg:' || item.pairing_id,
+                item.pairing_id,
+                item.game_id,
+                item.round_id,
+                item.buyer_participant_id,
+                item.seller_participant_id,
+                game.max_negotiation_turns,
+                clock_timestamp() + $2 * interval '1 millisecond'
+            FROM jsonb_to_recordset($1::jsonb) AS item(
+                pairing_id text,
+                game_id text,
+                round_id text,
+                buyer_participant_id text,
+                seller_participant_id text
             )
-            negotiation_id = f"neg:{pairing.pairing_id}"
-            await connection.execute(
-                """
-                INSERT INTO arena402.negotiations (
-                    negotiation_id, pairing_id, game_id, round_id,
-                    buyer_participant_id, seller_participant_id, max_turns,
-                    action_deadline_at
-                )
-                SELECT
-                    $1, $2, $3, $4, $5, $6,
-                    max_negotiation_turns,
-                    clock_timestamp() + $7 * interval '1 millisecond'
-                FROM arena402.games
-                WHERE game_id = $3
-                """,
-                negotiation_id,
-                pairing.pairing_id,
-                pairing.game_id,
-                pairing.round_id,
-                pairing.buyer_participant_id,
-                pairing.seller_participant_id,
-                timeout_ms,
+            JOIN arena402.games AS game
+              ON game.game_id = item.game_id
+            """,
+            _json(pairing_rows),
+            timeout_ms,
+        )
+        await connection.execute(
+            """
+            INSERT INTO arena402.game_events (
+                game_id, round_id, event_type, public_payload,
+                source_idempotency_key
             )
-            await self._event(
-                connection,
-                game_id=game_id,
-                round_id=round_id,
-                event_type="pairing.created",
-                source_key=f"{pairing.pairing_id}:created",
-                public_payload=self._pairing_public(pairing),
+            SELECT
+                $1,
+                $2,
+                'pairing.created',
+                item.public_payload,
+                item.source_key
+            FROM jsonb_to_recordset($3::jsonb) AS item(
+                source_key text,
+                public_payload jsonb
             )
+            ON CONFLICT (game_id, source_idempotency_key) DO NOTHING
+            """,
+            game_id,
+            round_id,
+            _json(
+                [
+                    {
+                        "source_key": f"{pairing.pairing_id}:created",
+                        "public_payload": self._pairing_public(pairing),
+                    }
+                    for pairing in pairings
+                ]
+            ),
+        )
         return pairings
 
     async def _run_rule_negotiations(

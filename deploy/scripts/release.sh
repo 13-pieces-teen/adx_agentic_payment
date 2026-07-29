@@ -339,6 +339,7 @@ require_running_service() {
 
 require_running_service "" postgres
 require_running_service "" api
+require_running_service "" connector-api
 require_running_service "" caddy
 
 if [ "$(env_value ADX_ENABLE_HOSTED_RUNTIME)" = "true" ]; then

@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any, AsyncIterator
 
+from db_pool_config import api_pool_max_size
+
 try:
     import asyncpg
 except ModuleNotFoundError:  # pragma: no cover - production dependency
@@ -183,8 +185,8 @@ class PostgresHostedAgentControlRepository:
 
         self._pool = await asyncpg.create_pool(
             self._dsn,
-            min_size=1,
-            max_size=10,
+            min_size=0,
+            max_size=api_pool_max_size(),
             command_timeout=30,
             init=initialize_connection,
         )

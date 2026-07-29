@@ -135,3 +135,29 @@ def test_http_failures_are_reduced_to_safe_codes(
         assert "secret provider body" not in str(exc.value)
 
     asyncio.run(run())
+
+
+def test_response_body_is_bounded_while_streaming() -> None:
+    async def run() -> None:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=b"x" * (1_048_576 + 1),
+                )
+            )
+        )
+        adapter = OpenAICompatibleChatAdapter(
+            OpenAICompatibleSettings(
+                adapter_id="test",
+                endpoint="https://provider.example/v1/chat/completions",
+            ),
+            client=client,
+        )
+        with WorkerSecret(b"test-key") as key:
+            with pytest.raises(ProviderInvocationError) as exc:
+                await adapter.invoke(_request(), key)
+        await client.aclose()
+        assert exc.value.code == "invalid_json"
+
+    asyncio.run(run())

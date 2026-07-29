@@ -10,6 +10,8 @@ from arena_game import PawnhouseRepositoryError, default_join_portfolio
 from connector_gateway.auth import AuthPrincipal
 from web.api import create_app
 from web.pawnhouse_api import (
+    GameStateReadCache,
+    SharedGameEventFanout,
     _encode_sse_event,
     _public_game_event_stream,
     _sse_cursor,
@@ -860,6 +862,103 @@ def test_public_game_event_stream_resumes_and_emits_sanitized_json() -> None:
     }
     assert _sse_cursor(3, "invalid") == 3
     assert _encode_sse_event(payload) == encoded
+
+
+def test_sse_subscribers_share_one_ongoing_game_poller() -> None:
+    class FanoutRepository:
+        def __init__(self):
+            self.calls = 0
+            self.release = asyncio.Event()
+
+        async def timeline(self, game_id, *, after_sequence=0):
+            assert game_id == "game_1"
+            self.calls += 1
+            task = asyncio.current_task()
+            if task is not None and task.get_name().startswith(
+                "arena-sse-fanout:"
+            ):
+                if after_sequence >= 1:
+                    await asyncio.Event().wait()
+                await self.release.wait()
+                return [
+                    {
+                        "sequence": 1,
+                        "type": "round.started",
+                        "data": {},
+                    }
+                ]
+            return []
+
+    async def exercise() -> tuple[str, str, int]:
+        repository = FanoutRepository()
+        fanout = SharedGameEventFanout(
+            repository,
+            poll_seconds=0.001,
+            heartbeat_seconds=10,
+        )
+
+        async def connected() -> bool:
+            return False
+
+        first = fanout.stream(
+            game_id="game_1",
+            after_sequence=0,
+            is_disconnected=connected,
+        )
+        second = fanout.stream(
+            game_id="game_1",
+            after_sequence=0,
+            is_disconnected=connected,
+        )
+        first_frame = asyncio.create_task(anext(first))
+        second_frame = asyncio.create_task(anext(second))
+        while repository.calls < 3:
+            await asyncio.sleep(0)
+        calls_before_release = repository.calls
+        repository.release.set()
+        frames = await asyncio.gather(first_frame, second_frame)
+        await first.aclose()
+        await second.aclose()
+        await fanout.close()
+        return frames[0], frames[1], calls_before_release
+
+    first, second, calls = asyncio.run(exercise())
+    assert first == second
+    assert first.startswith("id: 1\nevent: arena\n")
+    # Two one-time replay reads plus one shared ongoing poll.
+    assert calls == 3
+
+
+def test_game_state_cache_collapses_concurrent_projection_reads() -> None:
+    class ProjectionRepository:
+        def __init__(self):
+            self.calls = 0
+            self.release = asyncio.Event()
+
+        async def game_state(self, game_id):
+            self.calls += 1
+            await self.release.wait()
+            return {"gameId": game_id, "phase": "running"}
+
+    async def exercise():
+        repository = ProjectionRepository()
+        cache = GameStateReadCache(repository, ttl_seconds=1)
+        first = asyncio.create_task(cache.get("game_1"))
+        second = asyncio.create_task(cache.get("game_1"))
+        while repository.calls < 1:
+            await asyncio.sleep(0)
+        repository.release.set()
+        values = await asyncio.gather(first, second)
+        third = await cache.get("game_1")
+        return repository.calls, values, third
+
+    calls, values, third = asyncio.run(exercise())
+    assert calls == 1
+    assert values == [
+        {"gameId": "game_1", "phase": "running"},
+        {"gameId": "game_1", "phase": "running"},
+    ]
+    assert third == values[0]
 
 
 def test_hosted_run_queue_is_token_gated_and_status_is_public() -> None:

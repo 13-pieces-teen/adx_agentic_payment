@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from .hashing import sha256_identifier
 from .ingress_security import secure_config_snapshot
+from db_pool_config import api_pool_max_size
 
 
 class ArenaParticipationError(RuntimeError):
@@ -68,8 +69,8 @@ class PostgresArenaParticipationRepository:
 
         self._pool = await asyncpg.create_pool(
             self._dsn,
-            min_size=1,
-            max_size=5,
+            min_size=0,
+            max_size=api_pool_max_size(),
             command_timeout=30,
             init=initialize_connection,
         )
