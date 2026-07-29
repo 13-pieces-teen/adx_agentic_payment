@@ -167,6 +167,12 @@ jobs:
           --file deploy/docker/Dockerfile.api
           --tag arena402-api:${GITHUB_SHA}
           .
+      - name: Smoke-test production API imports
+        run: >-
+          docker run --rm
+          --entrypoint python
+          arena402-api:${GITHUB_SHA}
+          -c 'import db_pool_config; import web.api; import web.connector_api'
       - name: Build the production Facilitator image
         run: >-
           docker build

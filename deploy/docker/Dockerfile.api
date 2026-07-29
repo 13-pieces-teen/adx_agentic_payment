@@ -26,6 +26,7 @@ COPY --chown=adx:adx arena_wallets ./arena_wallets
 COPY --chown=adx:adx hosted_agent_control_plane ./hosted_agent_control_plane
 COPY --chown=adx:adx hosted_agent_runtime ./hosted_agent_runtime
 COPY --chown=adx:adx web ./web
+COPY --chown=adx:adx db_pool_config.py ./db_pool_config.py
 COPY --chown=adx:adx db ./db
 COPY --chown=adx:adx deploy/scripts/api-entrypoint.sh ./deploy/scripts/api-entrypoint.sh
 COPY --chown=adx:adx deploy/scripts/migrate.py ./deploy/scripts/migrate.py

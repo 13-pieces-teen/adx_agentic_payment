@@ -19,6 +19,12 @@ def test_production_routes_connector_to_one_dedicated_worker():
     compose = (ROOT / "docker-compose.production.yml").read_text(
         encoding="utf-8"
     )
+    dockerfile = (ROOT / "deploy/docker/Dockerfile.api").read_text(
+        encoding="utf-8"
+    )
+    workflow = (ROOT / ".github/workflows/ci-cd.yml").read_text(
+        encoding="utf-8"
+    )
     caddy = (ROOT / "deploy/caddy/Caddyfile.domain").read_text(
         encoding="utf-8"
     )
@@ -34,3 +40,12 @@ def test_production_routes_connector_to_one_dedicated_worker():
     assert caddy.index("@connector path") < caddy.index("@api path")
     assert "reverse_proxy connector-api:8000" in caddy
     assert '--workers "${workers}"' in entrypoint
+    assert (
+        "COPY --chown=adx:adx db_pool_config.py ./db_pool_config.py"
+        in dockerfile
+    )
+    assert "Smoke-test production API imports" in workflow
+    assert (
+        "import db_pool_config; import web.api; import web.connector_api"
+        in workflow
+    )
