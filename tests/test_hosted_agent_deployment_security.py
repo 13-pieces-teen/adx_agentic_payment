@@ -238,7 +238,8 @@ def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:
         "compose build --pull api connector-api migrate provision-db-roles"
         in deploy
     )
-    assert "compose up -d api connector-api caddy" in deploy
+    assert "compose up -d api connector-api" in deploy
+    assert "compose up -d --force-recreate caddy" in deploy
     assert "compose up -d api web caddy" not in deploy
     assert "--app-url" in generator
     assert 'printf \'ADX_GITHUB_OAUTH_CLIENT_ID=\\n\'' in generator
