@@ -25,6 +25,9 @@ def test_production_routes_connector_to_one_dedicated_worker():
     workflow = (ROOT / ".github/workflows/ci-cd.yml").read_text(
         encoding="utf-8"
     )
+    deploy = (ROOT / "deploy/scripts/deploy.sh").read_text(
+        encoding="utf-8"
+    )
     caddy = (ROOT / "deploy/caddy/Caddyfile.domain").read_text(
         encoding="utf-8"
     )
@@ -40,6 +43,7 @@ def test_production_routes_connector_to_one_dedicated_worker():
     assert caddy.index("@connector path") < caddy.index("@api path")
     assert "reverse_proxy connector-api:8000" in caddy
     assert '--workers "${workers}"' in entrypoint
+    assert "compose up -d --force-recreate caddy" in deploy
     assert (
         "COPY --chown=adx:adx db_pool_config.py ./db_pool_config.py"
         in dockerfile

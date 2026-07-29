@@ -130,7 +130,7 @@ PROVIDER_CAPACITY_SQL_PATH = (
     ROOT
     / "db"
     / "migrations"
-    / "050_hosted_provider_capacity_and_fair_claim.sql"
+    / "050_arena_hosted_provider_capacity_and_fair_claim.sql"
 )
 RUNTIME_RUN_FENCING_SQL_PATH = (
     ROOT
@@ -682,3 +682,16 @@ def test_concurrency_migrations_are_bounded_fair_and_fenced():
     assert "capacity.max_inflight" in capacity
     assert "ADD COLUMN lease_epoch BIGINT" in fencing
     assert "CHECK (lease_epoch >= 0)" in fencing
+
+
+def test_concurrency_migrations_are_selected_for_arena_scope(monkeypatch):
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+
+    selected = set(migrate_module.migration_files("arena"))
+
+    assert BATCHED_FINALIZER_SQL_PATH in selected
+    assert PROVIDER_CAPACITY_SQL_PATH in selected
+    assert RUNTIME_RUN_FENCING_SQL_PATH in selected
