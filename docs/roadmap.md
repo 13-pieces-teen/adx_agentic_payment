@@ -492,6 +492,17 @@ create game
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
       及独立权限。
+- [x] 增加仅供 Official Agent 使用的私有 LiteLLM Gateway：
+      `official-deepseek` 在公开 capability API 中隐藏，玩家 `deepseek` BYOK
+      仍直连 DeepSeek；多个上游 key 作为同名 LiteLLM deployment 由
+      `simple-shuffle` 在请求级分发。
+- [x] 上游 DeepSeek key 与 LiteLLM token 均经现有 write-only Secret Store
+      port 写入版本化平台专用 ref，不复用带短 TTL 的未绑定玩家 Credential；
+      磁盘 manifest 只含 opaque secret ref 和模型别名。LiteLLM 不开放宿主端口，
+      Proxy retry/fallback 均关闭，Arena 保留唯一的 AgentTask retry 语义。
+- [ ] 现有生产 Official pool 尚未静默迁移到 `official-deepseek`；应在无活跃
+      Game 的维护窗口验证新池 ready 后再切换，不能把代码接入描述成已完成
+      production cutover。
 - [x] 增加独立数据库角色、无公网端口的 Settlement Worker；生产配置保持单个
       PostgreSQL、单个 API，Hosted Worker 以 4 副本 × 25 task slot 起步，
       Settlement Worker 以 4 个执行 slot 驱动 4 个独立 EOA Facilitator shard，

@@ -1,0 +1,6 @@
+# Extra packages layered onto the pinned LiteLLM non-root image so the short
+# bootstrap process can resolve Arena's encrypted Secret Store. LiteLLM itself
+# comes from the signed base image, not PyPI.
+asyncpg==0.31.0
+tencentcloud-sdk-python-common==3.1.140
+tencentcloud-sdk-python-ssm==3.1.139

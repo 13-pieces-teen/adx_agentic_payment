@@ -161,3 +161,48 @@ def test_response_body_is_bounded_while_streaming() -> None:
         assert exc.value.code == "invalid_json"
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "allow_http_hostname"),
+    [
+        (
+            "http://provider.example/v1/chat/completions",
+            None,
+        ),
+        (
+            "http://official-litellm.evil:4000/v1/chat/completions",
+            "official-litellm",
+        ),
+        (
+            "http://another-service:4000/v1/chat/completions",
+            "official-litellm",
+        ),
+    ],
+)
+def test_http_endpoint_requires_an_exact_allowed_hostname(
+    endpoint: str,
+    allow_http_hostname: str | None,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="invalid OpenAI-compatible provider settings",
+    ):
+        OpenAICompatibleSettings(
+            adapter_id="test",
+            endpoint=endpoint,
+            allow_http_hostname=allow_http_hostname,
+        )
+
+
+def test_exact_internal_http_hostname_is_allowed() -> None:
+    settings = OpenAICompatibleSettings(
+        adapter_id="official-deepseek-litellm-chat-v1",
+        endpoint="http://official-litellm:4000/v1/chat/completions",
+        allow_http_hostname="official-litellm",
+    )
+
+    assert settings.endpoint == (
+        "http://official-litellm:4000/v1/chat/completions"
+    )
+    assert settings.allow_http_hostname == "official-litellm"

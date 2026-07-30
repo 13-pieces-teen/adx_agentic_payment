@@ -149,6 +149,7 @@ def test_generated_production_env_has_distinct_role_and_fail_closed_flags() -> N
     assert "ADX_HOSTED_AGENTS_ENABLED=false" in generator
     assert "ADX_ARENA_CORE_ENABLED=true" in generator
     assert "ADX_ENABLE_HOSTED_RUNTIME=false" in generator
+    assert "ADX_ENABLE_OFFICIAL_LITELLM=false" in generator
     assert "ADX_HOSTED_SECRET_BACKEND=postgres_aesgcm" in generator
     assert "ADX_HOSTED_CREDENTIAL_BACKEND_VERIFIED=false" in generator
     assert "ADX_TENCENT_SSM_IAM_VERIFIED=false" in generator
@@ -162,6 +163,10 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
         ROOT / "deploy" / "scripts" / "deploy.sh"
     ).read_text(encoding="utf-8")
     assert 'enable_hosted_runtime="$(env_value ADX_ENABLE_HOSTED_RUNTIME)"' in deploy
+    assert (
+        'enable_official_litellm="$(env_value ADX_ENABLE_OFFICIAL_LITELLM)"'
+        in deploy
+    )
     assert 'enable_arena_worker="$(env_value ADX_ENABLE_ARENA_WORKER)"' in deploy
     assert (
         'enable_settlement_worker="$(env_value ADX_ENABLE_SETTLEMENT_WORKER)"'
@@ -171,6 +176,15 @@ def test_deploy_script_starts_profiles_only_after_explicit_enablement() -> None:
         'compose --profile hosted up -d --scale hosted-worker="'
         '${hosted_worker_replicas}" hosted-worker credential-controller'
     ) in deploy
+    assert (
+        "compose --profile official-agents build --pull official-litellm"
+        in deploy
+    )
+    assert (
+        "compose --profile official-agents up -d --force-recreate "
+        "official-litellm"
+    ) in deploy
+    assert "Missing Official LiteLLM manifest." in deploy
     assert "compose --profile arena up -d arena-worker" in deploy
     assert "compose --profile settlement up -d settlement-worker" in deploy
     assert "Arena Worker requires ADX_ARENA_CORE_ENABLED=true." in deploy
@@ -187,31 +201,98 @@ def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> N
     dockerfile = (
         ROOT / "deploy" / "docker" / "Dockerfile.api"
     ).read_text(encoding="utf-8")
-    assert compose.count("target: /run/secrets/arena402") == 3
+    assert compose.count("target: /run/secrets/arena402") == 5
     assert compose.count(
         "ADX_HOSTED_MASTER_KEY_FILE: "
         "/run/secrets/arena402/hosted-master.key"
-    ) == 3
+    ) == 5
     bootstrap = compose.split("  official-agent-bootstrap:", 1)[1].split(
         "\n  arena-worker:", 1
     )[0]
     assert "profiles:\n      - ops" in bootstrap
     assert "- scripts.bootstrap_official_agent_pool" in bootstrap
+    assert "- --litellm-token-file" in bootstrap
+    assert "- /run/secrets/official/litellm-token.key" in bootstrap
+    assert "ADX_OFFICIAL_DEEPSEEK_KEY_SOURCE_HOST_PATH" not in bootstrap
+    assert "target: /run/secrets/official/deepseek-source" not in bootstrap
+    assert "target: /run/secrets/official/litellm-token.key" in bootstrap
+    assert "--config-version" in bootstrap
+    assert "ADX_OFFICIAL_LITELLM_CONFIG_VERSION" in bootstrap
+    assert bootstrap.count("create_host_path: false") == 1
     assert "target: /run/secrets/arena402" in bootstrap
     assert "read_only: true" in bootstrap
+    bootstrap_environment = bootstrap.split("    environment:", 1)[1].split(
+        "    depends_on:", 1
+    )[0]
+    assert "ADX_OFFICIAL_DEEPSEEK" not in bootstrap_environment
     assert (
         "COPY --chown=adx:adx scripts/bootstrap_official_agent_pool.py "
         "./scripts/bootstrap_official_agent_pool.py"
+    ) in dockerfile
+    assert (
+        "COPY --chown=adx:adx scripts/provision_official_litellm.py "
+        "./scripts/provision_official_litellm.py"
     ) in dockerfile
     assert (
         "COPY --chown=adx:adx scripts/refresh_official_agent_strategies.py "
         "./scripts/refresh_official_agent_strategies.py"
     ) in dockerfile
     controller = compose.split("  credential-controller:", 1)[1].split(
-        "\n  official-agent-bootstrap:", 1
+        "\n  official-litellm:", 1
     )[0]
     assert "ADX_HOSTED_MASTER_KEY_FILE" not in controller
     assert "target: /run/secrets/arena402" not in controller
+
+
+def test_official_litellm_is_private_and_owns_upstream_distribution() -> None:
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    dockerfile = (
+        ROOT / "deploy" / "docker" / "Dockerfile.litellm"
+    ).read_text(encoding="utf-8")
+    proxy = compose.split("  official-litellm:", 1)[1].split(
+        "\n  official-litellm-provision:", 1
+    )[0]
+    provision = compose.split("  official-litellm-provision:", 1)[1].split(
+        "\n  official-agent-bootstrap:", 1
+    )[0]
+    hosted_worker = compose.split("  hosted-worker:", 1)[1].split(
+        "\n  credential-controller:", 1
+    )[0]
+
+    assert "profiles:\n      - official-agents" in proxy
+    assert "      - ops" in proxy
+    assert "\n    ports:" not in proxy
+    assert 'expose:\n      - "4000"' in proxy
+    assert "- official-llm" in proxy
+    assert "read_only: true" in proxy
+    assert "cap_drop:\n      - ALL" in proxy
+    assert "target: /run/official-litellm" in proxy
+    assert "deepseek-source" not in proxy
+    assert "litellm-token.key" not in proxy
+    assert "ADX_LITELLM_SECRET_DATABASE_URL" in proxy
+    assert "- official-llm" in hosted_worker
+
+    assert "- scripts.provision_official_litellm" in provision
+    assert "target: /run/secrets/official/deepseek-source" in provision
+    assert "target: /run/secrets/official/litellm-token.key" in provision
+    assert "target: /run/official-litellm" in provision
+    assert "--config-version" in provision
+    assert "ADX_OFFICIAL_LITELLM_CONFIG_VERSION" in provision
+    assert "ADX_OFFICIAL_BOOTSTRAP_DATABASE_URL" not in provision
+    assert "ADX_HOSTED_FINGERPRINT_PEPPER" not in provision
+    assert "create_host_path: false" in provision
+
+    assert (
+        "ghcr.io/berriai/litellm-non_root:v1.89.4@sha256:"
+        "2cf7711f9e96f9b2b3f4a2ba9eeaa39ab229020983b85e6f6723d8827b4df209"
+    ) in dockerfile
+    assert (
+        'ENTRYPOINT ["python", "-m", "scripts.run_official_litellm"]'
+        in dockerfile
+    )
+    assert "USER 10001:10001" in dockerfile
 
 
 def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:

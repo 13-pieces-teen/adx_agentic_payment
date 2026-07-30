@@ -138,6 +138,12 @@ RUNTIME_RUN_FENCING_SQL_PATH = (
     / "migrations"
     / "051_arena_runtime_run_lease_fencing.sql"
 )
+OFFICIAL_LITELLM_CAPACITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "052_arena_official_litellm_provider_capacity.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -672,6 +678,9 @@ def test_concurrency_migrations_are_bounded_fair_and_fenced():
     finalizer = BATCHED_FINALIZER_SQL_PATH.read_text(encoding="utf-8")
     capacity = PROVIDER_CAPACITY_SQL_PATH.read_text(encoding="utf-8")
     fencing = RUNTIME_RUN_FENCING_SQL_PATH.read_text(encoding="utf-8")
+    official_capacity = OFFICIAL_LITELLM_CAPACITY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
 
     assert "finalize_expired_agent_tasks_batch" in finalizer
     assert "FOR UPDATE SKIP LOCKED" in finalizer
@@ -682,6 +691,8 @@ def test_concurrency_migrations_are_bounded_fair_and_fenced():
     assert "capacity.max_inflight" in capacity
     assert "ADD COLUMN lease_epoch BIGINT" in fencing
     assert "CHECK (lease_epoch >= 0)" in fencing
+    assert "('official-deepseek', 32)" in official_capacity
+    assert "ON CONFLICT (provider) DO NOTHING" in official_capacity
 
 
 def test_concurrency_migrations_are_selected_for_arena_scope(monkeypatch):
@@ -695,3 +706,4 @@ def test_concurrency_migrations_are_selected_for_arena_scope(monkeypatch):
     assert BATCHED_FINALIZER_SQL_PATH in selected
     assert PROVIDER_CAPACITY_SQL_PATH in selected
     assert RUNTIME_RUN_FENCING_SQL_PATH in selected
+    assert OFFICIAL_LITELLM_CAPACITY_SQL_PATH in selected

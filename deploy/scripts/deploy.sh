@@ -16,6 +16,8 @@ build_connector_artifacts="$(env_value ADX_BUILD_CONNECTOR_ARTIFACTS)"
 [ -n "${build_connector_artifacts}" ] || build_connector_artifacts=true
 enable_hosted_runtime="$(env_value ADX_ENABLE_HOSTED_RUNTIME)"
 [ -n "${enable_hosted_runtime}" ] || enable_hosted_runtime=false
+enable_official_litellm="$(env_value ADX_ENABLE_OFFICIAL_LITELLM)"
+[ -n "${enable_official_litellm}" ] || enable_official_litellm=false
 hosted_worker_replicas="$(env_value ADX_HOSTED_WORKER_REPLICAS)"
 [ -n "${hosted_worker_replicas}" ] || hosted_worker_replicas=4
 hosted_agents_enabled="$(env_value ADX_HOSTED_AGENTS_ENABLED)"
@@ -43,6 +45,13 @@ case "${enable_hosted_runtime}" in
   true|false) ;;
   *)
     echo "ADX_ENABLE_HOSTED_RUNTIME must be true or false." >&2
+    exit 1
+    ;;
+esac
+case "${enable_official_litellm}" in
+  true|false) ;;
+  *)
+    echo "ADX_ENABLE_OFFICIAL_LITELLM must be true or false." >&2
     exit 1
     ;;
 esac
@@ -310,6 +319,22 @@ if [ "${enable_hosted_runtime}" = "true" ]; then
   fi
 fi
 
+if [ "${enable_official_litellm}" = "true" ]; then
+  if [ "${enable_hosted_runtime}" != "true" ]; then
+    echo "Official LiteLLM requires ADX_ENABLE_HOSTED_RUNTIME=true." >&2
+    exit 1
+  fi
+  official_litellm_config="$(
+    env_value ADX_OFFICIAL_LITELLM_CONFIG_HOST_PATH
+  )"
+  [ -n "${official_litellm_config}" ] || \
+    official_litellm_config="${repo_dir}/deploy/official-litellm"
+  if [ ! -f "${official_litellm_config}/manifest.json" ]; then
+    echo "Missing Official LiteLLM manifest." >&2
+    exit 1
+  fi
+fi
+
 if [ "${hosted_agents_enabled}" = "true" ]; then
   case "${hosted_secret_backend}" in
     postgres_aesgcm)
@@ -385,6 +410,9 @@ compose build --pull api connector-api migrate provision-db-roles
 if [ "${enable_hosted_runtime}" = "true" ]; then
   compose --profile hosted build --pull hosted-worker credential-controller
 fi
+if [ "${enable_official_litellm}" = "true" ]; then
+  compose --profile official-agents build --pull official-litellm
+fi
 if [ "${enable_arena_worker}" = "true" ]; then
   compose --profile arena build --pull arena-worker
 fi
@@ -409,6 +437,9 @@ compose up -d postgres
 compose run --rm migrate
 compose up -d api connector-api
 compose up -d --force-recreate caddy
+if [ "${enable_official_litellm}" = "true" ]; then
+  compose --profile official-agents up -d --force-recreate official-litellm
+fi
 if [ "${enable_hosted_runtime}" = "true" ]; then
   compose --profile hosted up -d --scale hosted-worker="${hosted_worker_replicas}" hosted-worker credential-controller
 fi

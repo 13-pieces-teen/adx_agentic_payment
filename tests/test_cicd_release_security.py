@@ -65,7 +65,7 @@ def test_release_verifies_identity_before_activation_and_marks_after_health() ->
 
 def test_release_preserves_server_only_state_and_refuses_automatic_db_rollback() -> None:
     assert 'cp -p -- "${release_dir}/deploy/.env"' in RELEASE
-    assert "for runtime_dir in artifacts secrets" in RELEASE
+    assert "for runtime_dir in artifacts secrets official-litellm" in RELEASE
     assert '"${release_dir}/deploy/${runtime_dir}"' in RELEASE
     assert '"${release_dir}/${runtime_dir}"' in RELEASE
     assert '"${staging_dir}/${runtime_dir}/"' in RELEASE
@@ -101,6 +101,10 @@ def test_release_checks_runtime_and_public_boundaries() -> None:
     assert 'body.get("gameId")' in RELEASE
     assert 'game.get("gameId")' in RELEASE
     assert '-C\n            -o BatchMode=yes' in WORKFLOW
+    assert (
+        "require_running_service official-agents official-litellm"
+        in RELEASE
+    )
 
 
 def test_release_applies_the_frozen_current_game_round_count() -> None:

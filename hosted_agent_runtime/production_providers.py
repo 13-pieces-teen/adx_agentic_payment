@@ -54,7 +54,31 @@ def _deepseek_capability(model_id: str, display_name: str) -> ModelCapability:
     )
 
 
-def build_production_capability_registry() -> CapabilityRegistry:
+def _official_deepseek_capability(
+    model_id: str,
+    display_name: str,
+) -> ModelCapability:
+    return ModelCapability(
+        provider_id="official-deepseek",
+        adapter_id="official-deepseek-litellm-chat-v1",
+        model_id=model_id,
+        display_name=display_name,
+        supports_structured_output=True,
+        thinking_mode=ThinkingMode.OPTIONAL,
+        thinking_parameter_name="thinking.enabled",
+        max_output_tokens=16_384,
+        request_timeout_cap_ms=300_000,
+        adapter_version="official-deepseek-litellm-chat-v1",
+        immutable_model_id=True,
+        verified=True,
+        enabled=True,
+    )
+
+
+def build_production_capability_registry(
+    *,
+    include_official: bool = False,
+) -> CapabilityRegistry:
     capabilities = [
         _deepseek_capability(
             "deepseek-v4-flash",
@@ -65,6 +89,19 @@ def build_production_capability_registry() -> CapabilityRegistry:
             "DeepSeek V4 Pro",
         ),
     ]
+    if include_official:
+        capabilities.extend(
+            (
+                _official_deepseek_capability(
+                    "deepseek-v4-flash",
+                    "DeepSeek V4 Flash",
+                ),
+                _official_deepseek_capability(
+                    "deepseek-v4-pro",
+                    "DeepSeek V4 Pro",
+                ),
+            )
+        )
     # Additional OpenAI-compatible providers are deployment configuration,
     # not request fields. This preserves the same BYOK UX without allowing
     # an API key to be exfiltrated through an attacker-controlled base URL.
@@ -109,14 +146,18 @@ def build_production_capability_registry() -> CapabilityRegistry:
 
     return CapabilityRegistry(
         capabilities,
-        registry_version="arena.provider-registry.production.v1",
+        registry_version=(
+            "arena.provider-registry.production-official.v1"
+            if include_official
+            else "arena.provider-registry.production.v1"
+        ),
     )
 
 
 def build_production_provider_bundle() -> ProductionProviderBundle:
     """Build trusted endpoints; users cannot provide or override base URLs."""
 
-    registry = build_production_capability_registry()
+    registry = build_production_capability_registry(include_official=True)
     adapters: dict[str, ProviderAdapter] = {
         "deepseek": OpenAICompatibleChatAdapter(
             OpenAICompatibleSettings(
@@ -125,7 +166,18 @@ def build_production_provider_bundle() -> ProductionProviderBundle:
                 response_format_mode="json_object",
                 thinking_dialect="deepseek",
             )
-        )
+        ),
+        "official-deepseek": OpenAICompatibleChatAdapter(
+            OpenAICompatibleSettings(
+                adapter_id="official-deepseek-litellm-chat-v1",
+                endpoint=(
+                    "http://official-litellm:4000/v1/chat/completions"
+                ),
+                response_format_mode="json_object",
+                thinking_dialect="deepseek",
+                allow_http_hostname="official-litellm",
+            )
+        ),
     }
     if any(
         item.provider_id == "openai-compatible"

@@ -66,7 +66,9 @@ async def _refresh(args: argparse.Namespace) -> dict[str, object]:
 
         service = HostedAgentService(
             repository,
-            capabilities=build_production_capability_registry(),
+            capabilities=build_production_capability_registry(
+                include_official=True
+            ),
             hosted_agents_enabled=True,
         )
         refreshed: list[tuple[str, str]] = []

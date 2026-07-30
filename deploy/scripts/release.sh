@@ -238,7 +238,7 @@ cp -p -- "${release_dir}/deploy/.env" "${staging_dir}/deploy/.env"
   . "${staging_dir}/deploy/scripts/lib.sh"
   set_env_value ADX_CURRENT_GAME_ROUND_COUNT "${current_game_round_count}"
 )
-for runtime_dir in artifacts secrets; do
+for runtime_dir in artifacts secrets official-litellm; do
   if [ -d "${release_dir}/deploy/${runtime_dir}" ]; then
     mkdir -p -- "${staging_dir}/deploy/${runtime_dir}"
     cp -a -- \
@@ -342,6 +342,9 @@ require_running_service "" api
 require_running_service "" connector-api
 require_running_service "" caddy
 
+if [ "$(env_value ADX_ENABLE_OFFICIAL_LITELLM)" = "true" ]; then
+  require_running_service official-agents official-litellm
+fi
 if [ "$(env_value ADX_ENABLE_HOSTED_RUNTIME)" = "true" ]; then
   require_running_service hosted hosted-worker
   require_running_service hosted credential-controller

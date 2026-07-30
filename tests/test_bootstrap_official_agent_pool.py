@@ -5,9 +5,9 @@ from pydantic import SecretStr
 
 from hosted_agent_runtime.prompt_builder import MAX_STRATEGY_BYTES
 from scripts.bootstrap_official_agent_pool import (
-    _api_key_slot,
-    _load_api_key,
+    _load_litellm_token,
     _owner_id,
+    _require_healthy_litellm_payload,
     _strategy,
 )
 from scripts.refresh_official_agent_strategies import (
@@ -16,15 +16,15 @@ from scripts.refresh_official_agent_strategies import (
 )
 
 
-def test_api_key_is_loaded_as_redacted_secret(tmp_path: Path) -> None:
-    key_file = tmp_path / "deepseek.key"
-    key_file.write_text("test-secret-value\n", encoding="utf-8")
+def test_litellm_token_is_loaded_as_redacted_secret(tmp_path: Path) -> None:
+    key_file = tmp_path / "litellm.key"
+    key_file.write_text("sk-test-secret-value\n", encoding="utf-8")
 
-    value = _load_api_key(key_file)
+    value = _load_litellm_token(key_file)
 
     assert isinstance(value, SecretStr)
-    assert value.get_secret_value() == "test-secret-value"
-    assert "test-secret-value" not in repr(value)
+    assert value.get_secret_value() == "sk-test-secret-value"
+    assert "sk-test-secret-value" not in repr(value)
 
 
 def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
@@ -60,22 +60,35 @@ def test_official_strategy_refresh_has_a_versioned_stable_idempotency_key() -> N
     )
 
 
-def test_three_keys_are_distributed_as_contiguous_7_7_6_ranges() -> None:
-    slots = [
-        _api_key_slot(index=index, count=20, key_count=3)
-        for index in range(1, 21)
-    ]
-
-    assert slots == ([0] * 7) + ([1] * 7) + ([2] * 6)
-
-
 @pytest.mark.parametrize("contents", ["", "two words", "line1\nline2"])
-def test_api_key_file_rejects_invalid_material(
+def test_litellm_token_file_rejects_invalid_material(
     tmp_path: Path,
     contents: str,
 ) -> None:
-    key_file = tmp_path / "deepseek.key"
+    key_file = tmp_path / "litellm.key"
     key_file.write_text(contents, encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="DeepSeek API key file"):
-        _load_api_key(key_file)
+    with pytest.raises(RuntimeError, match="LiteLLM token"):
+        _load_litellm_token(key_file)
+
+
+def test_official_pool_requires_every_litellm_deployment_to_be_healthy() -> None:
+    assert (
+        _require_healthy_litellm_payload(
+            {
+                "healthy_endpoints": [{"model": "deepseek/deepseek-chat"}],
+                "unhealthy_endpoints": [],
+            }
+        )
+        == 1
+    )
+
+    with pytest.raises(RuntimeError, match="unhealthy"):
+        _require_healthy_litellm_payload(
+            {
+                "healthy_endpoints": [{"model": "deepseek/deepseek-chat"}],
+                "unhealthy_endpoints": [
+                    {"model": "deepseek/deepseek-chat"}
+                ],
+            }
+        )

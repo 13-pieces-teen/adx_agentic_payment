@@ -8,6 +8,7 @@ credential to an arbitrary host.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Final, Literal
 from urllib.parse import urlsplit
@@ -26,6 +27,9 @@ from .base import (
 
 _MAX_RESPONSE_BYTES: Final[int] = 1_048_576
 _ALLOWED_SCHEMES: Final[frozenset[str]] = frozenset({"https"})
+_HOSTNAME_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+)
 ResponseFormatMode = Literal["json_schema", "json_object"]
 ThinkingDialect = Literal["none", "deepseek"]
 
@@ -36,12 +40,24 @@ class OpenAICompatibleSettings:
     endpoint: str
     response_format_mode: ResponseFormatMode = "json_object"
     thinking_dialect: ThinkingDialect = "none"
+    allow_http_hostname: str | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.endpoint)
+        allowed_http_hostname = self.allow_http_hostname
+        if allowed_http_hostname is not None and (
+            not _HOSTNAME_PATTERN.fullmatch(allowed_http_hostname)
+            or allowed_http_hostname != allowed_http_hostname.lower()
+        ):
+            raise ValueError("invalid OpenAI-compatible provider settings")
+        scheme_allowed = parsed.scheme in _ALLOWED_SCHEMES or (
+            parsed.scheme == "http"
+            and allowed_http_hostname is not None
+            and parsed.hostname == allowed_http_hostname
+        )
         if (
             not self.adapter_id
-            or parsed.scheme not in _ALLOWED_SCHEMES
+            or not scheme_allowed
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None

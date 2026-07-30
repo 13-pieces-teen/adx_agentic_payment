@@ -1,8 +1,7 @@
-"""Provision an explicit pool of production DeepSeek Hosted Agents.
+"""Provision Official Agents that call DeepSeek through LiteLLM.
 
-The model key is accepted only from a file and is passed through the existing
-write-only Hosted credential ingress. The raw key is never written to Arena
-business tables, command output, or logs.
+This command accepts one LiteLLM gateway token. Upstream DeepSeek keys belong
+to LiteLLM and never enter an Official Agent credential or Arena task.
 """
 
 from __future__ import annotations
@@ -13,11 +12,14 @@ import base64
 import binascii
 import json
 import os
+import re
+import stat
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from pydantic import SecretStr
 
 from hosted_agent_control_plane import (
@@ -39,6 +41,9 @@ from hosted_agent_runtime.production_secrets import (
     close_secret_port,
     initialize_secret_port,
 )
+
+_CONFIG_VERSION_PATTERN = re.compile(r"^v[1-9][0-9]{0,5}$")
+_LITELLM_HEALTH_URL = "http://official-litellm:4000/health"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,20 +74,86 @@ def _fingerprint_pepper() -> bytes:
     return value
 
 
-def _load_api_key(path: Path) -> SecretStr:
-    resolved = path.resolve(strict=True)
-    if not resolved.is_file():
-        raise RuntimeError("DeepSeek API key path must be a regular file")
-    raw = resolved.read_bytes()
+def _load_litellm_token(path: Path) -> SecretStr:
+    descriptor = -1
+    try:
+        path_status = path.lstat()
+        if stat.S_ISLNK(path_status.st_mode):
+            raise RuntimeError("LiteLLM token file must not be a symlink")
+        if not stat.S_ISREG(path_status.st_mode):
+            raise RuntimeError("LiteLLM token path must be a regular file")
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        opened_status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_status.st_mode)
+            or not os.path.samestat(path_status, opened_status)
+        ):
+            raise RuntimeError(
+                "LiteLLM token path changed while it was opened"
+            )
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            raw = stream.read(16_385)
+    except RuntimeError:
+        raise
+    except OSError:
+        raise RuntimeError("LiteLLM token file is unavailable") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if not raw or len(raw) > 16_384 or b"\x00" in raw:
-        raise RuntimeError("DeepSeek API key file is invalid")
+        raise RuntimeError("LiteLLM token file is invalid")
     try:
         value = raw.decode("utf-8").strip()
     except UnicodeDecodeError:
-        raise RuntimeError("DeepSeek API key file must be UTF-8") from None
+        raise RuntimeError("LiteLLM token file must be UTF-8") from None
     if not value or any(character.isspace() for character in value):
-        raise RuntimeError("DeepSeek API key file must contain one key")
+        raise RuntimeError("LiteLLM token file must contain one token")
+    if not value.startswith("sk-"):
+        raise RuntimeError("LiteLLM token must start with sk-")
     return SecretStr(value)
+
+
+def _require_healthy_litellm_payload(payload: object) -> int:
+    if not isinstance(payload, dict):
+        raise RuntimeError("LiteLLM deployment health response is invalid")
+    healthy = payload.get("healthy_endpoints")
+    unhealthy = payload.get("unhealthy_endpoints")
+    if not isinstance(healthy, list) or not isinstance(unhealthy, list):
+        raise RuntimeError("LiteLLM deployment health response is invalid")
+    if unhealthy or not healthy:
+        raise RuntimeError("LiteLLM has unhealthy DeepSeek deployments")
+    return len(healthy)
+
+
+async def _verify_litellm_deployments(
+    token: SecretStr,
+    *,
+    timeout_seconds: int,
+) -> int:
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(float(timeout_seconds)),
+            trust_env=False,
+        ) as client:
+            response = await client.get(
+                _LITELLM_HEALTH_URL,
+                headers={
+                    "Authorization": (
+                        f"Bearer {token.get_secret_value()}"
+                    )
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        raise RuntimeError(
+            "LiteLLM deployment health check failed"
+        ) from None
+    return _require_healthy_litellm_payload(payload)
 
 
 def _owner_id(index: int) -> str:
@@ -244,13 +315,6 @@ def _strategy(index: int) -> str:
     )
 
 
-def _api_key_slot(*, index: int, count: int, key_count: int) -> int:
-    """Assign contiguous, near-even Agent ranges to the supplied keys."""
-    if not 1 <= index <= count or not 1 <= key_count <= count:
-        raise ValueError("invalid official Agent key distribution")
-    return min(((index - 1) * key_count) // count, key_count - 1)
-
-
 async def _ensure_official_users(
     connection: object,
     *,
@@ -396,7 +460,7 @@ async def _activate_pool(
 async def _provision(args: argparse.Namespace) -> dict[str, object]:
     import asyncpg
 
-    api_keys = tuple(_load_api_key(path) for path in args.api_key_file)
+    gateway_token = _load_litellm_token(args.litellm_token_file)
     control_database_url = _required_environment("ADX_HOSTED_CONTROL_DATABASE_URL")
     operator_database_url = _required_environment("ADX_OFFICIAL_BOOTSTRAP_DATABASE_URL")
 
@@ -407,6 +471,10 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
     repository = PostgresHostedAgentControlRepository(control_database_url)
     secret_writer = build_production_secret_writer(control_database_url)
     try:
+        await _verify_litellm_deployments(
+            gateway_token,
+            timeout_seconds=args.validation_timeout_seconds,
+        )
         await repository.initialize()
         await initialize_secret_port(secret_writer)
         await _ensure_official_users(
@@ -414,7 +482,7 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
             count=args.count,
         )
 
-        registry = build_production_capability_registry()
+        registry = build_production_capability_registry(include_official=True)
         credential_service = CredentialIngressService(
             repository,
             secret_writer=secret_writer,
@@ -432,19 +500,15 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
         provisioned: list[ProvisionedOfficialAgent] = []
         for index in range(1, args.count + 1):
             owner_user_id = _owner_id(index)
-            api_key = api_keys[
-                _api_key_slot(
-                    index=index,
-                    count=args.count,
-                    key_count=len(api_keys),
-                )
-            ]
             credential = await credential_service.create_credential(
                 owner_user_id=owner_user_id,
                 request=CredentialIngressRequest(
-                    provider_id="deepseek",
-                    api_key=api_key,
-                    idempotency_key=(f"official-deepseek-credential-{index:03d}-v1"),
+                    provider_id="official-deepseek",
+                    api_key=gateway_token,
+                    idempotency_key=(
+                        "official-litellm-credential-"
+                        f"{index:03d}-{args.config_version}"
+                    ),
                 ),
             )
             agent = await agent_service.create_hosted_agent(
@@ -452,11 +516,14 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
                 request=HostedAgentCreateRequest(
                     display_name=f"Arena Official {index:02d}",
                     credential_id=credential.credential_id,
-                    provider_id="deepseek",
+                    provider_id="official-deepseek",
                     model_id=args.model,
                     thinking_enabled=args.thinking,
                     strategy_instructions=_strategy(index),
-                    idempotency_key=(f"official-deepseek-agent-{index:03d}-v1"),
+                    idempotency_key=(
+                        "official-litellm-agent-"
+                        f"{index:03d}-{args.config_version}"
+                    ),
                 ),
             )
             provisioned.append(
@@ -483,11 +550,13 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
                     "degraded",
                     "disabled",
                 }:
-                    raise RuntimeError("DeepSeek credential validation did not succeed")
+                    raise RuntimeError(
+                        "LiteLLM gateway validation did not succeed"
+                    )
             if pending:
                 await asyncio.sleep(1)
         if pending:
-            raise RuntimeError("timed out waiting for DeepSeek credential validation")
+            raise RuntimeError("timed out waiting for LiteLLM gateway validation")
 
         if args.activate:
             await _activate_pool(
@@ -498,16 +567,17 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
 
         return {
             "status": "ready",
-            "provider": "deepseek",
+            "provider": "official-deepseek",
             "model": args.model,
             "agentCount": len(provisioned),
-            "credentialKeyCount": len(api_keys),
+            "gateway": "litellm",
+            "configVersion": args.config_version,
             "poolActivated": args.activate,
             "replacedEnabledPool": (args.activate and args.replace_enabled_pool),
             "agentIds": [agent.agent_id for agent in provisioned],
         }
     finally:
-        api_keys = tuple(SecretStr("") for _ in api_keys)
+        gateway_token = SecretStr("")
         await close_secret_port(secret_writer)
         await repository.close()
         await operator_connection.close()
@@ -516,22 +586,21 @@ async def _provision(args: argparse.Namespace) -> dict[str, object]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Provision validated DeepSeek Hosted Agents into the explicit "
-            "Arena 402 official pool."
+            "Provision validated LiteLLM-backed DeepSeek Hosted Agents into "
+            "the explicit Arena 402 official pool."
         )
     )
     parser.add_argument(
-        "--api-key-file",
+        "--litellm-token-file",
         type=Path,
-        action="append",
         required=True,
         help=(
-            "UTF-8 file containing only one DeepSeek API key. Repeat the "
-            "flag to distribute contiguous Agent ranges across multiple keys."
+            "UTF-8 file containing only the internal LiteLLM gateway token."
         ),
     )
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--config-version", default="v1")
     parser.add_argument("--thinking", action="store_true")
     parser.add_argument("--activate", action="store_true")
     parser.add_argument("--replace-enabled-pool", action="store_true")
@@ -547,8 +616,8 @@ def main() -> int:
     args = _parser().parse_args()
     if not 1 <= args.count <= 100:
         raise SystemExit("--count must be between 1 and 100")
-    if len(args.api_key_file) > args.count:
-        raise SystemExit("--api-key-file cannot be repeated more than --count")
+    if not _CONFIG_VERSION_PATTERN.fullmatch(args.config_version):
+        raise SystemExit("--config-version must match v<positive integer>")
     if not 30 <= args.validation_timeout_seconds <= 3600:
         raise SystemExit("--validation-timeout-seconds must be between 30 and 3600")
     try:
