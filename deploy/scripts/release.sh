@@ -289,10 +289,9 @@ compose() {
 }
 
 if [ "${refresh_official_strategies}" = "true" ]; then
-  compose --profile ops build official-agent-bootstrap
+  compose --profile ops build official-agent-strategy-refresh
   compose --profile ops run --rm --no-deps \
-    official-agent-bootstrap \
-    python -m scripts.refresh_official_agent_strategies
+    official-agent-strategy-refresh
   echo "Official Agent strategies refreshed."
 fi
 

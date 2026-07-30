@@ -207,7 +207,7 @@ def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> N
         "/run/secrets/arena402/hosted-master.key"
     ) == 5
     bootstrap = compose.split("  official-agent-bootstrap:", 1)[1].split(
-        "\n  arena-worker:", 1
+        "\n  official-agent-strategy-refresh:", 1
     )[0]
     assert "profiles:\n      - ops" in bootstrap
     assert "- scripts.bootstrap_official_agent_pool" in bootstrap
@@ -225,6 +225,13 @@ def test_hosted_master_key_is_mounted_only_into_approved_secret_processes() -> N
         "    depends_on:", 1
     )[0]
     assert "ADX_OFFICIAL_DEEPSEEK" not in bootstrap_environment
+    strategy_refresh = compose.split(
+        "  official-agent-strategy-refresh:", 1
+    )[1].split("\n  arena-worker:", 1)[0]
+    assert "- scripts.refresh_official_agent_strategies" in strategy_refresh
+    assert "litellm-token.key" not in strategy_refresh
+    assert "target: /run/secrets/arena402" not in strategy_refresh
+    assert "ADX_HOSTED_MASTER_KEY_FILE" not in strategy_refresh
     assert (
         "COPY --chown=adx:adx scripts/bootstrap_official_agent_pool.py "
         "./scripts/bootstrap_official_agent_pool.py"

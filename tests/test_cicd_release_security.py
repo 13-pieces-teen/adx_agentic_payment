@@ -128,9 +128,7 @@ def test_release_refreshes_official_strategies_after_runtime_deploy() -> None:
     assert "--refresh-official-strategies" in WORKFLOW
     assert "--refresh-official-strategies" in RELEASE
     deploy_index = RELEASE.index("sh deploy/scripts/deploy.sh")
-    refresh_index = RELEASE.index(
-        "scripts.refresh_official_agent_strategies"
-    )
+    refresh_index = RELEASE.index("official-agent-strategy-refresh")
     health_index = RELEASE.index('health_url="${public_api_url%/}/api/health"')
     assert deploy_index < refresh_index < health_index
 

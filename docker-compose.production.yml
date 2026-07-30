@@ -578,6 +578,35 @@ services:
     mem_limit: 256m
     logging: *default-logging
 
+  official-agent-strategy-refresh:
+    profiles:
+      - ops
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    init: true
+    command:
+      - python
+      - -m
+      - scripts.refresh_official_agent_strategies
+    environment:
+      ADX_HOSTED_CONTROL_DATABASE_URL: postgresql://adx_api_login:${ADX_API_DATABASE_PASSWORD:?Set ADX_API_DATABASE_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      ADX_OFFICIAL_BOOTSTRAP_DATABASE_URL: postgresql://${POSTGRES_USER:-adx}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-adx}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cpus: 0.20
+    mem_limit: 256m
+    logging: *default-logging
+
   arena-worker:
     profiles:
       - arena
