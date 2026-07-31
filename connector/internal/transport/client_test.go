@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/adx-agentic-payment/adx/connector/internal/driver"
+	"github.com/adx-agentic-payment/adx/connector/internal/mcpclient"
 	"github.com/adx-agentic-payment/adx/connector/internal/protocol"
 	"github.com/adx-agentic-payment/adx/connector/internal/store"
 	"github.com/adx-agentic-payment/adx/connector/internal/supervisor"
@@ -41,6 +42,49 @@ type faultReceiptStore struct {
 	saveCalls  int
 	failSaveAt int
 	failLookup bool
+}
+
+type fakeArenaMCPClient struct {
+	syncBindings []mcpclient.BindingRef
+	claims       []mcpclient.TaskAvailable
+	syncPages    []mcpclient.SyncPage
+}
+
+func (f *fakeArenaMCPClient) Claim(
+	_ context.Context,
+	wake mcpclient.TaskAvailable,
+) (mcpclient.Claim, error) {
+	f.claims = append(f.claims, wake)
+	return mcpclient.Claim{}, &mcpclient.ToolError{Message: "task already leased"}
+}
+
+func (f *fakeArenaMCPClient) Submit(
+	context.Context,
+	protocol.AgentTaskResultEnvelope,
+) (mcpclient.SubmissionReceipt, error) {
+	panic("unexpected Submit call")
+}
+
+func (f *fakeArenaMCPClient) Release(
+	context.Context,
+	mcpclient.TaskAvailable,
+) error {
+	panic("unexpected Release call")
+}
+
+func (f *fakeArenaMCPClient) Sync(
+	_ context.Context,
+	binding mcpclient.BindingRef,
+	_ *string,
+	_ int,
+) (mcpclient.SyncPage, error) {
+	f.syncBindings = append(f.syncBindings, binding)
+	if len(f.syncPages) == 0 {
+		return mcpclient.SyncPage{}, nil
+	}
+	page := f.syncPages[0]
+	f.syncPages = f.syncPages[1:]
+	return page, nil
 }
 
 func (s *faultReceiptStore) LookupReceipt(key string) (protocol.CommandAck, bool, error) {
@@ -89,6 +133,83 @@ func TestHandleIncomingAcceptsGatewayWelcomeAndGenericAck(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s should be accepted: %v", messageType, err)
 		}
+	}
+}
+
+func TestMCPHelloSnapshotAndGatewaySequenceGapTriggerBoundedSync(t *testing.T) {
+	deadline := time.Now().Add(time.Minute).UTC()
+	fakeMCP := &fakeArenaMCPClient{
+		syncPages: []mcpclient.SyncPage{
+			{
+				Tasks: []mcpclient.TaskHint{
+					{
+						TaskID:       "task-sync-1",
+						BindingID:    "binding-1",
+						BindingEpoch: 7,
+						DeadlineAt:   deadline,
+						Status:       "queued",
+					},
+				},
+			},
+			{},
+		},
+	}
+	var logs bytes.Buffer
+	client := &Client{
+		config: Config{
+			Credentials:   store.Credentials{DeviceID: "device-1"},
+			TaskTransport: "mcp",
+		},
+		mcp:         fakeMCP,
+		mcpBindings: make(map[string]mcpclient.BindingRef),
+		logger:      log.New(&logs, "", 0),
+	}
+	helloAck := protocol.Envelope{
+		ProtocolVersion: protocol.Version,
+		Type:            messageAck,
+		DeviceID:        "device-1",
+		Payload: json.RawMessage(
+			`{"mcp_bindings":[{"binding_id":"binding-1","binding_epoch":7}]}`,
+		),
+	}
+	if err := client.handleIncoming(
+		context.Background(),
+		nil,
+		helloAck,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(fakeMCP.syncBindings) != 1 ||
+		fakeMCP.syncBindings[0].BindingID != "binding-1" {
+		t.Fatalf("hello did not trigger binding sync: %#v", fakeMCP.syncBindings)
+	}
+	if len(fakeMCP.claims) != 1 || fakeMCP.claims[0].TaskID != "task-sync-1" {
+		t.Fatalf("synchronized task was not claimed: %#v", fakeMCP.claims)
+	}
+
+	for _, sequence := range []uint64{1, 3} {
+		if err := client.handleIncoming(
+			context.Background(),
+			nil,
+			protocol.Envelope{
+				ProtocolVersion: protocol.Version,
+				Type:            messageAck,
+				DeviceID:        "device-1",
+				Sequence:        sequence,
+				Payload:         json.RawMessage(`{}`),
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(fakeMCP.syncBindings) != 2 {
+		t.Fatalf(
+			"sequence gap did not trigger one recovery sync: %#v",
+			fakeMCP.syncBindings,
+		)
+	}
+	if !strings.Contains(logs.String(), "sequence gap") {
+		t.Fatalf("sequence gap recovery was not logged: %s", logs.String())
 	}
 }
 

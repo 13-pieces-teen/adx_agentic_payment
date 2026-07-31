@@ -936,6 +936,112 @@ class ConnectorGateway:
             if previous is None or sequence > previous:
                 device["last_inbound_sequence"] = sequence
 
+    async def notify_task_available(
+        self,
+        binding_id: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        required = {
+            "wake_id",
+            "task_id",
+            "binding_id",
+            "binding_epoch",
+            "deadline_at",
+        }
+        if set(payload) != required:
+            raise ConnectorError(422, "Invalid task.available payload")
+        if payload["binding_id"] != binding_id:
+            raise ConnectorError(422, "task.available binding_id mismatch")
+        async with self._lock:
+            binding = self.bindings.get(binding_id)
+            if binding is None:
+                raise ConnectorError(404, "Binding not found")
+            if int(payload["binding_epoch"]) != int(binding["binding_epoch"]):
+                raise ConnectorError(409, "Stale Connector binding epoch")
+            device_id = str(binding["device_id"])
+            device = self._get_device(device_id)
+            self._ensure_not_revoked(device)
+            websocket = self.connections.get(device_id)
+            generation = int(device["_connection_generation"])
+            send_lock = self._send_locks.setdefault(
+                device_id,
+                asyncio.Lock(),
+            )
+        if websocket is None:
+            return False
+        async with send_lock:
+            async with self._lock:
+                device = self._get_device(device_id)
+                if (
+                    self.connections.get(device_id) is not websocket
+                    or int(device["_connection_generation"]) != generation
+                ):
+                    return False
+                device["outbound_sequence"] += 1
+                sequence = int(device["outbound_sequence"])
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "task.available",
+                        "protocol_version": self.protocol_version,
+                        "device_id": device_id,
+                        "sequence": sequence,
+                        "message_id": str(payload["wake_id"]),
+                        "sent_at": iso(utc_now()),
+                        "payload": dict(payload),
+                    }
+                )
+            except Exception:
+                return False
+        async with self._lock:
+            self._append_audit(
+                "arena.task_available_sent",
+                device_id,
+                {
+                    "wake_id": str(payload["wake_id"]),
+                    "task_id": str(payload["task_id"]),
+                    "binding_id": binding_id,
+                    "binding_epoch": int(payload["binding_epoch"]),
+                },
+            )
+        return True
+
+    async def acknowledge_task_available(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        required = {"wake_id", "task_id", "binding_id", "binding_epoch"}
+        if set(payload) != required:
+            raise ConnectorError(
+                422,
+                "Invalid task.available acknowledgement",
+            )
+        async with self._lock:
+            device = self._get_device(device_id)
+            self._ensure_not_revoked(device)
+            self._ensure_connection_generation(device, expected_generation)
+            binding = self.bindings.get(str(payload["binding_id"]))
+            if binding is None or binding["device_id"] != device_id:
+                raise ConnectorError(403, "Wake binding does not belong to device")
+            if int(payload["binding_epoch"]) != int(binding["binding_epoch"]):
+                raise ConnectorError(409, "Stale Connector binding epoch")
+            self._append_audit(
+                "arena.task_available_received",
+                device_id,
+                {
+                    "wake_id": str(payload["wake_id"]),
+                    "task_id": str(payload["task_id"]),
+                    "binding_id": str(payload["binding_id"]),
+                    "binding_epoch": int(payload["binding_epoch"]),
+                },
+            )
+            return {
+                "accepted": True,
+                "wake_id": str(payload["wake_id"]),
+            }
+
     async def acknowledge_command(
         self,
         device_id: str,

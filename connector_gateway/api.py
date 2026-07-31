@@ -607,11 +607,19 @@ async def _handle_envelope(
     connection_generation: int,
 ):
     if envelope.type == "hello":
-        return await service.apply_hello(
+        response = await service.apply_hello(
             device_id,
             envelope.payload,
             expected_generation=connection_generation,
         )
+        response["mcp_bindings"] = [
+            {
+                "binding_id": str(binding["binding_id"]),
+                "binding_epoch": int(binding["binding_epoch"]),
+            }
+            for binding in await service.list_bindings(device_id)
+        ]
+        return response
     if envelope.type == "heartbeat":
         await service.heartbeat(
             device_id,
@@ -645,6 +653,12 @@ async def _handle_envelope(
         )
     if envelope.type == "agent_task.result":
         return await service.submit_agent_task_result(
+            device_id,
+            envelope.payload,
+            expected_generation=connection_generation,
+        )
+    if envelope.type == "task.available.ack":
+        return await service.acknowledge_task_available(
             device_id,
             envelope.payload,
             expected_generation=connection_generation,

@@ -13,7 +13,7 @@ from .ingress_security import (
     validate_runtime_result_identifiers,
 )
 from .postgres_repository import PostgresArenaCoreRepository
-from .models import ConnectorTaskClaim
+from .models import ConnectorTaskClaim, ConnectorTaskRoute
 from .public_output_policy import (
     PUBLIC_OUTPUT_POLICY_VERSION,
     PublicOutputDecision,
@@ -42,6 +42,7 @@ __all__ = [
     "ConnectorAgentRegistration",
     "ConnectorRegistrationError",
     "ConnectorTaskClaim",
+    "ConnectorTaskRoute",
     "ArenaDeadlineFinalizer",
     "ArenaIdempotencyConflictError",
     "ArenaIngressSecurityError",

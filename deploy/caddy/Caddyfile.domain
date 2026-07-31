@@ -36,7 +36,7 @@
 		file_server
 	}
 
-	@connector path /api/connectors* /api/auth*
+	@connector path /api/connectors* /api/auth* /mcp
 	handle @connector {
 		reverse_proxy connector-api:8000 {
 			health_uri /api/ready

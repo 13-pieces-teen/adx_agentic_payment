@@ -26,6 +26,11 @@ from arena_core import (
     PostgresArenaParticipationRepository,
     PostgresConnectorArenaRegistrar,
 )
+from arena_mcp import (
+    ArenaTaskBroker,
+    ExecutionTokenCodec,
+    create_arena_mcp_router,
+)
 from arena_game import (
     EvmJsonRpcConfirmationReader,
     PawnhouseGameOrchestrator,
@@ -51,6 +56,7 @@ from arena_wallets import (
     load_wallet_service_from_env,
 )
 from connector_gateway import (
+    ConnectorArenaTaskNotifier,
     ConnectorArenaTaskDispatcher,
     ConnectorGateway,
     ProductionConnectorBundle,
@@ -211,6 +217,13 @@ def _pawnhouse_core_requested() -> bool:
     ).strip().lower() in {"1", "true", "yes"}
 
 
+def _arena_mcp_requested() -> bool:
+    return os.getenv(
+        "ADX_ARENA_MCP_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+
+
 def _allowed_origins(production: bool) -> list[str]:
     configured = [
         value.strip().rstrip("/")
@@ -242,6 +255,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     environment = os.getenv("ADX_ENV", "").strip().lower()
     pawnhouse_dev_enabled = _pawnhouse_dev_requested()
     pawnhouse_core_enabled = _pawnhouse_core_requested() or pawnhouse_dev_enabled
+    arena_mcp_enabled = _arena_mcp_requested()
     if pawnhouse_dev_enabled and environment != "development":
         raise RuntimeError(
             "ADX_ARENA_DEV_CONTROL is allowed only with ADX_ENV=development"
@@ -249,6 +263,15 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     if _hosted_local_dev_requested() and not _hosted_agents_requested():
         raise RuntimeError(
             "ADX_HOSTED_LOCAL_DEV requires ADX_HOSTED_AGENTS_ENABLED=true"
+        )
+    if arena_mcp_enabled and (
+        not production_connector
+        or not connector_surface_enabled
+        or not pawnhouse_core_enabled
+    ):
+        raise RuntimeError(
+            "ADX_ARENA_MCP_ENABLED requires the production Connector surface "
+            "and ADX_ARENA_CORE_ENABLED=true"
         )
 
     connector_bundle: ProductionConnectorBundle | None = None
@@ -359,6 +382,10 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
     connector_result_core: PostgresArenaCoreRepository | None = None
     connector_task_dispatcher: ConnectorArenaTaskDispatcher | None = None
     connector_task_dispatcher_task: asyncio.Task[None] | None = None
+    connector_task_notifier: ConnectorArenaTaskNotifier | None = None
+    connector_task_notifier_task: asyncio.Task[None] | None = None
+    arena_mcp_broker: ArenaTaskBroker | None = None
+    arena_mcp_token_codec: ExecutionTokenCodec | None = None
     pawnhouse_coordinator: PawnhouseAgentRuntimeCoordinator | None = None
     pawnhouse_coordinator_task: asyncio.Task[None] | None = None
     pawnhouse_orchestrator: PawnhouseGameOrchestrator | None = None
@@ -385,10 +412,26 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             connector_bundle.service.bind_agent_task_result_sink(
                 ArenaResultSink(connector_result_core)
             )
-            connector_task_dispatcher = ConnectorArenaTaskDispatcher(
-                repository=connector_result_core,
-                gateway=connector_bundle.service,
-            )
+            if arena_mcp_enabled:
+                token_secret = os.getenv(
+                    "ADX_ARENA_MCP_TOKEN_SECRET",
+                    "",
+                ).strip()
+                arena_mcp_token_codec = ExecutionTokenCodec(token_secret)
+                arena_mcp_broker = ArenaTaskBroker(
+                    repository=connector_result_core,
+                    result_sink=ArenaResultSink(connector_result_core),
+                    gateway=connector_bundle.service,
+                )
+                connector_task_notifier = ConnectorArenaTaskNotifier(
+                    repository=connector_result_core,
+                    gateway=connector_bundle.service,
+                )
+            else:
+                connector_task_dispatcher = ConnectorArenaTaskDispatcher(
+                    repository=connector_result_core,
+                    gateway=connector_bundle.service,
+                )
 
     x402_coordinator: X402SettlementExecutor | None = None
     x402_public_api_url = ""
@@ -514,12 +557,18 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         nonlocal pawnhouse_coordinator_task
         nonlocal pawnhouse_orchestrator_task
         nonlocal connector_task_dispatcher_task
+        nonlocal connector_task_notifier_task
         if connector_task_dispatcher is not None:
             connector_task_dispatcher_task = asyncio.create_task(
                 connector_task_dispatcher.run_forever(
                     poll_seconds=0.25
                 ),
                 name="arena-connector-task-dispatcher",
+            )
+        if connector_task_notifier is not None:
+            connector_task_notifier_task = asyncio.create_task(
+                connector_task_notifier.run_forever(poll_seconds=0.25),
+                name="arena-connector-task-notifier",
             )
         if pawnhouse_orchestrator is not None:
             pawnhouse_orchestrator_task = asyncio.create_task(
@@ -540,6 +589,11 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 if connector_task_dispatcher_task is not None:
                     await connector_task_dispatcher_task
                     connector_task_dispatcher_task = None
+            if connector_task_notifier is not None:
+                connector_task_notifier.stop()
+                if connector_task_notifier_task is not None:
+                    await connector_task_notifier_task
+                    connector_task_notifier_task = None
             if pawnhouse_orchestrator is not None:
                 pawnhouse_orchestrator.stop()
                 if pawnhouse_orchestrator_task is not None:
@@ -579,11 +633,12 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    allowed_origins = _allowed_origins(production_connector)
     api_metrics = ApiMetrics()
     app.add_middleware(ApiMetricsMiddleware, metrics=api_metrics)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_allowed_origins(production_connector),
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
@@ -592,6 +647,9 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "Content-Type",
             "Idempotency-Key",
             "Last-Event-ID",
+            "MCP-Protocol-Version",
+            "Mcp-Method",
+            "Mcp-Name",
             "X-CSRF-Token",
             "X-Arena-Dev-Token",
             "PAYMENT-SIGNATURE",
@@ -616,6 +674,19 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
         _mount_connector_gateway(app, connector_demo_enabled)
         app.state.connector_gateway_mode = (
             "demo" if app.state.connector_gateway_enabled else "off"
+        )
+
+    app.state.arena_mcp_enabled = arena_mcp_broker is not None
+    if arena_mcp_broker is not None:
+        assert arena_mcp_token_codec is not None
+        assert connector_bundle is not None
+        app.include_router(
+            create_arena_mcp_router(
+                broker=arena_mcp_broker,
+                token_codec=arena_mcp_token_codec,
+                gateway=connector_bundle.service,
+                allowed_origins={origin.rstrip("/") for origin in allowed_origins},
+            )
         )
 
     if wallet_repository is not None:
@@ -775,6 +846,7 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             "arena_participation": arena_participation is not None,
             "arena_payments": payment_repository is not None,
             "arena_memorial": memorial_repository is not None,
+            "arena_mcp": app.state.arena_mcp_enabled,
             "pawnhouse": app.state.pawnhouse_mode,
         }
 

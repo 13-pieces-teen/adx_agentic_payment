@@ -7,6 +7,12 @@ connection, reports a multi-runtime inventory, and starts only Connector-owned
 Claude Code or Codex processes. It does not attach to or take over terminals
 that the user already opened.
 
+Task transport defaults to the existing WSS path. A feature-gated
+`wss + stateless MCP` mode is also implemented: WSS keeps Device presence,
+heartbeats, Session control, and safe `task.available` wake hints, while MCP
+Streamable HTTP performs the authoritative task claim, result submission, and
+lease release. The two transports do not create separate Arena task models.
+
 The default policy is detection-only: the Connector can discover runtimes and
 answer `runtime.probe`, but it does not start an Agent task until the user opts
 in locally for a specific runtime.
@@ -31,6 +37,42 @@ Hosted/Connector mixed rounds. Each task still returns through the Arena
 Result Sink and Deadline Finalizer. A real CC/Codex full-game and production
 reconnect E2E has not yet been accepted, so this is an implemented backend path
 rather than production acceptance evidence.
+
+The stateless MCP slice is also implementation-complete behind
+`ADX_ARENA_MCP_ENABLED=false`. It includes short-lived Device/Binding/epoch
+execution tokens, PostgreSQL lease fencing, the Arena Result Sink, and these
+tools:
+
+- `arena_claim_agent_task`
+- `arena_get_agent_task_status`
+- `arena_submit_agent_task_result`
+- `arena_release_agent_task`
+- `arena_sync_agent_tasks`
+
+The current `adx-connector` consumes WSS wake hints and uses MCP for
+claim/submit/release when `ADX_CONNECTOR_TASK_TRANSPORT=mcp`. The Gateway hello
+acknowledgement includes only the authenticated Device's minimal
+`binding_id + binding_epoch` references. The Connector remembers those frozen
+routes and runs bounded cursor sync after startup/reconnect and whenever it
+detects a Gateway sequence gap. Periodic WSS wake replay remains a low-latency
+fallback rather than the recovery authority.
+
+An isolated Docker protocol E2E was accepted on 2026-07-31. It covers fresh
+migrations, login/pairing/approval, WSS hello and `task.available`, a
+Connector-owned managed Session, Device token exchange, MCP discover/list,
+sync/claim/submit/status, the PostgreSQL Result Sink, and zero chain writes.
+The harness emulates the managed Runtime control frames; a real Claude
+Code/Codex full-game and production reconnect E2E are still pending.
+
+Run that isolated test from the repository root. It uses project
+`arena402-mcp-e2e`, loopback ports `18000`/`55433`, and removes only its own
+test volume:
+
+```sh
+docker compose -p arena402-mcp-e2e -f docker-compose.local.yml -f tests/docker-compose.mcp-e2e.yml up --build -d postgres migrate provision-db-roles api
+python tests/mcp_docker_e2e.py
+docker compose -p arena402-mcp-e2e -f docker-compose.local.yml -f tests/docker-compose.mcp-e2e.yml down -v --remove-orphans
+```
 
 The authority boundaries remain:
 
@@ -226,6 +268,7 @@ types are:
 - `command.ack`
 - `runtime.event`
 - `agent_task.result`
+- `task.available.ack`
 
 The only accepted platform message with an operational effect is `command`,
 whose `action` must be one of:
@@ -242,6 +285,13 @@ The Gateway can also acknowledge a committed terminal Arena result with
 record before it is deleted. This acknowledgement affects only the local
 durable result outbox; it is not an Arena business-action or payment
 acknowledgement.
+
+When MCP task transport is enabled, the Gateway may send `task.available`.
+Its payload contains only `wake_id`, `task_id`, frozen `binding_id + epoch`,
+and the Arena deadline. The Connector returns `task.available.ack`, exchanges
+its Device credential for a short-lived execution token, and then claims the
+task over `/mcp`. Neither the wake nor its acknowledgement leases the task or
+proves execution.
 
 All other actions, including shell execution, are rejected. Commands carry an
 expiry, idempotency key, and binding epoch. Receipts survive restarts, so a

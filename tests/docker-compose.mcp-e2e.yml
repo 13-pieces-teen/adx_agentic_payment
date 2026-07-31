@@ -1,0 +1,14 @@
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:55433:5432"
+
+  api:
+    ports: !override
+      - "127.0.0.1:18000:8000"
+    environment:
+      # Isolated test-only secret. Never reuse it outside this disposable stack.
+      ADX_ARENA_MCP_ENABLED: "true"
+      ADX_ARENA_MCP_TOKEN_SECRET: "arena402-mcp-docker-e2e-secret-32-bytes-minimum"
+      ADX_ARENA_PAYMENTS_ENABLED: "false"
+      ADX_ARENA_MEMORIAL_ENABLED: "false"

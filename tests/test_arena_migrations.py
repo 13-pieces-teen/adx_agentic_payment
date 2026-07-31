@@ -323,12 +323,18 @@ def test_all_scope_uses_one_global_lock_and_applies_connector_before_arena(
         if not arguments
         and "CREATE TABLE IF NOT EXISTS adx_schema_migrations" not in query
         and "pg_advisory_" not in query
+        and query != "RESET ROLE"
     ]
     assert applied_sql == [
         f"SELECT '{connector.name}';",
         f"SELECT '{arena.name}';",
         f"SELECT '{hosted_api.name}';",
     ]
+    assert [
+        query
+        for query, arguments in connection.executions
+        if query == "RESET ROLE" and not arguments
+    ] == ["RESET ROLE", "RESET ROLE", "RESET ROLE"]
 
 
 def test_repeated_migration_is_skipped_and_checksum_drift_fails(

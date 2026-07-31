@@ -453,6 +453,28 @@ class PersistentConnectorGateway(ConnectorGateway):
         await self._persist_current(command_ids=command_ids)
         return result
 
+    async def notify_task_available(
+        self,
+        binding_id: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        await self.initialize()
+        result = await super().notify_task_available(binding_id, payload)
+        if result:
+            binding = next(
+                (
+                    item
+                    for item in await self.list_bindings()
+                    if item["binding_id"] == binding_id
+                ),
+                None,
+            )
+            if binding is not None:
+                await self._persist_current(
+                    device_ids={str(binding["device_id"])}
+                )
+        return result
+
     async def observe_inbound_sequence(
         self,
         device_id: str,
@@ -462,6 +484,21 @@ class PersistentConnectorGateway(ConnectorGateway):
         await self.initialize()
         await super().observe_inbound_sequence(device_id, sequence, expected_generation)
         await self._persist_current(device_ids={device_id})
+
+    async def acknowledge_task_available(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        await self.initialize()
+        result = await super().acknowledge_task_available(
+            device_id,
+            payload,
+            expected_generation,
+        )
+        await self._persist_current(device_ids={device_id})
+        return result
 
     async def acknowledge_command(
         self,

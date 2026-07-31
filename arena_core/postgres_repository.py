@@ -35,6 +35,7 @@ from .models import (
     ArenaResultRecord,
     ArenaTaskRecord,
     ConnectorTaskClaim,
+    ConnectorTaskRoute,
     ResultApplyStatus,
     ResultSubmissionReceipt,
     SubmissionDisposition,
@@ -182,6 +183,19 @@ def _task_record(row: Any) -> ArenaTaskRecord:
         completed_at=_optional_timestamp(
             data["completed_at"], field="task completed_at"
         ),
+    )
+
+
+def _connector_task_route(row: Any) -> ConnectorTaskRoute:
+    data = _mapping(row)
+    record = _task_record(data)
+    return ConnectorTaskRoute(
+        task=record.task,
+        connector_binding_id=str(data["connector_binding_id"]),
+        connector_binding_epoch=int(data["connector_binding_epoch"]),
+        status=record.status,
+        leased_by=record.leased_by,
+        lease_expires_at=record.lease_expires_at,
     )
 
 
@@ -629,6 +643,232 @@ class PostgresArenaCoreRepository:
             )
             for row in rows
         )
+
+    async def claim_connector_task(
+        self,
+        *,
+        task_id: str,
+        connector_binding_id: str,
+        connector_binding_epoch: int,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> ConnectorTaskRoute | None:
+        if not task_id or len(task_id) > 256:
+            raise ValueError("Connector task_id is invalid")
+        if not connector_binding_id or len(connector_binding_id) > 256:
+            raise ValueError("Connector binding_id is invalid")
+        if connector_binding_epoch < 1:
+            raise ValueError("Connector binding_epoch must be positive")
+        if not worker_id or len(worker_id) > 200:
+            raise ValueError("Connector task worker_id is invalid")
+        if lease_seconds < 1 or lease_seconds > 600:
+            raise ValueError("Connector task lease must be between 1 and 600 seconds")
+        row = await self._require_pool().fetchrow(
+            f"""
+            WITH candidate AS (
+                SELECT t.task_id
+                FROM arena_agent_tasks AS t
+                JOIN arena_runtime_bindings AS b
+                  ON b.runtime_binding_id = t.runtime_binding_id
+                WHERE t.task_id = $1
+                  AND t.deadline_at > clock_timestamp()
+                  AND b.runtime_kind = 'connector'
+                  AND b.route_status = 'ready'
+                  AND b.disabled_at IS NULL
+                  AND b.connector_binding_id = $2
+                  AND b.connector_binding_epoch = $3
+                  AND (
+                      t.status = 'queued'
+                      OR (
+                          t.status = 'leased'
+                          AND (
+                              t.leased_by = $4
+                              OR t.lease_expires_at <= clock_timestamp()
+                          )
+                      )
+                  )
+                FOR UPDATE OF t
+            ),
+            updated AS (
+                UPDATE arena_agent_tasks AS t
+                SET status = 'leased',
+                    leased_by = $4,
+                    lease_expires_at = CASE
+                        WHEN t.leased_by = $4
+                         AND t.lease_expires_at > clock_timestamp()
+                        THEN t.lease_expires_at
+                        ELSE clock_timestamp() + $5 * interval '1 second'
+                    END
+                FROM candidate AS c
+                WHERE t.task_id = c.task_id
+                RETURNING t.*
+            ),
+            event_rows AS (
+                INSERT INTO arena_agent_task_events (
+                    event_id,
+                    task_id,
+                    event_type,
+                    created_at,
+                    safe_metadata
+                )
+                SELECT
+                    u.task_id || ':event:mcp-leased:'
+                        || txid_current()::text,
+                    u.task_id,
+                    'leased',
+                    clock_timestamp(),
+                    jsonb_build_object(
+                        'transport', 'mcp',
+                        'worker_id', $4
+                    )
+                FROM updated AS u
+                ON CONFLICT (event_id) DO NOTHING
+                RETURNING task_id
+            )
+            SELECT
+                u.*,
+                b.connector_binding_id,
+                b.connector_binding_epoch
+            FROM updated AS u
+            JOIN arena_runtime_bindings AS b
+              ON b.runtime_binding_id = u.runtime_binding_id
+            """,
+            task_id,
+            connector_binding_id,
+            connector_binding_epoch,
+            worker_id,
+            lease_seconds,
+        )
+        return None if row is None else _connector_task_route(row)
+
+    async def get_connector_task_route(
+        self,
+        *,
+        task_id: str,
+        connector_binding_id: str,
+        connector_binding_epoch: int,
+    ) -> ConnectorTaskRoute | None:
+        if not task_id or len(task_id) > 256:
+            raise ValueError("Connector task_id is invalid")
+        row = await self._require_pool().fetchrow(
+            f"""
+            SELECT
+                t.*,
+                b.connector_binding_id,
+                b.connector_binding_epoch
+            FROM arena_agent_tasks AS t
+            JOIN arena_runtime_bindings AS b
+              ON b.runtime_binding_id = t.runtime_binding_id
+            WHERE t.task_id = $1
+              AND b.runtime_kind = 'connector'
+              AND b.connector_binding_id = $2
+              AND b.connector_binding_epoch = $3
+            """,
+            task_id,
+            connector_binding_id,
+            connector_binding_epoch,
+        )
+        return None if row is None else _connector_task_route(row)
+
+    async def list_connector_task_routes(
+        self,
+        *,
+        connector_binding_id: str,
+        connector_binding_epoch: int,
+        after_task_id: str | None,
+        limit: int,
+    ) -> tuple[ConnectorTaskRoute, ...]:
+        if not connector_binding_id or len(connector_binding_id) > 256:
+            raise ValueError("Connector binding_id is invalid")
+        if connector_binding_epoch < 1:
+            raise ValueError("Connector binding_epoch must be positive")
+        if after_task_id is not None and (
+            not after_task_id or len(after_task_id) > 256
+        ):
+            raise ValueError("Connector task cursor is invalid")
+        if limit < 1 or limit > 51:
+            raise ValueError("Connector task list limit must be between 1 and 51")
+        rows = await self._require_pool().fetch(
+            f"""
+            SELECT
+                t.*,
+                b.connector_binding_id,
+                b.connector_binding_epoch
+            FROM arena_agent_tasks AS t
+            JOIN arena_runtime_bindings AS b
+              ON b.runtime_binding_id = t.runtime_binding_id
+            WHERE b.runtime_kind = 'connector'
+              AND b.route_status = 'ready'
+              AND b.disabled_at IS NULL
+              AND b.connector_binding_id = $1
+              AND b.connector_binding_epoch = $2
+              AND t.deadline_at > clock_timestamp()
+              AND t.status IN ('queued', 'leased')
+              AND ($3::text IS NULL OR t.task_id > $3)
+            ORDER BY t.task_id
+            LIMIT $4
+            """,
+            connector_binding_id,
+            connector_binding_epoch,
+            after_task_id,
+            limit,
+        )
+        return tuple(_connector_task_route(row) for row in rows)
+
+    async def list_connector_task_wakes(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[ConnectorTaskRoute, ...]:
+        if limit < 1 or limit > 100:
+            raise ValueError("Connector wake limit must be between 1 and 100")
+        rows = await self._require_pool().fetch(
+            f"""
+            SELECT
+                t.*,
+                b.connector_binding_id,
+                b.connector_binding_epoch
+            FROM arena_agent_tasks AS t
+            JOIN arena_runtime_bindings AS b
+              ON b.runtime_binding_id = t.runtime_binding_id
+            WHERE b.runtime_kind = 'connector'
+              AND b.route_status = 'ready'
+              AND b.disabled_at IS NULL
+              AND t.deadline_at > clock_timestamp()
+              AND t.status IN ('queued', 'leased')
+            ORDER BY t.deadline_at, t.created_at, t.task_id
+            LIMIT $1
+            """,
+            limit,
+        )
+        return tuple(_connector_task_route(row) for row in rows)
+
+    async def release_connector_task(
+        self,
+        *,
+        task_id: str,
+        worker_id: str,
+    ) -> bool:
+        if not task_id or len(task_id) > 256:
+            raise ValueError("Connector task_id is invalid")
+        if not worker_id or len(worker_id) > 200:
+            raise ValueError("Connector task worker_id is invalid")
+        released = await self._require_pool().fetchval(
+            """
+            UPDATE arena_agent_tasks
+            SET status = 'queued',
+                leased_by = NULL,
+                lease_expires_at = NULL
+            WHERE task_id = $1
+              AND leased_by = $2
+              AND status = 'leased'
+              AND deadline_at > clock_timestamp()
+            RETURNING true
+            """,
+            task_id,
+            worker_id,
+        )
+        return bool(released)
 
     async def defer_connector_task(
         self,

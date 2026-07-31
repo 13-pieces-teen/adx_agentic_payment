@@ -292,6 +292,87 @@ def test_connector_task_claim_freezes_route_and_can_be_deferred():
     asyncio.run(scenario())
 
 
+def test_mcp_connector_task_claim_sync_route_and_release_are_binding_scoped():
+    async def scenario():
+        task, config = _task()
+        leased = _task_row(
+            task,
+            config,
+            status="leased",
+            leased_by="mcp-worker-1",
+            lease_expires_at=DB_TIME + timedelta(seconds=30),
+        )
+        leased.update(
+            {
+                "connector_binding_id": "binding-local-1",
+                "connector_binding_epoch": 9,
+            }
+        )
+
+        def handler(method, sql, args):
+            if method == "fetchrow" and "WITH candidate AS" in sql:
+                assert args == (
+                    task.task_id,
+                    "binding-local-1",
+                    9,
+                    "mcp-worker-1",
+                    30,
+                )
+                assert "b.connector_binding_id = $2" in sql
+                assert "t.leased_by = $4" in sql
+                return leased
+            if method == "fetchrow" and "b.connector_binding_id = $2" in sql:
+                assert args == (task.task_id, "binding-local-1", 9)
+                return leased
+            if method == "fetch" and "t.task_id > $3" in sql:
+                assert args == ("binding-local-1", 9, None, 21)
+                return [leased]
+            if method == "fetch" and "ORDER BY t.deadline_at" in sql:
+                assert args == (100,)
+                return [leased]
+            if method == "fetchval" and "SET status = 'queued'" in sql:
+                assert args == (task.task_id, "mcp-worker-1")
+                return True
+            raise AssertionError((method, sql, args))
+
+        repository = PostgresArenaCoreRepository(
+            "postgresql://unused",
+            pool=FakePool(ScriptedConnection(handler)),
+        )
+        claimed = await repository.claim_connector_task(
+            task_id=task.task_id,
+            connector_binding_id="binding-local-1",
+            connector_binding_epoch=9,
+            worker_id="mcp-worker-1",
+            lease_seconds=30,
+        )
+        routed = await repository.get_connector_task_route(
+            task_id=task.task_id,
+            connector_binding_id="binding-local-1",
+            connector_binding_epoch=9,
+        )
+        synced = await repository.list_connector_task_routes(
+            connector_binding_id="binding-local-1",
+            connector_binding_epoch=9,
+            after_task_id=None,
+            limit=21,
+        )
+        wakes = await repository.list_connector_task_wakes(limit=100)
+        released = await repository.release_connector_task(
+            task_id=task.task_id,
+            worker_id="mcp-worker-1",
+        )
+
+        assert claimed is not None
+        assert routed is not None
+        assert claimed.task == routed.task == task
+        assert synced == (claimed,)
+        assert wakes == (claimed,)
+        assert released is True
+
+    asyncio.run(scenario())
+
+
 def test_create_task_rejects_raw_config_secret_before_sql():
     async def scenario():
         connection = ScriptedConnection(

@@ -189,6 +189,11 @@ func runConnector(arguments []string, commandName string) error {
 	apiBase := flags.String("api-base", "", "deprecated alias for --server")
 	statePath := flags.String("state", defaultState, "connector state file")
 	gatewayOverride := flags.String("gateway", envOr("ADX_CONNECTOR_GATEWAY_URL", ""), "override the paired websocket gateway URL")
+	taskTransport := flags.String(
+		"task-transport",
+		envOr("ADX_CONNECTOR_TASK_TRANSPORT", "wss"),
+		"Arena task transport: wss or mcp",
+	)
 	autoPair := flags.Bool("auto-pair", true, "start device pairing when credentials are missing")
 	heartbeat := flags.Duration("heartbeat", 15*time.Second, "heartbeat interval")
 	inventoryInterval := flags.Duration("inventory-interval", time.Minute, "automatic runtime rescan interval")
@@ -286,6 +291,7 @@ func runConnector(arguments []string, commandName string) error {
 			ConnectorVersion:  connectorVersion,
 			HeartbeatInterval: *heartbeat,
 			InventoryInterval: *inventoryInterval,
+			TaskTransport:     *taskTransport,
 		},
 		fileStore,
 		store.NewFileOutbox(*statePath),
@@ -296,10 +302,11 @@ func runConnector(arguments []string, commandName string) error {
 		return err
 	}
 	fmt.Printf(
-		"Connector %s starting for device %s with %d detected runtime(s); task-enabled runtimes: %s; allowed roots: %s\n",
+		"Connector %s starting for device %s with %d detected runtime(s); task transport: %s; task-enabled runtimes: %s; allowed roots: %s\n",
 		connectorVersion,
 		credentials.DeviceID,
 		len(inventory.Runtimes),
+		strings.ToLower(strings.TrimSpace(*taskTransport)),
 		enabledRuntimeSummary(*enableCodexTasks, *enableClaudeTasks),
 		strings.Join(roots, ", "),
 	)

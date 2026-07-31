@@ -26,6 +26,7 @@ def test_default_surface_exposes_current_capabilities_and_health(monkeypatch):
     monkeypatch.delenv("ADX_ARENA_PAYMENTS_ENABLED", raising=False)
     monkeypatch.delenv("ADX_ARENA_MEMORIAL_ENABLED", raising=False)
     monkeypatch.delenv("ADX_ARENA_DEV_CONTROL", raising=False)
+    monkeypatch.delenv("ADX_ARENA_MCP_ENABLED", raising=False)
 
     client = TestClient(create_app())
     health = client.get("/api/health")
@@ -41,6 +42,7 @@ def test_default_surface_exposes_current_capabilities_and_health(monkeypatch):
         "arena_participation": False,
         "arena_payments": False,
         "arena_memorial": False,
+        "arena_mcp": False,
         "pawnhouse": "off",
     }
     assert ready.status_code == 200

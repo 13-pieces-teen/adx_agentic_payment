@@ -110,6 +110,10 @@ async def migrate(scope: MigrationScope = DEFAULT_SCOPE) -> None:
 
             async with connection.transaction():
                 await connection.execute(executable_sql)
+                # A migration may use SET LOCAL ROLE to constrain its DDL.
+                # Restore the authenticated migration runner before recording
+                # the checksum in the runner-owned metadata table.
+                await connection.execute("RESET ROLE")
                 await connection.execute(
                     """
                     INSERT INTO adx_schema_migrations (migration_name, sha256)

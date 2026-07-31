@@ -176,6 +176,71 @@ def test_connection_setup_failure_is_not_reported_as_replacement():
     assert closed.value.reason == "Connector connection setup failed"
 
 
+def test_hello_ack_includes_only_device_binding_refs_for_mcp_sync():
+    client = TestClient(create_app(connector_demo_enabled=True))
+    _, credential = _enroll(client)
+    device_id = credential["device_id"]
+    service = client.app.state.connector_gateway
+
+    async def prepare_binding():
+        await service.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex CLI",
+                    executable_path="C:\\tools\\codex.exe",
+                    available=True,
+                    task_enabled=True,
+                    authentication_status="configured",
+                    arena_compatible=True,
+                    arena_isolation="read_only_ephemeral_schema",
+                    local_execution_ready=True,
+                )
+            ],
+        )
+        return await service.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            "MCP binding",
+        )
+
+    binding = asyncio.run(prepare_binding())
+    socket_path = f"/api/connectors/ws?device_id={device_id}"
+    with client.websocket_connect(
+        socket_path,
+        headers={"Authorization": f"Device {credential['device_token']}"},
+    ) as socket:
+        assert socket.receive_json()["type"] == "welcome"
+        socket.send_json(
+            {
+                "type": "hello",
+                "message_id": "hello-mcp-sync",
+                "payload": {
+                    "protocol_version": "1.0",
+                    "connector_version": "0.1.0",
+                    "platform": "windows/amd64",
+                    "hostname": "alice-pc",
+                },
+            }
+        )
+        acknowledgement = socket.receive_json()
+
+    assert acknowledgement["type"] == "ack"
+    assert acknowledgement["payload"]["mcp_bindings"] == [
+        {
+            "binding_id": binding["binding_id"],
+            "binding_epoch": binding["binding_epoch"],
+        }
+    ]
+    assert set(acknowledgement["payload"]["mcp_bindings"][0]) == {
+        "binding_id",
+        "binding_epoch",
+    }
+
+
 def test_outbound_socket_inventory_binding_command_and_event_flow():
     client = TestClient(create_app(connector_demo_enabled=True))
     _, credential = _enroll(client)

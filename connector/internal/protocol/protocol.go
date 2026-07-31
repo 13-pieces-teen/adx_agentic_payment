@@ -22,6 +22,8 @@ const (
 	MessageEventAck           = "event.ack"
 	MessageAgentTaskResult    = "agent_task.result"
 	MessageAgentTaskResultAck = "agent_task.result.ack"
+	MessageTaskAvailable      = "task.available"
+	MessageTaskAvailableAck   = "task.available.ack"
 
 	CommandRuntimeProbe  = "runtime.probe"
 	CommandSessionStart  = "session.start"

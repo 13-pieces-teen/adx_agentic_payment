@@ -13,10 +13,12 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/adx-agentic-payment/adx/connector/internal/mcpclient"
 	"github.com/adx-agentic-payment/adx/connector/internal/protocol"
 	"github.com/adx-agentic-payment/adx/connector/internal/store"
 	"github.com/adx-agentic-payment/adx/connector/internal/supervisor"
@@ -28,6 +30,8 @@ const (
 	maxMessageBytes = 1024 * 1024
 	replayWindow    = 64
 	replayBurst     = 8
+	mcpSyncLimit    = 50
+	mcpSyncMaxPages = 4
 )
 
 const (
@@ -100,6 +104,21 @@ type Outbox interface {
 	AckThrough(uint64) error
 }
 
+type ArenaMCPClient interface {
+	Claim(context.Context, mcpclient.TaskAvailable) (mcpclient.Claim, error)
+	Submit(
+		context.Context,
+		protocol.AgentTaskResultEnvelope,
+	) (mcpclient.SubmissionReceipt, error)
+	Release(context.Context, mcpclient.TaskAvailable) error
+	Sync(
+		context.Context,
+		mcpclient.BindingRef,
+		*string,
+		int,
+	) (mcpclient.SyncPage, error)
+}
+
 type Config struct {
 	Credentials       store.Credentials
 	ConnectorVersion  string
@@ -107,6 +126,7 @@ type Config struct {
 	InventoryInterval time.Duration
 	ReconnectMin      time.Duration
 	ReconnectMax      time.Duration
+	TaskTransport     string
 }
 
 type Client struct {
@@ -118,6 +138,10 @@ type Client struct {
 	startedAt        time.Time
 	persistenceMu    sync.RWMutex
 	persistenceFault error
+	mcp              ArenaMCPClient
+	mcpStateMu       sync.Mutex
+	mcpBindings      map[string]mcpclient.BindingRef
+	gatewaySequence  uint64
 }
 
 type eventReplay struct {
@@ -230,6 +254,24 @@ func NewClient(
 	if config.ReconnectMax <= 0 {
 		config.ReconnectMax = 30 * time.Second
 	}
+	config.TaskTransport = strings.ToLower(strings.TrimSpace(config.TaskTransport))
+	if config.TaskTransport == "" {
+		config.TaskTransport = "wss"
+	}
+	if config.TaskTransport != "wss" && config.TaskTransport != "mcp" {
+		return nil, errors.New("task transport must be wss or mcp")
+	}
+	var arenaMCP *mcpclient.Client
+	if config.TaskTransport == "mcp" {
+		configuredMCP, mcpErr := mcpclient.New(
+			config.Credentials,
+			config.ConnectorVersion,
+		)
+		if mcpErr != nil {
+			return nil, mcpErr
+		}
+		arenaMCP = configuredMCP
+	}
 	return &Client{
 		config:     config,
 		state:      state,
@@ -237,6 +279,10 @@ func NewClient(
 		supervisor: processSupervisor,
 		logger:     logger,
 		startedAt:  time.Now().UTC(),
+		mcp:        arenaMCP,
+		mcpBindings: make(
+			map[string]mcpclient.BindingRef,
+		),
 	}, nil
 }
 
@@ -351,6 +397,9 @@ func (c *Client) runConnection(ctx context.Context) error {
 	if err != nil {
 		return c.degradePersistence("load durable command receipts", err)
 	}
+	if c.config.TaskTransport == "mcp" {
+		receipts = wssReceipts(receipts)
+	}
 	taskResults, err := c.state.AgentTaskResults()
 	if err != nil {
 		return c.degradePersistence("load durable AgentTask result outbox", err)
@@ -412,13 +461,19 @@ func (c *Client) runConnection(ctx context.Context) error {
 
 			if resultIndex < len(taskResults) {
 				result := taskResults[resultIndex]
-				if err := c.send(
-					connection,
-					protocol.MessageAgentTaskResult,
-					0,
-					result,
-				); err != nil {
-					return err
+				if c.config.TaskTransport == "mcp" {
+					if err := c.submitMCPResult(ctx, result); err != nil {
+						return err
+					}
+				} else {
+					if err := c.send(
+						connection,
+						protocol.MessageAgentTaskResult,
+						0,
+						result,
+					); err != nil {
+						return err
+					}
 				}
 				resultIndex++
 				sent++
@@ -479,6 +534,16 @@ func (c *Client) runConnection(ctx context.Context) error {
 				return err
 			}
 		case update := <-c.supervisor.Acks():
+			if c.config.TaskTransport == "mcp" &&
+				strings.HasPrefix(update.Command.CommandID, "mcp-task-") {
+				if update.PersistenceError != nil {
+					return c.degradePersistence(
+						"persist terminal MCP task receipt",
+						update.PersistenceError,
+					)
+				}
+				continue
+			}
 			sendErr := c.send(
 				connection,
 				protocol.MessageCommandAck,
@@ -500,13 +565,19 @@ func (c *Client) runConnection(ctx context.Context) error {
 				return sendErr
 			}
 		case result := <-c.supervisor.Results():
-			if err := c.send(
-				connection,
-				protocol.MessageAgentTaskResult,
-				0,
-				result,
-			); err != nil {
-				return err
+			if c.config.TaskTransport == "mcp" {
+				if err := c.submitMCPResult(ctx, result); err != nil {
+					return err
+				}
+			} else {
+				if err := c.send(
+					connection,
+					protocol.MessageAgentTaskResult,
+					0,
+					result,
+				); err != nil {
+					return err
+				}
 			}
 		case <-replayWake:
 		case <-heartbeatTicker.C:
@@ -545,9 +616,40 @@ func (c *Client) handleIncoming(
 	if envelope.DeviceID != "" && envelope.DeviceID != c.config.Credentials.DeviceID {
 		return errors.New("received message for a different device")
 	}
+	if c.config.TaskTransport == "mcp" && envelope.Sequence != 0 {
+		if c.observeGatewaySequence(envelope.Sequence) {
+			c.logger.Printf(
+				"gateway sequence gap detected at %d; synchronizing Arena MCP tasks",
+				envelope.Sequence,
+			)
+			if err := c.syncKnownMCPTasks(ctx, connection); err != nil {
+				return err
+			}
+		}
+	}
 	switch envelope.Type {
-	case messageWelcome, messageAck:
+	case messageWelcome:
 		return nil
+	case messageAck:
+		if c.config.TaskTransport != "mcp" || c.mcp == nil {
+			return nil
+		}
+		var payload struct {
+			Bindings []mcpclient.BindingRef `json:"mcp_bindings"`
+		}
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return fmt.Errorf("decode gateway acknowledgement: %w", err)
+		}
+		if len(payload.Bindings) == 0 {
+			return nil
+		}
+		for _, binding := range payload.Bindings {
+			if err := binding.Validate(); err != nil {
+				return fmt.Errorf("validate MCP binding snapshot: %w", err)
+			}
+			c.rememberMCPBinding(binding)
+		}
+		return c.syncMCPBindings(ctx, connection, payload.Bindings)
 	case messageError:
 		var payload struct {
 			Detail string `json:"detail"`
@@ -609,6 +711,27 @@ func (c *Client) handleIncoming(
 			)
 		}
 		return nil
+	case protocol.MessageTaskAvailable:
+		if c.config.TaskTransport != "mcp" || c.mcp == nil {
+			return errors.New(
+				"received task.available while MCP task transport is disabled",
+			)
+		}
+		var wake mcpclient.TaskAvailable
+		if err := json.Unmarshal(envelope.Payload, &wake); err != nil {
+			return fmt.Errorf("decode task.available: %w", err)
+		}
+		if err := wake.Validate(time.Now().UTC()); err != nil {
+			return err
+		}
+		if wake.BindingID == "" || wake.TaskID == "" {
+			return errors.New("task.available identifiers are required")
+		}
+		c.rememberMCPBinding(mcpclient.BindingRef{
+			BindingID:    wake.BindingID,
+			BindingEpoch: wake.BindingEpoch,
+		})
+		return c.handleMCPTask(ctx, connection, wake, true)
 	case protocol.MessageEventAck:
 		ack, err := decodeEventAck(envelope.Payload)
 		if err != nil {
@@ -639,6 +762,223 @@ func (c *Client) handleIncoming(
 	default:
 		return fmt.Errorf("unsupported server message type %q", envelope.Type)
 	}
+}
+
+func (c *Client) handleMCPTask(
+	ctx context.Context,
+	connection *websocket.Conn,
+	wake mcpclient.TaskAvailable,
+	acknowledgeWake bool,
+) error {
+	if c.mcp == nil {
+		return errors.New("Arena MCP client is not configured")
+	}
+	if acknowledgeWake {
+		if connection == nil {
+			return errors.New("task.available acknowledgement requires WSS")
+		}
+		if err := c.send(
+			connection,
+			protocol.MessageTaskAvailableAck,
+			0,
+			map[string]any{
+				"wake_id":       wake.WakeID,
+				"task_id":       wake.TaskID,
+				"binding_id":    wake.BindingID,
+				"binding_epoch": wake.BindingEpoch,
+			},
+		); err != nil {
+			return err
+		}
+	}
+	claim, err := c.mcp.Claim(ctx, wake)
+	if err != nil {
+		var toolErr *mcpclient.ToolError
+		if errors.As(err, &toolErr) {
+			c.logger.Printf(
+				"Arena MCP claim skipped for task %s: %s",
+				wake.TaskID,
+				toolErr.Message,
+			)
+			return nil
+		}
+		return err
+	}
+	command, err := claim.DecodeCommand()
+	if err != nil {
+		_ = c.mcp.Release(ctx, wake)
+		return err
+	}
+	result := c.supervisor.Handle(ctx, command)
+	if result.PersistenceError != nil {
+		return c.degradePersistence(
+			"persist MCP task command receipt",
+			result.PersistenceError,
+		)
+	}
+	if result.Ack.Status == "rejected" {
+		if err := c.mcp.Release(ctx, wake); err != nil {
+			return fmt.Errorf(
+				"release rejected MCP task %s: %w",
+				wake.TaskID,
+				err,
+			)
+		}
+		c.logger.Printf(
+			"Arena MCP task %s rejected locally: %s",
+			wake.TaskID,
+			result.Ack.Code,
+		)
+	}
+	return nil
+}
+
+func (c *Client) syncKnownMCPTasks(
+	ctx context.Context,
+	connection *websocket.Conn,
+) error {
+	c.mcpStateMu.Lock()
+	bindings := make([]mcpclient.BindingRef, 0, len(c.mcpBindings))
+	for _, binding := range c.mcpBindings {
+		bindings = append(bindings, binding)
+	}
+	c.mcpStateMu.Unlock()
+	return c.syncMCPBindings(ctx, connection, bindings)
+}
+
+func (c *Client) syncMCPBindings(
+	ctx context.Context,
+	connection *websocket.Conn,
+	bindings []mcpclient.BindingRef,
+) error {
+	if c.mcp == nil || len(bindings) == 0 {
+		return nil
+	}
+	sort.Slice(bindings, func(left, right int) bool {
+		return bindings[left].BindingID < bindings[right].BindingID
+	})
+	for _, binding := range bindings {
+		var cursor *string
+		for pageIndex := 0; pageIndex < mcpSyncMaxPages; pageIndex++ {
+			page, err := c.mcp.Sync(
+				ctx,
+				binding,
+				cursor,
+				mcpSyncLimit,
+			)
+			if err != nil {
+				var toolErr *mcpclient.ToolError
+				if errors.As(err, &toolErr) {
+					c.logger.Printf(
+						"Arena MCP sync skipped for binding %s: %s",
+						binding.BindingID,
+						toolErr.Message,
+					)
+					break
+				}
+				return fmt.Errorf(
+					"sync Arena MCP tasks for binding %s: %w",
+					binding.BindingID,
+					err,
+				)
+			}
+			for _, hint := range page.Tasks {
+				wake := mcpclient.TaskAvailable{
+					WakeID:       "sync:" + hint.TaskID,
+					TaskID:       hint.TaskID,
+					BindingID:    hint.BindingID,
+					BindingEpoch: hint.BindingEpoch,
+					DeadlineAt:   hint.DeadlineAt,
+				}
+				if err := wake.Validate(time.Now().UTC()); err != nil {
+					return fmt.Errorf(
+						"validate synchronized Arena task %s: %w",
+						hint.TaskID,
+						err,
+					)
+				}
+				if err := c.handleMCPTask(
+					ctx,
+					connection,
+					wake,
+					false,
+				); err != nil {
+					return err
+				}
+			}
+			if !page.HasMore {
+				break
+			}
+			if page.NextCursor == nil || *page.NextCursor == "" {
+				return errors.New("Arena MCP sync omitted the next cursor")
+			}
+			if cursor != nil && *cursor == *page.NextCursor {
+				return errors.New("Arena MCP sync cursor did not advance")
+			}
+			cursor = page.NextCursor
+			if pageIndex == mcpSyncMaxPages-1 {
+				return errors.New("Arena MCP sync exceeded the bounded page limit")
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Client) rememberMCPBinding(binding mcpclient.BindingRef) {
+	c.mcpStateMu.Lock()
+	defer c.mcpStateMu.Unlock()
+	if c.mcpBindings == nil {
+		c.mcpBindings = make(map[string]mcpclient.BindingRef)
+	}
+	c.mcpBindings[binding.BindingID] = binding
+}
+
+func (c *Client) observeGatewaySequence(sequence uint64) bool {
+	c.mcpStateMu.Lock()
+	defer c.mcpStateMu.Unlock()
+	previous := c.gatewaySequence
+	if sequence > c.gatewaySequence {
+		c.gatewaySequence = sequence
+	}
+	return previous != 0 && sequence > previous+1
+}
+
+func (c *Client) submitMCPResult(
+	ctx context.Context,
+	result protocol.AgentTaskResultEnvelope,
+) error {
+	if c.mcp == nil {
+		return errors.New("Arena MCP client is not configured")
+	}
+	if _, err := c.mcp.Submit(ctx, result); err != nil {
+		return fmt.Errorf(
+			"submit durable AgentTask result through Arena MCP: %w",
+			err,
+		)
+	}
+	if err := c.state.AckAgentTaskResult(
+		result.Result.TaskID,
+		result.Result.ResultID,
+	); err != nil {
+		return c.degradePersistence(
+			"acknowledge Arena MCP AgentTask result outbox",
+			err,
+		)
+	}
+	return nil
+}
+
+func wssReceipts(
+	receipts []protocol.CommandAck,
+) []protocol.CommandAck {
+	selected := make([]protocol.CommandAck, 0, len(receipts))
+	for _, receipt := range receipts {
+		if strings.HasPrefix(receipt.CommandID, "mcp-task-") {
+			continue
+		}
+		selected = append(selected, receipt)
+	}
+	return selected
 }
 
 func decodeEventAck(payload json.RawMessage) (protocol.EventAck, error) {

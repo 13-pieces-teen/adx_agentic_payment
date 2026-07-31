@@ -59,6 +59,16 @@ class ConnectorTaskClaim:
     connector_binding_epoch: int
 
 
+@dataclass(frozen=True, slots=True)
+class ConnectorTaskRoute:
+    task: ArenaAgentTaskV1
+    connector_binding_id: str
+    connector_binding_epoch: int
+    status: TaskStatus
+    leased_by: str | None
+    lease_expires_at: datetime | None
+
+
 @dataclass(slots=True)
 class ArenaResultRecord:
     result: AgentTaskResultV1

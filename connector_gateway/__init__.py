@@ -5,6 +5,7 @@ from .config import ConnectorConfigurationError, ConnectorGatewayConfig
 from .persistent_service import PersistentConnectorGateway
 from .arena_adapter import ConnectorArenaRoute, ConnectorArenaRuntimeAdapter
 from .arena_dispatcher import ConnectorArenaTaskDispatcher
+from .arena_notifier import ConnectorArenaTaskNotifier
 from .production import ProductionConnectorBundle, build_production_connector
 from .service import ConnectorGateway
 
@@ -15,6 +16,7 @@ __all__ = [
     "PersistentConnectorGateway",
     "ConnectorArenaRoute",
     "ConnectorArenaTaskDispatcher",
+    "ConnectorArenaTaskNotifier",
     "ConnectorArenaRuntimeAdapter",
     "ProductionConnectorBundle",
     "build_production_connector",

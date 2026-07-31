@@ -144,7 +144,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | 模块 | 当前状态 |
 |------|----------|
 | 王城典当行 Game Core | 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 FCFS、组间并发有限协商、冻结终场价格与排名 |
-| Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide` / `arena.negotiate`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；真实 CC/Codex 完整比赛 E2E 尚待部署验收 |
+| Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide` / `arena.negotiate`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；默认关闭的 WSS wake + stateless MCP 路径已覆盖 claim/status/submit/release/sync、启动/重连与 Gateway sequence gap 主动恢复，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E；真实 CC/Codex 完整比赛与生产重连 E2E 仍待验收 |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
 | 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、统一回合 coordinator、Result Sink 与独立 Finalizer；Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 `arena402-g` direct relay；Join 后由隔离 owner worker 完成白名单与初始现金铸币，确认前 Participant 不会 Ready。2026-07-26 的 10 Official Agent 生产 testnet 批次已完成 14 笔 provision 广播和一笔 accepted trade 的 x402 V2 → EIP-3009 → 链上确认 → 库存提交闭环。mUSDC 仅保留为历史/底层测试资产；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
@@ -271,6 +271,13 @@ go build -o adx-connector ./cmd/adx-connector
 ```
 
 使用方式和安全边界见 [`connector/README.md`](connector/README.md)。
+
+实验性 MCP 数据面需由服务端设置 `ADX_ARENA_MCP_ENABLED=true` 和独立 token
+secret，并由 Connector 设置 `ADX_CONNECTOR_TASK_TRANSPORT=mcp`。WSS 不会被替换：
+它继续承载在线状态、心跳、Session 控制和 Task wake；MCP 只处理带数据库租约的
+Task 数据交换，且所有结果仍进入同一 Arena Result Sink。Connector 在 hello
+绑定快照、启动/重连以及 Gateway sequence gap 时执行有界 cursor sync；WSS wake
+仍是低延迟提示，不是任务或业务动作的权威。
 
 ### Settlement
 

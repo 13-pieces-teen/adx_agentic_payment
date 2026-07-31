@@ -4,8 +4,10 @@
 > Game Core 投影和 Arena 接线已实现；Local Connector 已完成 Local Agent identity、
 > 冻结 route、Connector-owned session、数据库 Task
 > dispatcher、`arena.decide` / `arena.negotiate` typed transport、终态 Result
-> durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排。真实 CC/Codex
-> 完整比赛与生产重连仍待 E2E 验收。
+> durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排；另已实现默认
+> 关闭的 WSS wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动
+> cursor sync，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E。真实
+> CC/Codex 完整比赛与生产重连仍待 E2E 验收。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
@@ -102,6 +104,20 @@ chain-of-thought；Provider 若返回 reasoning text 或私有推理载荷，应
    typed Task 实际在 Connector 创建的短生命周期空目录运行，不继承参赛时冻结目录
    中的项目指令；Claude 使用 no-tools profile，Codex 使用 read-only sandbox
    profile。两端都会在 readiness 字段不一致时拒绝执行。
+
+默认 `ADX_CONNECTOR_TASK_TRANSPORT=wss` 继续使用上述 Dispatcher。启用
+`ADX_ARENA_MCP_ENABLED=true` 并把 Connector 设为 `mcp` 时，WSS 仍负责在线状态、
+心跳、`session.start` 和不含任务正文的 `task.available` 唤醒；Connector 用 Device
+凭据换取绑定到 `device_id + binding_id + binding_epoch` 的短期 token，再通过
+stateless MCP 分别 claim、submit 或 release。MCP 请求不保存协议 Session，真正的
+执行租约保存在 PostgreSQL，最终结果仍只经 Arena Result Sink 应用。
+
+该 MCP server 同时提供 status 与有界 cursor sync，供受管客户端启动/重连恢复。
+Gateway 的 hello ACK 只向已认证 Device 返回最小 `binding_id + binding_epoch`
+快照；Go Connector 记录这些冻结 route，并在启动/重连及检测到 Gateway sequence
+gap 时主动执行有界 sync。Gateway 对未完成 Task 的周期 wake 重发继续提供低延迟
+提示和额外恢复机会。因此
+`task.available.ack`、MCP 成功或本地 Runtime 成功都不是 Arena 业务动作的权威证据。
 
 `adx-connector`、`ADX_*` 和现有协议消息名属于兼容标识，不做破坏性重命名。
 Connector 路径的模型凭据、OAuth、钱包私钥和本地环境秘密始终留在用户设备上，

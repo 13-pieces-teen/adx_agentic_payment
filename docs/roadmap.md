@@ -179,8 +179,10 @@ Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游�
 确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 已完成
 owner-scoped Arena Agent identity、参赛快照、Connector-owned session、数据库
 Task dispatcher、typed Task/Result、durable result outbox、Gateway inbox、Arena
-Result Sink 与 Hosted/Connector mixed-Runtime 回合编排；真实 CC/Codex 完整比赛和
-生产重连 E2E 尚未验收。通用
+Result Sink 与 Hosted/Connector mixed-Runtime 回合编排，并完成默认关闭的 WSS
+wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动 cursor sync，
+并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E；真实 CC/Codex 完整比赛
+和生产重连 E2E 尚未验收。通用
 PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
@@ -296,6 +298,22 @@ create game
 - [x] Local Arena Agent identity 创建、owner-scoped Connector route 解析、
       Connector-owned Arena session 启动、leased AgentTask 自动 dispatch，以及
       Hosted/Connector mixed-Runtime 回合编排已实现。
+- [x] 增加默认关闭的 `wss + stateless MCP` Task transport：WSS 保留 Device
+      presence、heartbeat、Session control 与安全 wake，MCP 使用短期
+      Device/Binding/epoch token 和 PostgreSQL lease 提供 claim/status/submit/
+      release/sync；submit 复用 Arena Result Sink，生产 `/mcp` 只路由到单 Worker
+      Connector service。
+- [x] Go Connector 已支持 `ADX_CONNECTOR_TASK_TRANSPORT=mcp`，在
+      `task.available` 后完成 token exchange、claim、既有受管 Runtime 执行、
+      durable result submit/ack，以及本地拒绝前的 lease release。
+- [x] Go Connector 会从已认证 Device 的 hello 绑定快照恢复冻结 route，并在
+      启动/重连和 Gateway sequence gap 时主动执行有界 MCP cursor sync；Gateway
+      周期性重发未完成 Task wake 继续作为低延迟提示和额外恢复路径。
+- [x] 隔离 Docker 协议 E2E 已覆盖全新迁移、登录/配对、WSS hello/session/wake、
+      Device token、MCP discover/list/sync/claim/submit/status、PostgreSQL Result
+      Sink 与零链写入。
+- [ ] 仍需真实 Claude Code/Codex 完整比赛、真实进程断线重连、lease expiry 与
+      durable result replay 的生产形态 E2E。
 - [x] Connector 进程重启会递增持久化的 `session_generation`，使原进程的
       Session 失效并用新的 session incarnation 重建；处理中 typed AgentTask 仅在
       旧 receipt 明确为 `connector_restarted` 时以新 Command 重试一次，总 Attempt
@@ -426,6 +444,14 @@ create game
 - [x] 实现 Local Arena Agent identity bridge、Arena session lifecycle、Task
       dispatcher 和 Hosted/Connector mixed-Runtime Round coordinator；`015`
       迁移增加最小 Local Agent 幂等函数和 mixed Runtime Run。
+- [x] 在保持 WSS 控制面的前提下实现默认关闭的 stateless MCP 数据面；MCP ACK
+      不直接改变 Game 状态，task claim 使用冻结 route/epoch，terminal result
+      仍通过同一 Result Sink 和 Deadline Finalizer 收敛。
+- [x] Go Connector 已接入启动/重连与 sequence gap 的主动有界 cursor sync；
+      隔离 Docker 已保存 WSS wake、sync、claim、submit、status 与 Result Sink
+      证据，且未触发链写入。
+- [ ] 补充真实 Runtime 进程的 lease expiry、断线恢复与 durable result replay
+      生产形态 E2E。
 - [x] FCFS 只使用 Result Sink 的数据库 `result_received_at`。
 - [x] 实现完整 N 回合的持久化 Round、Pool、Pairing、Negotiation、Inventory、
       Event、Round portfolio snapshot、final settlement price 和排名闭环。

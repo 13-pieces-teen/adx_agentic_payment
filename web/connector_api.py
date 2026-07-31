@@ -21,7 +21,13 @@ from arena_core import (
     PostgresArenaCoreRepository,
     PostgresConnectorArenaRegistrar,
 )
+from arena_mcp import (
+    ArenaTaskBroker,
+    ExecutionTokenCodec,
+    create_arena_mcp_router,
+)
 from connector_gateway import (
+    ConnectorArenaTaskNotifier,
     ConnectorArenaTaskDispatcher,
     build_production_connector,
 )
@@ -51,30 +57,65 @@ def create_app() -> FastAPI:
         _required("ADX_ARENA_CORE_DATABASE_URL")
     )
     bundle = build_production_connector(arena_registrar=registrar)
-    bundle.service.bind_agent_task_result_sink(ArenaResultSink(result_core))
-    dispatcher = ConnectorArenaTaskDispatcher(
-        repository=result_core,
-        gateway=bundle.service,
-    )
+    result_sink = ArenaResultSink(result_core)
+    bundle.service.bind_agent_task_result_sink(result_sink)
+    mcp_enabled = os.getenv(
+        "ADX_ARENA_MCP_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes"}
+    dispatcher: ConnectorArenaTaskDispatcher | None = None
+    notifier: ConnectorArenaTaskNotifier | None = None
+    mcp_broker: ArenaTaskBroker | None = None
+    mcp_token_codec: ExecutionTokenCodec | None = None
+    if mcp_enabled:
+        mcp_token_codec = ExecutionTokenCodec(_required("ADX_ARENA_MCP_TOKEN_SECRET"))
+        mcp_broker = ArenaTaskBroker(
+            repository=result_core,
+            result_sink=result_sink,
+            gateway=bundle.service,
+        )
+        notifier = ConnectorArenaTaskNotifier(
+            repository=result_core,
+            gateway=bundle.service,
+        )
+    else:
+        dispatcher = ConnectorArenaTaskDispatcher(
+            repository=result_core,
+            gateway=bundle.service,
+        )
     dispatcher_task: asyncio.Task[None] | None = None
+    notifier_task: asyncio.Task[None] | None = None
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         nonlocal dispatcher_task
+        nonlocal notifier_task
         await registrar.initialize()
         await result_core.initialize()
         await bundle.initialize()
-        dispatcher_task = asyncio.create_task(
-            dispatcher.run_forever(poll_seconds=0.25),
-            name="arena-connector-task-dispatcher",
-        )
+        if dispatcher is not None:
+            dispatcher_task = asyncio.create_task(
+                dispatcher.run_forever(poll_seconds=0.25),
+                name="arena-connector-task-dispatcher",
+            )
+        if notifier is not None:
+            notifier_task = asyncio.create_task(
+                notifier.run_forever(poll_seconds=0.25),
+                name="arena-connector-task-notifier",
+            )
         try:
             yield
         finally:
-            dispatcher.stop()
-            if dispatcher_task is not None:
-                await dispatcher_task
-                dispatcher_task = None
+            if dispatcher is not None:
+                dispatcher.stop()
+                if dispatcher_task is not None:
+                    await dispatcher_task
+                    dispatcher_task = None
+            if notifier is not None:
+                notifier.stop()
+                if notifier_task is not None:
+                    await notifier_task
+                    notifier_task = None
             await bundle.close()
             await registrar.close()
             await result_core.close()
@@ -91,9 +132,10 @@ def create_app() -> FastAPI:
         "result_sink": result_core,
     }
     app.add_middleware(ApiMetricsMiddleware, metrics=metrics)
+    allowed_origins = _allowed_origins(True)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_allowed_origins(True),
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
@@ -101,10 +143,23 @@ def create_app() -> FastAPI:
             "Authorization",
             "Content-Type",
             "Idempotency-Key",
+            "MCP-Protocol-Version",
+            "Mcp-Method",
+            "Mcp-Name",
             "X-CSRF-Token",
         ],
     )
     app.include_router(bundle.router)
+    if mcp_broker is not None:
+        assert mcp_token_codec is not None
+        app.include_router(
+            create_arena_mcp_router(
+                broker=mcp_broker,
+                token_codec=mcp_token_codec,
+                gateway=bundle.service,
+                allowed_origins={origin.rstrip("/") for origin in allowed_origins},
+            )
+        )
 
     @app.get("/api/health")
     async def health() -> dict[str, object]:
@@ -112,6 +167,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": app.version,
             "connector_gateway": "production",
+            "arena_mcp": mcp_enabled,
         }
 
     @app.get("/api/ready")
