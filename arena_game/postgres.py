@@ -943,6 +943,9 @@ class PostgresPawnhouseRepository:
                     "adapter_version": hosted["adapter_version"],
                 }
                 config_hash = sha256_identifier(config_snapshot)
+                ready_without_payment = (
+                    settlement_config.authorization_mode == "none"
+                )
                 await connection.execute(
                     """
                     INSERT INTO arena402.game_participants (
@@ -954,13 +957,19 @@ class PostgresPawnhouseRepository:
                         $1, $2, $3, $4, $5, 'hosted', clock_timestamp(),
                         $6::text,
                         CASE WHEN (
-                            ($6::text IS NULL AND NOT $7::boolean)
-                            OR $8::boolean
+                            NOT $9::boolean
+                            AND (
+                                ($6::text IS NULL AND NOT $7::boolean)
+                                OR $8::boolean
+                            )
                         )
                             THEN 'pending' ELSE 'ready' END,
                         CASE WHEN (
-                            ($6::text IS NULL AND NOT $7::boolean)
-                            OR $8::boolean
+                            NOT $9::boolean
+                            AND (
+                                ($6::text IS NULL AND NOT $7::boolean)
+                                OR $8::boolean
+                            )
                         )
                             THEN NULL ELSE clock_timestamp() END
                     )
@@ -973,6 +982,7 @@ class PostgresPawnhouseRepository:
                     payment_mandate_id,
                     official_pool_join,
                     requires_game_coin_provision,
+                    ready_without_payment,
                 )
                 await connection.execute(
                     """
@@ -1347,16 +1357,23 @@ class PostgresPawnhouseRepository:
                     ),
                 }
                 config_hash = sha256_identifier(config_snapshot)
+                ready_without_payment = (
+                    settlement_config.authorization_mode == "none"
+                )
                 await connection.execute(
                     """
                     INSERT INTO arena402.game_participants (
                         game_participant_id, game_id, user_id, agent_id,
                         runtime_binding_id, runtime_kind,
-                        portfolio_locked_at
+                        portfolio_locked_at, readiness, ready_at
                     )
                     VALUES (
                         $1, $2, $3, $4, $5, 'connector',
-                        clock_timestamp()
+                        clock_timestamp(),
+                        CASE WHEN $6::boolean
+                            THEN 'ready' ELSE 'pending' END,
+                        CASE WHEN $6::boolean
+                            THEN clock_timestamp() ELSE NULL END
                     )
                     """,
                     participant_id,
@@ -1364,6 +1381,7 @@ class PostgresPawnhouseRepository:
                     user_id,
                     agent_id,
                     connector["runtime_binding_id"],
+                    ready_without_payment,
                 )
                 await connection.execute(
                     """

@@ -127,6 +127,7 @@ func (CodexDriver) BuildTask(
 			"--ephemeral",
 			"--ignore-user-config",
 			"--ignore-rules",
+			"--skip-git-repo-check",
 			"--cd", task.IsolatedWorkingDir,
 			"--output-schema", task.OutputSchemaPath,
 		)

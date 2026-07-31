@@ -34,9 +34,13 @@ registration, frozen Connector binding epochs, authenticated game
 participation, automatic Connector-owned Arena session startup, leased
 AgentTask dispatch, and one coordinator for Hosted-only, Connector-only, or
 Hosted/Connector mixed rounds. Each task still returns through the Arena
-Result Sink and Deadline Finalizer. A real CC/Codex full-game and production
-reconnect E2E has not yet been accepted, so this is an implemented backend path
-rather than production acceptance evidence.
+Result Sink and Deadline Finalizer. A real Claude Code/Codex Connector-only
+one-round game was accepted in an isolated Docker stack on 2026-07-31. Both
+Runtime results succeeded, passed through the Result Sink, and produced two
+terminal rankings with zero chain writes. Codex chose `pass` and Claude chose
+`buy grain`, so that run is not evidence of pairing, negotiation, payment, or
+inventory transfer. Production reconnect and real Hosted/Connector mixed
+acceptance are still pending.
 
 The stateless MCP slice is also implementation-complete behind
 `ADX_ARENA_MCP_ENABLED=false`. It includes short-lived Device/Binding/epoch
@@ -61,8 +65,27 @@ An isolated Docker protocol E2E was accepted on 2026-07-31. It covers fresh
 migrations, login/pairing/approval, WSS hello and `task.available`, a
 Connector-owned managed Session, Device token exchange, MCP discover/list,
 sync/claim/submit/status, the PostgreSQL Result Sink, and zero chain writes.
-The harness emulates the managed Runtime control frames; a real Claude
-Code/Codex full-game and production reconnect E2E are still pending.
+That harness emulates the managed Runtime control frames. A separate real
+Runtime harness now launches locally authenticated Claude Code and Codex child
+processes on the host while Docker owns Arena, Gateway, PostgreSQL, and the
+Arena worker. It verifies authoritative task/result/application rows and
+rankings rather than treating process exit or MCP submit as business success.
+
+Run the real Runtime E2E from PowerShell after confirming both local CLIs are
+authenticated. It uses the isolated project `arena402-real-runtimes-e2e`,
+loopback ports `18001`/`55434`, and payment-disabled one-time test users:
+
+```powershell
+docker compose -p arena402-real-runtimes-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena up --build -d postgres migrate provision-db-roles api arena-worker
+$inviteRaw = docker compose -p arena402-real-runtimes-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 2 --json
+$env:ADX_REAL_RUNTIME_E2E_INVITES = ConvertTo-Json -Compress -InputObject @((ConvertFrom-Json $inviteRaw).invites)
+python tests/real_runtimes_docker_e2e.py
+Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES
+docker compose -p arena402-real-runtimes-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
+```
+
+This accepted run does not cover production reconnect, lease expiry, durable
+result replay after process loss, Hosted/Connector mixing, OpenClaw, or Hermes.
 
 Run that isolated test from the repository root. It uses project
 `arena402-mcp-e2e`, loopback ports `18000`/`55433`, and removes only its own
@@ -234,9 +257,12 @@ Connector creates a short-lived empty working directory containing only a
   disabled slash commands, no session persistence, `dontAsk`, and the strict
   JSON Schema. This is the Arena no-tools profile.
 - Codex adds read-only sandboxing, ephemeral execution, ignored user
-  configuration and exec-policy rules, an isolated `--cd`, and the strict
-  output Schema. The current Codex CLI has no equivalent no-tools switch, so
-  this profile still must not be described as tool-free.
+  configuration and exec-policy rules, `--skip-git-repo-check`, an isolated
+  `--cd`, and a strict root-object output Schema compatible with OpenAI
+  Structured Outputs. Nullable schema placeholders are removed only from
+  Codex terminal actions before the shared strict wire validator runs. The
+  current Codex CLI has no equivalent no-tools switch, so this profile still
+  must not be described as tool-free.
 
 Prompts are delivered over stdin. Runtime resume identifiers are captured from
 structured output and used only through the runtimes' fixed resume flags. The
@@ -256,6 +282,10 @@ locally resolved names explicitly listed in `environment_refs`. The platform
 can refer to a variable name but cannot provide or read its value.
 Each referenced name must also be authorized locally with a repeated
 `--allow-env NAME` flag; no secret-bearing variable is eligible by default.
+Runtime messages do not assume that every model exposes reasoning. When a
+provider does include `thinking`, `reasoning`, or equivalent private blocks,
+the Connector drops their content before emitting an observability event while
+preserving public text, structured actions, safe errors, and numeric usage.
 
 ## Control and observation protocol
 

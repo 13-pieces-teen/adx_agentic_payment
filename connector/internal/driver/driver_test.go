@@ -75,6 +75,7 @@ func TestCodexArenaTaskUsesRestrictedEphemeralProfile(t *testing.T) {
 		"--ephemeral",
 		"--ignore-user-config",
 		"--ignore-rules",
+		"--skip-git-repo-check",
 		"--cd",
 		"/tmp/arena-task",
 		"--output-schema",

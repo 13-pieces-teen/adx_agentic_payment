@@ -105,7 +105,15 @@ func (c *arenaActionCapture) observe(taskKind string, message map[string]any) {
 	if strings.TrimSpace(value) == "" {
 		return
 	}
-	action, err := validateArenaAction(taskKind, []byte(value))
+	var (
+		action json.RawMessage
+		err    error
+	)
+	if message["type"] == "item.completed" {
+		action, err = validateCodexArenaAction(taskKind, []byte(value))
+	} else {
+		action, err = validateArenaAction(taskKind, []byte(value))
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.action != nil || c.err != nil {
@@ -151,6 +159,37 @@ func (c *arenaActionCapture) terminal() (json.RawMessage, error) {
 	return append(json.RawMessage(nil), c.action...), nil
 }
 
+func validateCodexArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&fields); err != nil {
+		return nil, fmt.Errorf("decode Codex Arena action: %w", err)
+	}
+	nullableFields := map[string]struct{}{}
+	switch taskKind {
+	case "arena.decide":
+		for _, field := range []string{"good", "quantity", "limitPrice"} {
+			nullableFields[field] = struct{}{}
+		}
+	case "arena.negotiate":
+		for _, field := range []string{"price", "message"} {
+			nullableFields[field] = struct{}{}
+		}
+	}
+	for key, value := range fields {
+		if _, nullable := nullableFields[key]; nullable &&
+			bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			delete(fields, key)
+		}
+	}
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("normalize Codex Arena action: %w", err)
+	}
+	return validateArenaAction(taskKind, normalized)
+}
+
 func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 	var discriminator struct {
 		Action string `json:"action"`
@@ -164,8 +203,10 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 		switch discriminator.Action {
 		case "buy", "sell":
 			target = &struct {
-				Action string `json:"action"`
-				Good   string `json:"good"`
+				Action     string  `json:"action"`
+				Good       string  `json:"good"`
+				Quantity   *int    `json:"quantity,omitempty"`
+				LimitPrice *string `json:"limitPrice,omitempty"`
 			}{}
 		case "pass":
 			target = &struct {
@@ -218,7 +259,16 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 			return nil, errors.New("Arena good must be a valid GoodId")
 		}
 	}
-	if price, ok := fields["price"].(string); ok {
+	if quantity, ok := fields["quantity"].(float64); ok {
+		if quantity < 1 || quantity > 1_000_000 || quantity != float64(int(quantity)) {
+			return nil, errors.New("Arena quantity must be an integer from 1 to 1000000")
+		}
+	}
+	for _, priceField := range []string{"price", "limitPrice"} {
+		price, ok := fields[priceField].(string)
+		if !ok {
+			continue
+		}
 		integerPart, fractionalPart, _ := strings.Cut(price, ".")
 		if !arenaFixedDecimalPattern.MatchString(price) ||
 			len(integerPart)+len(fractionalPart) > 38 ||
@@ -261,6 +311,15 @@ func arenaActionOutputSchema(taskKind string) ([]byte, error) {
 						"maxLength": 128,
 						"pattern":   arenaGoodIDPattern.String(),
 					},
+					"quantity": map[string]any{
+						"type":    "integer",
+						"minimum": 1,
+						"maximum": 1_000_000,
+					},
+					"limitPrice": map[string]any{
+						"type":    "string",
+						"pattern": arenaFixedDecimalPattern.String(),
+					},
 				},
 				"required": []string{"action", "good"},
 			},
@@ -302,4 +361,58 @@ func arenaActionOutputSchema(taskKind string) ([]byte, error) {
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"oneOf":   variants,
 	})
+}
+
+func arenaActionCodexOutputSchema(taskKind string) ([]byte, error) {
+	nullableString := func(pattern string) map[string]any {
+		property := map[string]any{"type": []string{"string", "null"}}
+		if pattern != "" {
+			property["pattern"] = pattern
+		}
+		return property
+	}
+	schema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+	}
+	switch taskKind {
+	case "arena.decide":
+		schema["properties"] = map[string]any{
+			"action": map[string]any{
+				"type": "string",
+				"enum": []string{"buy", "sell", "pass"},
+			},
+			"good": nullableString(arenaGoodIDPattern.String()),
+			"quantity": map[string]any{
+				"type":    []string{"integer", "null"},
+				"minimum": 1,
+				"maximum": 1_000_000,
+			},
+			"limitPrice": nullableString(arenaFixedDecimalPattern.String()),
+		}
+		schema["required"] = []string{
+			"action",
+			"good",
+			"quantity",
+			"limitPrice",
+		}
+	case "arena.negotiate":
+		schema["properties"] = map[string]any{
+			"action": map[string]any{
+				"type": "string",
+				"enum": []string{"propose", "accept", "reject"},
+			},
+			"price": nullableString(arenaFixedDecimalPattern.String()),
+			"message": map[string]any{
+				"type":      []string{"string", "null"},
+				"minLength": 1,
+				"maxLength": 100,
+				"pattern":   `.*\S.*`,
+			},
+		}
+		schema["required"] = []string{"action", "price", "message"}
+	default:
+		return nil, fmt.Errorf("unsupported Arena task kind %q", taskKind)
+	}
+	return json.Marshal(schema)
 }

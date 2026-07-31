@@ -19,9 +19,7 @@ def test_join_queries_do_not_use_authorization_as_a_postgres_alias() -> None:
 
 
 def test_official_agents_receive_bounded_game_scoped_payment_authority() -> None:
-    source = inspect.getsource(
-        PostgresPawnhouseRepository.add_hosted_participant
-    )
+    source = inspect.getsource(PostgresPawnhouseRepository.add_hosted_participant)
 
     assert "official-mandate:" in source
     assert "official-ja:" in source
@@ -33,9 +31,7 @@ def test_official_agents_receive_bounded_game_scoped_payment_authority() -> None
 
 def test_settlement_resolves_both_user_and_official_wallet_authorities() -> None:
     sources = (
-        inspect.getsource(
-            PostgresPaymentRepository.active_mandate_for_settlement
-        ),
+        inspect.getsource(PostgresPaymentRepository.active_mandate_for_settlement),
         inspect.getsource(PostgresPaymentRepository.reserve_mandate),
     )
 
@@ -46,17 +42,27 @@ def test_settlement_resolves_both_user_and_official_wallet_authorities() -> None
 
 
 def test_game_start_and_final_ranking_exclude_pending_participants() -> None:
-    start_source = inspect.getsource(
-        PostgresPawnhouseRepository._start_game_locked
-    )
-    finalize_source = inspect.getsource(
-        PostgresPawnhouseRepository._finalize_game
-    )
+    start_source = inspect.getsource(PostgresPawnhouseRepository._start_game_locked)
+    finalize_source = inspect.getsource(PostgresPawnhouseRepository._finalize_game)
 
     assert "readiness = 'ready'" in start_source
     assert "SET status = 'cancelled'" in start_source
     assert "SET status = 'active'" in start_source
     assert "AND readiness = 'ready'" in finalize_source
+
+
+def test_no_payment_participants_become_ready_without_a_mandate() -> None:
+    sources = (
+        inspect.getsource(PostgresPawnhouseRepository.add_hosted_participant),
+        inspect.getsource(PostgresPawnhouseRepository.add_connector_participant),
+    )
+
+    for source in sources:
+        assert "ready_without_payment" in source
+        assert 'settlement_config.authorization_mode == "none"' in source
+        assert "portfolio_locked_at" in source
+        assert "readiness" in source
+        assert "ready_at" in source
 
 
 def test_settlement_terminal_state_updates_pairing_and_negotiation() -> None:

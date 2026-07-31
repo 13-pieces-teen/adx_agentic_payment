@@ -26,3 +26,31 @@ func TestValueRedactsSecretKeysRecursively(t *testing.T) {
 		t.Fatal("secret field should be redacted")
 	}
 }
+
+func TestValueDropsOptionalPrivateReasoningButKeepsPublicOutput(t *testing.T) {
+	value := map[string]any{
+		"type": "assistant",
+		"content": []any{
+			map[string]any{
+				"type":      "thinking",
+				"thinking":  "private reasoning",
+				"signature": "private signature",
+			},
+			map[string]any{
+				"type": "text",
+				"text": `{"action":"buy","good":"grain"}`,
+			},
+		},
+	}
+
+	redacted := Value(value).(map[string]any)
+	content := redacted["content"].([]any)
+	privateBlock := content[0].(map[string]any)
+	if len(privateBlock) != 1 || privateBlock["type"] != "thinking" {
+		t.Fatalf("private reasoning block must retain only its type: %#v", privateBlock)
+	}
+	publicBlock := content[1].(map[string]any)
+	if publicBlock["text"] != `{"action":"buy","good":"grain"}` {
+		t.Fatalf("public structured output must be preserved: %#v", publicBlock)
+	}
+}

@@ -86,8 +86,19 @@ func (arenaSchemaDriver) BuildTask(
 	if err != nil {
 		return nil, fmt.Errorf("read Arena output schema: %w", err)
 	}
-	if string(schemaFile) != task.OutputSchema {
-		return nil, fmt.Errorf("Arena output schema file does not match inline schema")
+	var inlineSchema map[string]any
+	if err := json.Unmarshal([]byte(task.OutputSchema), &inlineSchema); err != nil {
+		return nil, fmt.Errorf("decode inline Arena output schema: %w", err)
+	}
+	if _, ok := inlineSchema["oneOf"]; !ok {
+		return nil, fmt.Errorf("Claude Arena output schema must preserve its union")
+	}
+	var fileSchema map[string]any
+	if err := json.Unmarshal(schemaFile, &fileSchema); err != nil {
+		return nil, fmt.Errorf("decode file Arena output schema: %w", err)
+	}
+	if fileSchema["type"] != "object" || fileSchema["oneOf"] != nil {
+		return nil, fmt.Errorf("Codex Arena output schema must use a root object")
 	}
 	process := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSupervisorHelperProcess", "--")
 	process.Env = append(os.Environ(), "ADX_CONNECTOR_HELPER_PROCESS=1")
@@ -226,6 +237,18 @@ func TestArenaActionMatchesSharedWireBounds(t *testing.T) {
 			),
 		},
 		{
+			kind: "arena.decide",
+			raw:  `{"action":"buy","good":"grain","quantity":0}`,
+		},
+		{
+			kind: "arena.decide",
+			raw:  `{"action":"sell","good":"grain","quantity":1000001}`,
+		},
+		{
+			kind: "arena.decide",
+			raw:  `{"action":"buy","good":"grain","limitPrice":"0"}`,
+		},
+		{
 			kind: "arena.negotiate",
 			raw:  `{"action":"propose","price":"123456789012345678901234567890123456789","message":"offer"}`,
 		},
@@ -241,6 +264,19 @@ func TestArenaActionMatchesSharedWireBounds(t *testing.T) {
 		); err == nil {
 			t.Fatalf("out-of-contract action must be rejected: %s", testCase.raw)
 		}
+	}
+}
+
+func TestArenaActionAcceptsCurrentQuantityAndLimitPriceWireFields(t *testing.T) {
+	raw := []byte(
+		`{"action":"buy","good":"grain","quantity":1,"limitPrice":"2.500000"}`,
+	)
+	action, err := validateArenaAction("arena.decide", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) != string(raw) {
+		t.Fatalf("unexpected canonical Arena action: %s", action)
 	}
 }
 
@@ -262,6 +298,31 @@ func TestArenaActionCaptureAcceptsCodexTerminalAgentMessage(t *testing.T) {
 	}
 	if string(action) != `{"action":"pass"}` {
 		t.Fatalf("unexpected Codex Arena action: %s", action)
+	}
+
+	nullable := &arenaActionCapture{}
+	nullable.observe(
+		"arena.decide",
+		map[string]any{
+			"type": "item.completed",
+			"item": map[string]any{
+				"type": "agent_message",
+				"text": `{"action":"buy","good":"grain","quantity":1,"limitPrice":null}`,
+			},
+		},
+	)
+	action, err = nullable.terminal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) != `{"action":"buy","good":"grain","quantity":1}` {
+		t.Fatalf("unexpected normalized Codex Arena action: %s", action)
+	}
+	if _, err := validateCodexArenaAction(
+		"arena.decide",
+		[]byte(`{"action":"pass","good":null,"quantity":null,"limitPrice":null,"extra":null}`),
+	); err == nil {
+		t.Fatal("unknown nullable Codex field must not bypass strict validation")
 	}
 
 	toolOutput := &arenaActionCapture{}

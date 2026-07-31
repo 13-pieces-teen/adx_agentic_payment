@@ -6,8 +6,10 @@
 > dispatcher、`arena.decide` / `arena.negotiate` typed transport、终态 Result
 > durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排；另已实现默认
 > 关闭的 WSS wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动
-> cursor sync，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E。真实
-> CC/Codex 完整比赛与生产重连仍待 E2E 验收。
+> cursor sync，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E。
+> 2026-07-31 已用真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合
+> Connector-only 比赛并由 Result Sink 应用两项结果；该局无配对/协商/结算。
+> 生产重连和 Hosted/Connector mixed 真实 E2E 仍待验收。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
@@ -74,9 +76,9 @@ Arena 402 是模型凭据的运行时托管方，并非零知识系统。创建�
 Hosted Agent 仍由云端 Worker 持续参加已加入的 Game。
 
 平台只记录 thinking 是否生效、Provider/Model、Token 数值、耗时、安全错误类别、
-经过过滤的公开文字和最终结构化动作。不得请求、保存或展示 private
-chain-of-thought；Provider 若返回 reasoning text 或私有推理载荷，应在解析内存中
-丢弃。
+经过过滤的公开文字和最终结构化动作。平台不要求每个模型提供 thinking；模型没有
+reasoning/thinking 载荷时无需特殊处理，实际返回私有推理载荷时才在解析内存中
+丢弃其内容，不保存或展示 private chain-of-thought。
 
 ## Local Connector
 
@@ -104,6 +106,12 @@ chain-of-thought；Provider 若返回 reasoning text 或私有推理载荷，应
    typed Task 实际在 Connector 创建的短生命周期空目录运行，不继承参赛时冻结目录
    中的项目指令；Claude 使用 no-tools profile，Codex 使用 read-only sandbox
    profile。两端都会在 readiness 字段不一致时拒绝执行。
+
+2026-07-31 的隔离 Docker 实测使用宿主机既有登录态启动真实 Claude Code 与
+Codex CLI，通过 WSS 创建 Connector-owned Session，再经 stateless MCP
+claim/submit AgentTask。两项 `arena.decide` 均为 Runtime `succeeded`、Result Sink
+`applied`，比赛终态生成两条排名且 0 链写入。Codex 选择 `pass`、Claude 选择
+`buy grain`，因此这条证据不覆盖 pairing、negotiate 或 settlement。
 
 默认 `ADX_CONNECTOR_TASK_TRANSPORT=wss` 继续使用上述 Dispatcher。启用
 `ADX_ARENA_MCP_ENABLED=true` 并把 Connector 设为 `mcp` 时，WSS 仍负责在线状态、

@@ -963,7 +963,11 @@ func runtimeIsArenaReady(runtimeInfo protocol.Runtime) bool {
 func prepareArenaOutputSchema(
 	taskKind string,
 ) (string, string, string, func(), error) {
-	schema, err := arenaActionOutputSchema(taskKind)
+	claudeSchema, err := arenaActionOutputSchema(taskKind)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	codexSchema, err := arenaActionCodexOutputSchema(taskKind)
 	if err != nil {
 		return "", "", "", nil, err
 	}
@@ -980,7 +984,7 @@ func prepareArenaOutputSchema(
 		cleanup()
 		return "", "", "", nil, fmt.Errorf("create Arena output schema: %w", err)
 	}
-	if _, err := file.Write(schema); err != nil {
+	if _, err := file.Write(codexSchema); err != nil {
 		_ = file.Close()
 		cleanup()
 		return "", "", "", nil, fmt.Errorf("write Arena output schema: %w", err)
@@ -989,7 +993,7 @@ func prepareArenaOutputSchema(
 		cleanup()
 		return "", "", "", nil, fmt.Errorf("close Arena output schema: %w", err)
 	}
-	return string(schema), path, directory, cleanup, nil
+	return string(claudeSchema), path, directory, cleanup, nil
 }
 
 func (s *Supervisor) emit(event protocol.RuntimeEvent) {

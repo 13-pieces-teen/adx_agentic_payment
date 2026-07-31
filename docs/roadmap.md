@@ -181,8 +181,10 @@ owner-scoped Arena Agent identity、参赛快照、Connector-owned session、数
 Task dispatcher、typed Task/Result、durable result outbox、Gateway inbox、Arena
 Result Sink 与 Hosted/Connector mixed-Runtime 回合编排，并完成默认关闭的 WSS
 wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动 cursor sync，
-并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E；真实 CC/Codex 完整比赛
-和生产重连 E2E 尚未验收。通用
+并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E；2026-07-31 已用真实
+Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合 Connector-only 比赛，
+两项结果均经 Result Sink 应用并生成排名。该局无配对/协商/结算，生产重连和
+Hosted/Connector mixed 真实 E2E 尚未验收。通用
 PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
@@ -312,8 +314,13 @@ create game
 - [x] 隔离 Docker 协议 E2E 已覆盖全新迁移、登录/配对、WSS hello/session/wake、
       Device token、MCP discover/list/sync/claim/submit/status、PostgreSQL Result
       Sink 与零链写入。
-- [ ] 仍需真实 Claude Code/Codex 完整比赛、真实进程断线重连、lease expiry 与
-      durable result replay 的生产形态 E2E。
+- [x] 真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 已通过宿主机 Connector
+      参加隔离 Docker 的一回合 Connector-only 比赛；两项 Decide Task 均由真实
+      Runtime 成功返回、经 Result Sink 应用并产生两条排名，0 链写入。Codex
+      `pass`、Claude `buy grain`，未形成 pairing/negotiation。
+- [ ] 仍需真实进程断线重连、lease expiry、durable result replay、
+      Hosted/Connector mixed 比赛，以及能够覆盖 pairing/negotiation 的真实
+      Runtime E2E。
 - [x] Connector 进程重启会递增持久化的 `session_generation`，使原进程的
       Session 失效并用新的 session incarnation 重建；处理中 typed AgentTask 仅在
       旧 receipt 明确为 `connector_restarted` 时以新 Command 重试一次，总 Attempt
@@ -324,8 +331,8 @@ create game
       inventory 分离 installed/task-enabled/auth-status/compatible/isolation/
       local-ready，Gateway 与 Connector 交叉校验并对未就绪 Runtime fail closed。Codex CLI
       当前没有等价 no-tools 开关，该差异保留为明确限制。
-- [ ] 使用真实 CC/Codex 跑通 Connector-only 与 Hosted/Connector mixed 完整比赛，
-      并保存断线重连、deadline default 与 Result replay 证据。
+- [ ] 使用真实 CC/Codex 跑通 Hosted/Connector mixed 比赛，并保存断线重连、
+      deadline default、Result replay 与真实 pairing/negotiation 证据。
 - [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
       `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
 - [x] 平台 `user_id` 永久绑定 platform-managed testnet guest wallet；`045`

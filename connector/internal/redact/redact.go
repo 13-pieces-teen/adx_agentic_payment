@@ -31,8 +31,14 @@ func Value(value any) any {
 		}
 		return result
 	case map[string]any:
+		if isPrivateReasoningBlock(typed) {
+			return map[string]any{"type": typed["type"]}
+		}
 		result := make(map[string]any, len(typed))
 		for key, item := range typed {
+			if isPrivateReasoningKey(key) {
+				continue
+			}
 			if isSecretKey(key) {
 				result[key] = "[REDACTED]"
 				continue
@@ -53,4 +59,24 @@ func isSecretKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func isPrivateReasoningBlock(value map[string]any) bool {
+	blockType, _ := value["type"].(string)
+	switch strings.ToLower(strings.TrimSpace(blockType)) {
+	case "analysis", "reasoning", "thinking", "redacted_thinking":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPrivateReasoningKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	switch normalized {
+	case "analysis", "reasoning", "reasoning_content", "thinking":
+		return true
+	default:
+		return false
+	}
 }

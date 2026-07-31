@@ -1,0 +1,24 @@
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:55434:5432"
+
+  api:
+    ports: !override
+      - "127.0.0.1:18001:8000"
+    environment:
+      ADX_PUBLIC_API_URL: http://127.0.0.1:18001
+      ADX_ARENA_MCP_ENABLED: "true"
+      ADX_ARENA_MCP_TOKEN_SECRET: "arena402-real-runtime-e2e-secret-32-bytes-minimum"
+      ADX_ARENA_PAYMENTS_ENABLED: "false"
+      ADX_ARENA_MEMORIAL_ENABLED: "false"
+      ADX_ARENA_SETTLEMENT_RPC_URL: https://arena402-e2e.invalid
+      ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: https://arena402-e2e.invalid
+      ADX_WALLET_RPC_URL: https://arena402-e2e.invalid
+
+  arena-worker:
+    environment:
+      ADX_ARENA_SETTLEMENT_RPC_URL: https://arena402-e2e.invalid
+      ADX_ARENA_SETTLEMENT_BLOCKSCOUT_URL: https://arena402-e2e.invalid
+      ADX_CURRENT_GAME_START_THRESHOLD: "10"
+      ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS: "3600"

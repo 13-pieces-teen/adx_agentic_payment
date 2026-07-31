@@ -387,11 +387,14 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 合法候选动作是严格 union：
 
 ```json
-{"action": "sell", "good": "grain"}
+{"action": "sell", "good": "grain", "quantity": 2, "limitPrice": "8.500000"}
 ```
 
-或 `{"action":"buy","good":"grain"}`、`{"action":"pass"}`。`pass` 不得带额外交易
-字段，所有 schema 均拒绝 extra fields。
+或 `{"action":"buy","good":"grain"}`、`{"action":"pass"}`。buy/sell 的
+`quantity` 是 1–1,000,000 的可选整数，省略时默认为 1；`limitPrice` 是可选的
+正定点小数保留价。`pass` 不得带额外交易字段，所有 wire schema 均拒绝 extra
+fields。Codex Structured Outputs 使用 root object + required nullable 占位，
+Connector 只移除该 Adapter 约定的 `null` 字段后再执行同一严格 wire 校验。
 
 ### Negotiate
 
