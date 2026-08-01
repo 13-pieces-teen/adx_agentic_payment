@@ -15,6 +15,9 @@ RELEASE = (
 GENERATE_ENV = (
     ROOT / "deploy" / "scripts" / "generate-env.sh"
 ).read_text(encoding="utf-8")
+BUILD_CONNECTOR_ARTIFACTS = (
+    ROOT / "deploy" / "scripts" / "build-connector-artifacts.sh"
+).read_text(encoding="utf-8")
 
 
 def test_workflow_deploys_only_main_after_all_ci_gates() -> None:
@@ -138,3 +141,16 @@ def test_generated_environment_keeps_public_app_and_api_urls_separate() -> None:
     assert 'public_url="${public_api_url}"' in GENERATE_ENV
     assert "printf 'ADX_PUBLIC_APP_URL=%s\\n' \"${public_url}\"" in GENERATE_ENV
     assert "printf 'ADX_PUBLIC_API_URL=%s\\n' \"${public_api_url}\"" in GENERATE_ENV
+
+
+def test_docker_connector_build_preserves_the_final_artifact_name() -> None:
+    docker_builder = BUILD_CONNECTOR_ARTIFACTS.split(
+        "build_in_docker() {", 1
+    )[1].split("\n}", 1)[0]
+    assert 'docker_output_name="$3"' in docker_builder
+    assert '-o "/out/${docker_output_name}"' in docker_builder
+    assert '\n  output_name="$3"\n' not in docker_builder
+    assert (
+        'printf \'%s  %s\\n\' "${checksum}" "${output_name}"'
+        in BUILD_CONNECTOR_ARTIFACTS
+    )

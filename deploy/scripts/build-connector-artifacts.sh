@@ -66,14 +66,14 @@ build_native() {
 }
 
 build_in_docker() {
-  goos="$1"
-  goarch="$2"
-  output_name="$3"
+  docker_goos="$1"
+  docker_goarch="$2"
+  docker_output_name="$3"
   docker run --rm \
     --user "$(id -u):$(id -g)" \
     --env CGO_ENABLED=0 \
-    --env GOOS="${goos}" \
-    --env GOARCH="${goarch}" \
+    --env GOOS="${docker_goos}" \
+    --env GOARCH="${docker_goarch}" \
     --env GOCACHE=/tmp/go-build \
     --env GOMODCACHE=/tmp/go-mod \
     --volume "${connector_dir}:/src:ro" \
@@ -81,7 +81,7 @@ build_in_docker() {
     --workdir /src \
     golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 \
     go build -buildvcs=false -trimpath -ldflags="-s -w" \
-      -o "/out/${output_name}" "${connector_package}"
+      -o "/out/${docker_output_name}" "${connector_package}"
 }
 
 while read -r goos goarch suffix; do
