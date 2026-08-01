@@ -11,13 +11,19 @@ class _Repository:
         self.queued: list[str] = []
         self.rule_runs: list[str] = []
         self.advanced: list[str] = []
+        self.discovery_calls = 0
 
-    async def automatable_game_ids(self, *, limit: int) -> list[str]:
+    async def actionable_game_actions(
+        self,
+        *,
+        limit: int,
+    ) -> list[dict[str, object]]:
         assert limit == 50
-        return list(self.states)
-
-    async def automation_state(self, *, game_id: str) -> dict[str, object]:
-        return self.states[game_id]
+        self.discovery_calls += 1
+        return [
+            {"gameId": game_id, **state}
+            for game_id, state in self.states.items()
+        ]
 
     async def enqueue_agent_runtime_run(self, *, game_id: str) -> object:
         self.queued.append(game_id)
@@ -47,6 +53,7 @@ def test_running_agent_game_queues_its_decide_round_automatically() -> None:
     assert repository.queued == ["game-1"]
     assert repository.rule_runs == []
     assert repository.advanced == []
+    assert repository.discovery_calls == 1
 
 
 def test_mixed_hosted_connector_game_uses_one_runtime_run() -> None:
@@ -65,6 +72,7 @@ def test_mixed_hosted_connector_game_uses_one_runtime_run() -> None:
     assert repository.queued == ["game-1"]
     assert repository.rule_runs == []
     assert repository.advanced == []
+    assert repository.discovery_calls == 1
 
 
 def test_running_rule_game_executes_its_decide_round_automatically() -> None:

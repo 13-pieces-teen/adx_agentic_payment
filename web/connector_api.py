@@ -31,6 +31,7 @@ from connector_gateway import (
     ConnectorArenaTaskDispatcher,
     build_production_connector,
 )
+from db.schema_identity import verify_repository_schema_identity
 from web.api import _allowed_origins
 from web.metrics import ApiMetrics, ApiMetricsMiddleware, postgres_readiness
 
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
         await registrar.initialize()
         await result_core.initialize()
         await bundle.initialize()
+        await verify_repository_schema_identity(repositories)
         if dispatcher is not None:
             dispatcher_task = asyncio.create_task(
                 dispatcher.run_forever(poll_seconds=0.25),

@@ -6,6 +6,8 @@ import asyncio
 import os
 import signal
 
+from db.schema_identity import verify_schema_identity
+
 from .postgres_worker import (
     DurableHostedWorker,
     PostgresHostedWorkerRepository,
@@ -44,6 +46,7 @@ async def main() -> None:
     )
     try:
         await repository.initialize()
+        await verify_schema_identity(repository._pool)
         await initialize_secret_port(reader)
         loop = asyncio.get_running_loop()
         for signal_name in (signal.SIGTERM, signal.SIGINT):

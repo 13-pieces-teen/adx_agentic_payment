@@ -106,6 +106,12 @@ combines four independent loops:
   workers are unavailable;
 - read-only settlement recovery followed by idempotent inventory commit.
 
+Before any loop starts, the worker requires the database's applied migration
+names and SHA-256 values to exactly match the migration manifest packaged in
+its image. The game orchestrator discovers only actionable transitions with
+one set-based PostgreSQL query per idle poll instead of probing every running
+Game independently.
+
 The process has the `adx_arena_core` database role and HTTPS read access to the
 configured Injective RPC/Blockscout endpoints. It has no wallet, private key,
 Secret Manager permission, Facilitator submission credential, or transaction

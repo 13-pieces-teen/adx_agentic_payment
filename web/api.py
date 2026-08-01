@@ -63,6 +63,7 @@ from connector_gateway import (
     build_production_connector,
     create_connector_router,
 )
+from db.schema_identity import verify_repository_schema_identity
 from hosted_agent_control_plane import (
     CapabilityCatalogService,
     LocalHostedControlBundle,
@@ -553,6 +554,8 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             await pawnhouse_repository.initialize()
         if connector_result_core is not None:
             await connector_result_core.initialize()
+        if readiness_repositories:
+            await verify_repository_schema_identity(readiness_repositories)
 
         nonlocal pawnhouse_coordinator_task
         nonlocal pawnhouse_orchestrator_task

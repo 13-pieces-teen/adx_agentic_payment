@@ -8,6 +8,8 @@ from typing import Any
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from db.schema_identity import verify_schema_identity
+
 
 _BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 
@@ -127,7 +129,7 @@ class ApiMetricsMiddleware:
 async def postgres_readiness(
     repositories: dict[str, object],
 ) -> dict[str, str]:
-    """Probe each distinct configured pool without exposing SQL errors."""
+    """Probe configured pools and the packaged migration identity."""
 
     async def probe(name: str, pool: Any) -> tuple[str, str]:
         try:
@@ -154,6 +156,15 @@ async def postgres_readiness(
             timeout=3.0,
         )
         results.update(checked)
+        _, schema_pool = next(iter(unique.values()))
+        try:
+            await asyncio.wait_for(
+                verify_schema_identity(schema_pool),
+                timeout=3.0,
+            )
+            results["schema_identity"] = "ok"
+        except Exception:
+            results["schema_identity"] = "unavailable"
     return results
 
 

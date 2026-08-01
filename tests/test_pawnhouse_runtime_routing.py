@@ -61,6 +61,28 @@ class _Connection:
         raise AssertionError(query)
 
 
+class _BatchPool:
+    def __init__(self) -> None:
+        self.queries: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fetch(self, query: str, *arguments: object):
+        self.queries.append((query, arguments))
+        return [
+            {
+                "game_id": "game-rule",
+                "action": "run_rule",
+            },
+            {
+                "game_id": "game-agent",
+                "action": "enqueue_agent_runtime",
+            },
+            {
+                "game_id": "game-advance",
+                "action": "advance_round",
+            },
+        ]
+
+
 def test_mixed_hosted_connector_round_queues_one_agent_runtime_run() -> None:
     connection = _Connection()
     repository = PostgresPawnhouseRepository(
@@ -91,3 +113,22 @@ def test_mixed_round_waits_for_its_existing_runtime_run() -> None:
 
     assert state["action"] == "wait_runtime"
     assert state["runtimeRunStatus"] == "running"
+
+
+def test_actionable_game_actions_use_one_set_based_query() -> None:
+    pool = _BatchPool()
+    repository = PostgresPawnhouseRepository("", pool=pool)
+
+    actions = asyncio.run(repository.actionable_game_actions(limit=50))
+
+    assert actions == [
+        {"gameId": "game-rule", "action": "run_rule"},
+        {"gameId": "game-agent", "action": "enqueue_agent_runtime"},
+        {"gameId": "game-advance", "action": "advance_round"},
+    ]
+    assert len(pool.queries) == 1
+    query, arguments = pool.queries[0]
+    assert arguments == (50,)
+    assert "WITH game_state AS" in query
+    assert "LEFT JOIN LATERAL" in query
+    assert "WHERE action IS NOT NULL" in query

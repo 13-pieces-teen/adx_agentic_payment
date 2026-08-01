@@ -144,6 +144,12 @@ OFFICIAL_LITELLM_CAPACITY_SQL_PATH = (
     / "migrations"
     / "052_arena_official_litellm_provider_capacity.sql"
 )
+SCHEMA_IDENTITY_READINESS_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "053_arena_schema_identity_readiness.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -177,6 +183,13 @@ class _Connection:
     async def fetchval(self, query: str, migration_name: str):
         self.executions.append((query, (migration_name,)))
         return self.applied.get(migration_name)
+
+    async def fetch(self, query: str):
+        self.executions.append((query, ()))
+        return [
+            {"migration_name": name, "sha256": checksum}
+            for name, checksum in sorted(self.applied.items())
+        ]
 
     async def execute(self, query: str, *arguments):
         self.executions.append((query, arguments))
@@ -246,6 +259,25 @@ def test_quantity_and_limit_orders_keeps_applied_bytes_immutable() -> None:
     assert sql.index("SET LOCAL ROLE adx_arena_migration;") < sql.rindex(
         "COMMIT;"
     )
+
+
+def test_schema_identity_readiness_grants_registry_read_only() -> None:
+    sql = SCHEMA_IDENTITY_READINESS_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "GRANT SELECT ON TABLE public.adx_schema_migrations TO" in sql
+    for role in (
+        "adx_connector_gateway",
+        "adx_arena_api",
+        "adx_arena_core",
+        "adx_hosted_worker",
+        "adx_credential_controller",
+        "adx_settlement",
+        "adx_wallet_signer",
+    ):
+        assert role in sql
+    assert "INSERT" not in sql
+    assert "UPDATE" not in sql
+    assert "DELETE" not in sql
 
 
 def test_current_game_updated_at_migration_supports_pointer_rotation() -> None:
@@ -322,6 +354,7 @@ def test_all_scope_uses_one_global_lock_and_applies_connector_before_arena(
         for query, arguments in connection.executions
         if not arguments
         and "CREATE TABLE IF NOT EXISTS adx_schema_migrations" not in query
+        and "FROM adx_schema_migrations" not in query
         and "pg_advisory_" not in query
         and query != "RESET ROLE"
     ]
@@ -367,6 +400,53 @@ def test_repeated_migration_is_skipped_and_checksum_drift_fails(
         asyncio.run(migrate_module.migrate("connector"))
     assert any("pg_advisory_unlock" in query for query, _ in drifted.executions)
     assert drifted.closed is True
+
+
+def test_all_scope_rejects_all_manifest_drift_before_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connector = _write_migration(tmp_path, "002_connector_gateway.sql")
+    checksum = hashlib.sha256(
+        connector.read_text(encoding="utf-8").encode("utf-8")
+    ).hexdigest()
+    connection = _Connection(
+        {
+            connector.name: "0" * 64,
+            "011_arena_scalable_games.sql": "orphan-sha",
+        }
+    )
+    monkeypatch.setenv("ADX_CONNECTOR_MIGRATIONS_DIR", str(tmp_path))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+
+    async def fake_connect(_dsn: str):
+        return connection
+
+    monkeypatch.setattr(migrate_module, "connect_with_retry", fake_connect)
+
+    with pytest.raises(RuntimeError) as error:
+        asyncio.run(migrate_module.migrate("all"))
+
+    assert (
+        "Applied migration missing from disk: "
+        "011_arena_scalable_games.sql"
+    ) in str(error.value)
+    assert (
+        "Applied migration changed on disk: "
+        "002_connector_gateway.sql"
+    ) in str(error.value)
+    executed_migration_sql = [
+        query
+        for query, arguments in connection.executions
+        if not arguments
+        and query.strip().startswith("SELECT '")
+    ]
+    assert executed_migration_sql == []
+    assert connection.applied == {
+        connector.name: "0" * 64,
+        "011_arena_scalable_games.sql": "orphan-sha",
+    }
+    assert connection.closed is True
 
 
 def test_arena_sql_has_required_identity_task_result_and_queue_constraints():

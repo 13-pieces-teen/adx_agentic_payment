@@ -9,6 +9,8 @@ import signal
 from datetime import datetime, timezone
 
 from arena_core.postgres_repository import PostgresArenaCoreRepository
+from db.schema_identity import verify_schema_identity
+
 from .current_game_lifecycle import CurrentGameLifecycleWorker
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseAgentRuntimeCoordinator
@@ -303,6 +305,7 @@ async def main() -> None:
     )
     await pawnhouse.initialize()
     await coordinator.initialize()
+    await verify_schema_identity(pawnhouse._pool)
     loop = asyncio.get_running_loop()
     for signal_name in (signal.SIGTERM, signal.SIGINT):
         try:

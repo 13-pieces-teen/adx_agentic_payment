@@ -4388,6 +4388,126 @@ class PostgresPawnhouseRepository:
         )
         return [str(row["game_id"]) for row in rows]
 
+    async def actionable_game_actions(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, str]]:
+        """Discover currently executable transitions in one set-based query."""
+
+        if limit < 1 or limit > 500:
+            raise ValueError("automation game limit must be between 1 and 500")
+        rows = await self._require_pool().fetch(
+            """
+            WITH game_state AS (
+                SELECT
+                    game.game_id,
+                    game.started_at,
+                    round.round_id,
+                    round.phase AS round_phase,
+                    runtime.participant_count,
+                    runtime.all_rule,
+                    runtime.all_task_runtime,
+                    runtime_run.status AS runtime_run_status,
+                    active_negotiation.present AS active_negotiation,
+                    pending_settlement.present AS pending_settlement
+                FROM arena402.games AS game
+                JOIN arena402.rounds AS round
+                  ON round.game_id = game.game_id
+                 AND round.round_index = game.current_round
+                LEFT JOIN LATERAL (
+                    SELECT
+                        count(*) AS participant_count,
+                        bool_and(
+                            participant.runtime_kind = 'rule'
+                        ) AS all_rule,
+                        bool_and(
+                            participant.runtime_kind IN (
+                                'hosted',
+                                'connector'
+                            )
+                        ) AS all_task_runtime
+                    FROM arena402.game_participants AS participant
+                    WHERE participant.game_id = game.game_id
+                      AND participant.status IN ('active', 'settling')
+                ) AS runtime ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT run.status
+                    FROM arena402.runtime_runs AS run
+                    WHERE run.round_id = round.round_id
+                      AND run.runtime_kind IN ('hosted', 'mixed')
+                    ORDER BY run.runtime_kind
+                    LIMIT 1
+                ) AS runtime_run ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT TRUE AS present
+                    FROM arena402.negotiations AS negotiation
+                    WHERE negotiation.round_id = round.round_id
+                      AND negotiation.status = 'active'
+                    LIMIT 1
+                ) AS active_negotiation ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT TRUE AS present
+                    FROM arena402.pairings AS pairing
+                    WHERE pairing.round_id = round.round_id
+                      AND pairing.status IN (
+                          'accepted_pending_settlement',
+                          'settling'
+                      )
+                    LIMIT 1
+                ) AS pending_settlement ON TRUE
+                WHERE game.phase = 'running'
+            ),
+            actionable AS (
+                SELECT
+                    game_id,
+                    started_at,
+                    CASE
+                        WHEN round_phase = 'decide'
+                         AND participant_count > 0
+                         AND all_rule
+                        THEN 'run_rule'
+                        WHEN round_phase = 'decide'
+                         AND participant_count > 0
+                         AND all_task_runtime
+                         AND runtime_run_status IS NULL
+                        THEN 'enqueue_agent_runtime'
+                        WHEN round_phase IN (
+                            'negotiate',
+                            'settle',
+                            'round_close'
+                        )
+                         AND NOT (
+                            participant_count > 0
+                            AND all_task_runtime
+                            AND (
+                                runtime_run_status IS NULL
+                                OR runtime_run_status <> 'completed'
+                            )
+                         )
+                         AND active_negotiation IS NOT TRUE
+                         AND pending_settlement IS NOT TRUE
+                        THEN 'advance_round'
+                        ELSE NULL
+                    END AS action
+                FROM game_state
+            )
+            SELECT game_id, action
+            FROM actionable
+            WHERE action IS NOT NULL
+            ORDER BY started_at NULLS LAST, game_id
+            LIMIT $1
+            """,
+            limit,
+        )
+        return [
+            {
+                "gameId": str(row["game_id"]),
+                "action": str(row["action"]),
+            }
+            for row in rows
+        ]
+
     async def automation_state(
         self,
         *,

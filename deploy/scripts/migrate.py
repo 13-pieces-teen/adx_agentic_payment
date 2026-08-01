@@ -88,6 +88,7 @@ async def migrate(scope: MigrationScope = DEFAULT_SCOPE) -> None:
             """
         )
 
+        prepared: list[tuple[Path, str, str]] = []
         for path in migration_files(scope):
             sql = path.read_text(encoding="utf-8")
             checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
@@ -96,15 +97,58 @@ async def migrate(scope: MigrationScope = DEFAULT_SCOPE) -> None:
             # only one matching outer pair before execution.
             executable_sql = re.sub(r"^\s*BEGIN;\s*", "", sql, count=1)
             executable_sql = re.sub(r"\s*COMMIT;\s*$", "", executable_sql, count=1)
-            existing = await connection.fetchval(
-                "SELECT sha256 FROM adx_schema_migrations WHERE migration_name = $1",
-                path.name,
+            prepared.append((path, checksum, executable_sql))
+
+        applied_rows = await connection.fetch(
+            """
+            SELECT migration_name, sha256
+            FROM adx_schema_migrations
+            ORDER BY migration_name
+            """
+        )
+        applied = {
+            str(row["migration_name"]): str(row["sha256"])
+            for row in applied_rows
+        }
+        expected = {
+            path.name: checksum
+            for path, checksum, _ in prepared
+        }
+        selected_patterns = (
+            tuple(MIGRATION_PATTERNS.values())
+            if scope == "all"
+            else (MIGRATION_PATTERNS[scope],)
+        )
+        unexpected = sorted(
+            name
+            for name in applied.keys() - expected.keys()
+            if scope == "all"
+            or any(
+                pattern.fullmatch(name)
+                for pattern in selected_patterns
             )
-            if existing:
-                if existing != checksum:
-                    raise RuntimeError(
-                        f"Applied migration changed on disk: {path.name}"
-                    )
+        )
+        changed = sorted(
+            name
+            for name in applied.keys() & expected.keys()
+            if applied[name] != expected[name]
+        )
+        identity_errors: list[str] = []
+        if unexpected:
+            identity_errors.append(
+                "Applied migration missing from disk: "
+                + ", ".join(unexpected)
+            )
+        if changed:
+            identity_errors.append(
+                "Applied migration changed on disk: "
+                + ", ".join(changed)
+            )
+        if identity_errors:
+            raise RuntimeError("; ".join(identity_errors))
+
+        for path, checksum, executable_sql in prepared:
+            if path.name in applied:
                 print(f"migration already applied: {path.name}", flush=True)
                 continue
 

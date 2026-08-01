@@ -66,6 +66,13 @@ Arena 402 的对外叙事固定为三层：
   decoupling, readiness and Prometheus metrics, plus a read-only load probe.
   This is implementation evidence, not 100-Agent production capacity
   acceptance.
+- [x] Database P0 hardening: API、Connector API、Arena Worker、Hosted Worker 和
+  Settlement Worker 在接流量或领取任务前验证镜像内完整 migration manifest；
+  `/api/ready` 同时检查 migration 名称、缺失/额外记录和 SHA-256，`053` 仅向运行
+  角色授予 registry 只读权限。Game Orchestrator 改为一条 set-based SQL 只发现
+  当前可执行 transition，不再按所有 running Game 每 250ms 执行 N+1 状态查询。
+  2026-07-31 已在全新 002–053 临时库验证受限角色与真实 SQL，并在现有 12 个
+  running Game 上只读证明新旧 actionable 集合一致。
 - [x] Founding 402 backend foundation: isolated soulbound ERC-721 contract,
   402 pre-generated testnet wallets, deterministic first-402 GitHub
   registration allocation, public-only inventory import, authenticated user

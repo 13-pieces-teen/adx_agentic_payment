@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from arena_game.postgres import PostgresPawnhouseRepository
 from arena_game.evm_confirmation import EvmJsonRpcConfirmationReader
+from db.schema_identity import verify_schema_identity
 
 from .automatic_worker import AutomaticSettlementWorker
 from .coordinator import X402SettlementCoordinator
@@ -137,6 +138,7 @@ async def main() -> None:
     )
     await payments.initialize()
     await arena.initialize()
+    await verify_schema_identity(payments._pool)
     loop = asyncio.get_running_loop()
     for signal_name in (signal.SIGTERM, signal.SIGINT):
         try:

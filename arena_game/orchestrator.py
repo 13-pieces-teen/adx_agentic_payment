@@ -22,9 +22,9 @@ class PawnhouseGameOrchestrator:
 
     async def run_once(self, *, limit: int = 50) -> int:
         processed = 0
-        game_ids = await self._repository.automatable_game_ids(limit=limit)
-        for game_id in game_ids:
-            state = await self._repository.automation_state(game_id=game_id)
+        actions = await self._repository.actionable_game_actions(limit=limit)
+        for state in actions:
+            game_id = str(state["gameId"])
             action = state.get("action")
             if action == "enqueue_agent_runtime":
                 await self._repository.enqueue_agent_runtime_run(
