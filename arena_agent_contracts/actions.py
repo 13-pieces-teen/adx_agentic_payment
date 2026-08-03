@@ -101,7 +101,7 @@ PositiveFixedDecimal: TypeAlias = Annotated[
     PlainSerializer(_serialize_fixed_decimal, return_type=str),
 ]
 
-OrderQuantity: TypeAlias = Annotated[int, Field(gt=0, le=1_000_000)]
+OrderQuantity: TypeAlias = Literal[1]
 
 GoodId: TypeAlias = Annotated[
     str,

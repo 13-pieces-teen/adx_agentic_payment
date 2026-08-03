@@ -101,6 +101,8 @@ func (ClaudeDriver) BuildTask(
 
 type CodexDriver struct{}
 
+const arenaCodexHTTPProviderID = "arena_openai_http"
+
 func (CodexDriver) Kind() string {
 	return "codex"
 }
@@ -128,6 +130,12 @@ func (CodexDriver) BuildTask(
 			"--ignore-user-config",
 			"--ignore-rules",
 			"--skip-git-repo-check",
+			"-c", `model_provider="`+arenaCodexHTTPProviderID+`"`,
+			"-c", `model_providers.`+arenaCodexHTTPProviderID+`.name="OpenAI"`,
+			"-c", `model_providers.`+arenaCodexHTTPProviderID+`.wire_api="responses"`,
+			"-c", `model_providers.`+arenaCodexHTTPProviderID+`.requires_openai_auth=true`,
+			"-c", `model_providers.`+arenaCodexHTTPProviderID+`.supports_websockets=false`,
+			"-c", `model_providers.`+arenaCodexHTTPProviderID+`.supports_standalone_web_search=false`,
 			"--cd", task.IsolatedWorkingDir,
 			"--output-schema", task.OutputSchemaPath,
 		)

@@ -188,10 +188,12 @@ owner-scoped Arena Agent identity、参赛快照、Connector-owned session、数
 Task dispatcher、typed Task/Result、durable result outbox、Gateway inbox、Arena
 Result Sink 与 Hosted/Connector mixed-Runtime 回合编排，并完成默认关闭的 WSS
 wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动 cursor sync，
-并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E；2026-07-31 已用真实
+并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E；2026-08-02 已用真实
 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合 Connector-only 比赛，
-两项结果均经 Result Sink 应用并生成排名。该局无配对/协商/结算，生产重连和
-Hosted/Connector mixed 真实 E2E 尚未验收。通用
+四项 decide/negotiate 结果均经 Result Sink 应用，并形成 FCFS pairing、proposal
+和 accept。该隔离局未提供 PaymentMandate，故以 `settlement_disabled` 关闭且
+0 链写入；生产重连、Hosted/Connector mixed 和 payment-enabled Connector 真实
+E2E 尚未验收。通用
 PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
@@ -288,6 +290,11 @@ create game
       投影、Withdraw、阈值原子自动启动、交易列表和结果接口
       仍按 `prd-current-game-backend.md` 顺序实施。旧 Participant 在这些校验落库前
       只显示为 `PENDING`，不计入 `readyCount`。
+- [x] Current Game Join 不再假设 Hosted Runtime：preflight 同时校验 ready 的
+      Hosted 与 owner-scoped Connector route，统一 Join 按冻结的 Runtime Kind
+      分流；Connector Participant 复用同一 PaymentMandate、Join Authorization、
+      settlement account、game-coin provision 和 Ready 门控。真实 Connector
+      自动 testnet 支付仍需单独的人类批准验收。
 - [x] Current Game Join v2 已支持玩家提交 `cashAtomic` 与四种货物数量；
       Arena 按冻结初始价校验总值严格等于 20 金并在 Join 时锁定。Current Game
       使用 `manual` portfolio mode，开赛不再用 `balanced_auto` 覆盖玩家组合；
@@ -322,12 +329,14 @@ create game
       Device token、MCP discover/list/sync/claim/submit/status、PostgreSQL Result
       Sink 与零链写入。
 - [x] 真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 已通过宿主机 Connector
-      参加隔离 Docker 的一回合 Connector-only 比赛；两项 Decide Task 均由真实
-      Runtime 成功返回、经 Result Sink 应用并产生两条排名，0 链写入。Codex
-      `pass`、Claude `buy grain`，未形成 pairing/negotiation。
+      参加隔离 Docker 的一回合 Connector-only 比赛；Codex `buy grain`、Claude
+      `sell grain`，随后真实 Runtimes 完成 `propose` 与 `accept`。四项 Task 均
+      成功返回并由 Result Sink 应用，Arena 形成一个 FCFS pairing 和两条公开
+      negotiation message。该局 `authorizationMode=none`，因此以
+      `settlement_disabled` 终结且 0 链写入，不构成支付证据。
 - [ ] 仍需真实进程断线重连、lease expiry、durable result replay、
-      Hosted/Connector mixed 比赛，以及能够覆盖 pairing/negotiation 的真实
-      Runtime E2E。
+      Hosted/Connector mixed 比赛，以及带 PaymentMandate 的真实 Connector
+      settlement E2E。
 - [x] Connector 进程重启会递增持久化的 `session_generation`，使原进程的
       Session 失效并用新的 session incarnation 重建；处理中 typed AgentTask 仅在
       旧 receipt 明确为 `connector_restarted` 时以新 Command 重试一次，总 Attempt
@@ -335,11 +344,14 @@ create game
 - [x] typed AgentTask 已使用 Arena 专用隔离 profile：Claude 强制 no-tools、
       safe-mode、空 MCP、无会话持久化及严格 JSON Schema；Codex 强制独立临时目录、
       read-only sandbox、ephemeral、忽略用户 config/rules 及严格 JSON Schema。
+      Arena Codex Task 额外使用代码固定且不注入 endpoint/credential 的
+      HTTPS-only Provider profile，避免模型 WebSocket 超时后再回退 HTTPS；
+      Generic managed task 不改变用户自己的传输配置。
       inventory 分离 installed/task-enabled/auth-status/compatible/isolation/
       local-ready，Gateway 与 Connector 交叉校验并对未就绪 Runtime fail closed。Codex CLI
       当前没有等价 no-tools 开关，该差异保留为明确限制。
 - [ ] 使用真实 CC/Codex 跑通 Hosted/Connector mixed 比赛，并保存断线重连、
-      deadline default、Result replay 与真实 pairing/negotiation 证据。
+      deadline default、Result replay 与 payment-enabled settlement 证据。
 - [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
       `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
 - [x] 平台 `user_id` 永久绑定 platform-managed testnet guest wallet；`045`

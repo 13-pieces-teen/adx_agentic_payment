@@ -65,6 +65,26 @@ def test_no_payment_participants_become_ready_without_a_mandate() -> None:
         assert "ready_at" in source
 
 
+def test_connector_current_game_join_uses_the_same_mandate_boundary() -> None:
+    dispatch_source = inspect.getsource(
+        PostgresPawnhouseRepository.add_current_participant
+    )
+    connector_source = inspect.getsource(
+        PostgresPawnhouseRepository.add_connector_participant
+    )
+    preflight_source = inspect.getsource(
+        PostgresPawnhouseRepository.current_game_join_preflight
+    )
+
+    assert 'runtime_kind == "hosted"' in dispatch_source
+    assert 'runtime_kind == "connector"' in dispatch_source
+    assert "payment_mandate_id" in connector_source
+    assert "'same_game_settlement_account'" in connector_source
+    assert "join_authorization_id" in connector_source
+    assert "game_coin_provisions" in connector_source
+    assert "resolve_connector_binding_for_arena" in preflight_source
+
+
 def test_settlement_terminal_state_updates_pairing_and_negotiation() -> None:
     commit_source = inspect.getsource(
         PostgresPawnhouseRepository.commit_confirmed_inventory

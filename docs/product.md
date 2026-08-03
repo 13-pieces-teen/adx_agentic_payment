@@ -146,9 +146,11 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Connector 已有较完整的设备/Runtime 控制面，并已实现 Arena
   Local Agent 注册/参赛、冻结 binding epoch、Connector-owned session、数据库
   Task dispatcher、`decide`/`negotiate` typed Task/Result、durable result outbox、
-  Result Sink 和 Hosted/Connector mixed-Runtime 编排。2026-07-31 已完成真实
-  Claude Code/Codex 的一回合 Connector-only 比赛并由 Result Sink 应用两项结果；
-  该局无配对/协商/结算。生产重连和 Hosted/Connector mixed 真实 E2E 尚未验收。
+  Result Sink 和 Hosted/Connector mixed-Runtime 编排。2026-08-02 已完成真实
+  Claude Code/Codex 的一回合 Connector-only 比赛，并由 Result Sink 应用四项
+  decide/negotiate 结果；该局形成 FCFS pairing、proposal 和 accept。隔离局未提供
+  PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。生产重连、
+  Hosted/Connector mixed 和 payment-enabled Connector 真实 E2E 尚未验收。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable

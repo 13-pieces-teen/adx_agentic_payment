@@ -431,13 +431,29 @@ class PawnhouseAgentRuntimeCoordinator:
 
     @staticmethod
     def _decide_view(context: dict[str, object]) -> ArenaDecideInputV1:
+        cash_atomic = int(context["cash_atomic"])
+        holdings = {
+            str(good): int(quantity)
+            for good, quantity in dict(context["holdings"]).items()
+        }
+        can_buy = cash_atomic > 0
+        sellable_goods = [
+            good_id
+            for good_id in GOOD_IDS
+            if holdings.get(good_id, 0) > 0
+        ]
+        allowed_actions = [
+            *([] if not can_buy else ["buy"]),
+            *([] if not sellable_goods else ["sell"]),
+            "pass",
+        ]
         return ArenaDecideInputV1(
             phase="decide",
             game_id=str(context["game_id"]),
             round_id=str(context["round_id"]),
             round_index=int(context["round_index"]),
-            cash=_gold_decimal(int(context["cash_atomic"])),
-            holdings=dict(context["holdings"]),
+            cash=_gold_decimal(cash_atomic),
+            holdings=holdings,
             market={
                 str(good): _gold_decimal(int(price))
                 for good, price in dict(context["market"]).items()
@@ -445,8 +461,10 @@ class PawnhouseAgentRuntimeCoordinator:
             events=_public_events(list(context["events"])),
             reputation=ArenaReputationV1(failed_negotiations=0),
             limits=ArenaDecideLimitsV1(
-                allowed_actions=["buy", "sell", "pass"],
-                allowed_goods=list(GOOD_IDS),
+                allowed_actions=allowed_actions,
+                allowed_goods=(
+                    list(GOOD_IDS) if can_buy else sellable_goods
+                ),
             ),
             completed_actions=[],
             completed_trades=[],

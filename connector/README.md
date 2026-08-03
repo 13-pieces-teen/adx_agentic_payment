@@ -34,13 +34,15 @@ registration, frozen Connector binding epochs, authenticated game
 participation, automatic Connector-owned Arena session startup, leased
 AgentTask dispatch, and one coordinator for Hosted-only, Connector-only, or
 Hosted/Connector mixed rounds. Each task still returns through the Arena
-Result Sink and Deadline Finalizer. A real Claude Code/Codex Connector-only
-one-round game was accepted in an isolated Docker stack on 2026-07-31. Both
-Runtime results succeeded, passed through the Result Sink, and produced two
-terminal rankings with zero chain writes. Codex chose `pass` and Claude chose
-`buy grain`, so that run is not evidence of pairing, negotiation, payment, or
-inventory transfer. Production reconnect and real Hosted/Connector mixed
-acceptance are still pending.
+Result Sink and Deadline Finalizer. On 2026-08-02, a real Claude Code/Codex
+Connector-only one-round game completed in an isolated Docker stack. Codex
+bought grain, Claude sold grain, FCFS produced one pairing, and their real
+Runtimes produced a proposal and acceptance through four applied AgentTasks.
+The test Game deliberately used `authorizationMode=none`, so Arena closed the
+accepted negotiation as `settlement_failed` with safe error
+`settlement_disabled`; it created no SettlementIntent, moved no inventory, and
+wrote nothing on chain. Production reconnect, real Hosted/Connector mixed
+acceptance, and payment-enabled Connector settlement are still pending.
 
 The stateless MCP slice is also implementation-complete behind
 `ADX_ARENA_MCP_ENABLED=false`. It includes short-lived Device/Binding/epoch
@@ -70,6 +72,9 @@ Runtime harness now launches locally authenticated Claude Code and Codex child
 processes on the host while Docker owns Arena, Gateway, PostgreSQL, and the
 Arena worker. It verifies authoritative task/result/application rows and
 rankings rather than treating process exit or MCP submit as business success.
+The accepted 2026-08-02 run also verifies one FCFS pairing and a two-message
+negotiation (`propose` then `accept`). It intentionally verifies the
+payment-disabled terminal path rather than claiming a settlement.
 
 Run the real Runtime E2E from PowerShell after confirming both local CLIs are
 authenticated. It uses the isolated project `arena402-real-runtimes-e2e`,
@@ -255,14 +260,33 @@ Connector creates a short-lived empty working directory containing only a
 
 - Claude Code adds safe mode, an empty strict MCP config, `--tools ""`,
   disabled slash commands, no session persistence, `dontAsk`, and the strict
-  JSON Schema. This is the Arena no-tools profile.
+  JSON Schema. This is the Arena no-tools profile. Before the shared strict
+  validator, the Claude Adapter safely bounds public negotiation messages to
+  100 Unicode characters and accepts the unambiguous Decide-only `price`
+  spelling as canonical `limitPrice` plus the Negotiation-only `offer` spelling
+  as canonical `propose`. The same Negotiation-only boundary normalizes
+  unambiguous `type` / `quote` keys to `action` / `price`; conflicting aliases
+  and all other unknown or invalid fields still fail closed. A Claude
+  `accept` discards redundant `price` / `message` fields because Arena always
+  accepts the frozen latest counterparty quote and never lets Runtime reprice
+  acceptance.
 - Codex adds read-only sandboxing, ephemeral execution, ignored user
   configuration and exec-policy rules, `--skip-git-repo-check`, an isolated
   `--cd`, and a strict root-object output Schema compatible with OpenAI
-  Structured Outputs. Nullable schema placeholders are removed only from
-  Codex terminal actions before the shared strict wire validator runs. The
-  current Codex CLI has no equivalent no-tools switch, so this profile still
-  must not be described as tool-free.
+  Structured Outputs. Arena tasks also select a code-owned, task-local OpenAI
+  Provider profile with `supports_websockets=false`. It keeps the user's local
+  Codex login and Codex's auth-mode-specific default endpoint, but prevents a
+  failed model WebSocket attempt from consuming most of the Arena deadline
+  before HTTPS fallback. The cloud cannot supply this Provider, a base URL, or
+  credentials. Generic managed Codex tasks retain the user's normal transport.
+  Nullable schema placeholders are removed only from Codex terminal actions
+  before the shared strict wire validator runs. The current Codex CLI has no
+  equivalent no-tools switch, so this profile still must not be described as
+  tool-free.
+
+Both Runtime schemas and the shared action contract freeze the current game
+quantity to exactly one unit. A model-provided multi-unit quantity is rejected
+before it reaches FCFS pairing.
 
 Prompts are delivered over stdin. Runtime resume identifiers are captured from
 structured output and used only through the runtimes' fixed resume flags. The

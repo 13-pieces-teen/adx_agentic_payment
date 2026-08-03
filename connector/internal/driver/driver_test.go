@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/adx-agentic-payment/adx/connector/internal/protocol"
@@ -76,6 +77,18 @@ func TestCodexArenaTaskUsesRestrictedEphemeralProfile(t *testing.T) {
 		"--ignore-user-config",
 		"--ignore-rules",
 		"--skip-git-repo-check",
+		"-c",
+		`model_provider="arena_openai_http"`,
+		"-c",
+		`model_providers.arena_openai_http.name="OpenAI"`,
+		"-c",
+		`model_providers.arena_openai_http.wire_api="responses"`,
+		"-c",
+		`model_providers.arena_openai_http.requires_openai_auth=true`,
+		"-c",
+		`model_providers.arena_openai_http.supports_websockets=false`,
+		"-c",
+		`model_providers.arena_openai_http.supports_standalone_web_search=false`,
 		"--cd",
 		"/tmp/arena-task",
 		"--output-schema",
@@ -87,6 +100,11 @@ func TestCodexArenaTaskUsesRestrictedEphemeralProfile(t *testing.T) {
 	}
 	if command.Dir != "/tmp/arena-task" {
 		t.Fatalf("Arena task must not run in the user project: %s", command.Dir)
+	}
+	for _, arg := range command.Args {
+		if strings.Contains(arg, "base_url") || strings.Contains(arg, "api_key") {
+			t.Fatalf("Arena transport profile must not inject endpoints or credentials: %s", arg)
+		}
 	}
 }
 

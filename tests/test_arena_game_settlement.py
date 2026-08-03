@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 import pytest
@@ -206,3 +207,46 @@ def test_public_intent_projection_rejects_tampered_snapshot() -> None:
         PostgresPawnhouseRepository._settlement_public(
             _intent_row(intent, snapshot=tampered)
         )
+
+
+class _DisabledSettlementConnection:
+    def __init__(self) -> None:
+        self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fetchrow(self, _query: str, negotiation_id: str):
+        assert negotiation_id == "neg-1"
+        return {
+            "negotiation_id": negotiation_id,
+            "pairing_id": "pair-1",
+            "game_id": "game-1",
+            "round_id": "round-1",
+            "config_snapshot": {
+                "settlement": {"authorizationMode": "none"}
+            },
+        }
+
+    async def execute(self, query: str, *arguments: object):
+        self.execute_calls.append((query, arguments))
+        return "UPDATE 1"
+
+
+def test_disabled_settlement_closes_an_accepted_negotiation_honestly() -> None:
+    connection = _DisabledSettlementConnection()
+    repository = PostgresPawnhouseRepository("postgresql://unused")
+
+    intent = asyncio.run(
+        repository._freeze_settlement_intent(
+            connection,
+            negotiation_id="neg-1",
+        )
+    )
+
+    assert intent is None
+    updates = "\n".join(query for query, _ in connection.execute_calls)
+    assert "UPDATE arena402.pairings" in updates
+    assert "UPDATE arena402.negotiations" in updates
+    event_arguments = connection.execute_calls[-1][1]
+    assert event_arguments[2] == "pairing.closed"
+    assert '"safeErrorCode":"settlement_disabled"' in str(
+        event_arguments[3]
+    )

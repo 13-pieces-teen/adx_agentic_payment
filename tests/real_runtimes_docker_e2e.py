@@ -10,7 +10,8 @@ Prerequisites:
 Arena, Gateway, PostgreSQL, and the Arena worker run in Docker. The two
 Connectors and their managed Runtime children run on the host so existing local
 CLI authentication never enters a container. Payment support is disabled and
-the game freezes ``authorizationMode=none``.
+the game freezes ``authorizationMode=none``; an accepted negotiation must close
+as ``settlement_failed`` without moving inventory or writing to chain.
 """
 
 from __future__ import annotations
@@ -52,7 +53,27 @@ GAME_TIMEOUT_SECONDS = int(
     os.getenv("ADX_REAL_RUNTIME_E2E_GAME_TIMEOUT_SECONDS", "720")
 )
 ACTION_TIMEOUT_MS = int(os.getenv("ADX_REAL_RUNTIME_E2E_ACTION_TIMEOUT_MS", "300000"))
-EVENT_SEED = "real-runtime-grain-1"
+ROUND_COUNT = int(os.getenv("ADX_REAL_RUNTIME_E2E_ROUND_COUNT", "1"))
+EVENT_SEED = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_EVENT_SEED",
+    "real-runtime-grain-1",
+)
+PUBLIC_EVIDENCE_ONLY = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_PUBLIC_EVIDENCE_ONLY",
+    "",
+).strip().lower() in {"1", "true", "yes"}
+SAFE_NO_TRADE = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_SAFE_NO_TRADE",
+    "",
+).strip().lower() in {"1", "true", "yes"}
+EXPECT_MATCH = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_EXPECT_MATCH",
+    "",
+).strip().lower() in {"1", "true", "yes"}
+BUYER_RUNTIME = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME",
+    "claude-code",
+).strip().lower()
 
 
 def _require_ok(response: httpx.Response) -> dict[str, Any]:
@@ -65,6 +86,27 @@ def _require_ok(response: httpx.Response) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeError("expected an object response")
     return value
+
+
+async def _read_json_with_retry(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    attempts: int = 10,
+) -> dict[str, Any]:
+    for attempt in range(1, attempts + 1):
+        try:
+            response = await client.get(path)
+        except httpx.TransportError:
+            if attempt == attempts:
+                raise
+        else:
+            if response.status_code not in {502, 503, 504}:
+                return _require_ok(response)
+            if attempt == attempts:
+                return _require_ok(response)
+        await asyncio.sleep(min(0.25 * attempt, 1.0))
+    raise AssertionError("bounded read retry exhausted without a result")
 
 
 def _require_command(name: str) -> str:
@@ -334,8 +376,9 @@ async def _wait_for_completion(
     deadline = time.monotonic() + GAME_TIMEOUT_SECONDS
     last_state: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        last_state = _require_ok(
-            await user.client.get(f"/api/v1/pawnhouse/games/{game_id}")
+        last_state = await _read_json_with_retry(
+            user.client,
+            f"/api/v1/pawnhouse/games/{game_id}",
         )
         if last_state.get("phase") == "completed":
             return last_state
@@ -457,8 +500,12 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
     if int(counts["rankings"]) != 2:
         raise RuntimeError(f"expected two rankings: {dict(counts)!r}")
     decide_tasks = [row for row in task_values if row["kind"] == "arena.decide"]
-    if len(decide_tasks) != 2:
-        raise RuntimeError(f"expected two real decide tasks: {task_values!r}")
+    expected_decide_tasks = 2 * ROUND_COUNT
+    if len(decide_tasks) != expected_decide_tasks:
+        raise RuntimeError(
+            f"expected {expected_decide_tasks} real decide tasks: "
+            f"{task_values!r}"
+        )
     for task in task_values:
         if (
             task["task_status"] != "completed"
@@ -472,6 +519,13 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
     if int(counts["settlement_intents"]) != 0:
         raise RuntimeError(
             f"no-payment E2E created settlement intents: {dict(counts)!r}"
+        )
+    if EXPECT_MATCH and (
+        int(counts["pairings"]) < 1
+        or int(counts["negotiation_messages"]) < 1
+    ):
+        raise RuntimeError(
+            f"trade probe did not reach negotiation: {dict(counts)!r}"
         )
 
     config = game["config_snapshot"]
@@ -494,6 +548,85 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
     }
 
 
+async def _public_evidence(
+    user: UserSession,
+    game_id: str,
+) -> dict[str, Any]:
+    state = await _read_json_with_retry(
+        user.client,
+        f"/api/v1/pawnhouse/games/{game_id}",
+    )
+    timeline = await _read_json_with_retry(
+        user.client,
+        f"/api/v1/pawnhouse/games/{game_id}/timeline",
+    )
+    runtime_run = await _read_json_with_retry(
+        user.client,
+        f"/api/v1/pawnhouse/games/{game_id}/runtime-run",
+    )
+    settlements = await _read_json_with_retry(
+        user.client,
+        f"/api/v1/pawnhouse/games/{game_id}/settlement-intents",
+    )
+    if state.get("phase") != "completed":
+        raise RuntimeError(f"public game state is not completed: {state!r}")
+    if len(state.get("participants", [])) != 2:
+        raise RuntimeError(f"expected two public participants: {state!r}")
+    if len(state.get("rankings", [])) != 2:
+        raise RuntimeError(f"expected two public rankings: {state!r}")
+    if runtime_run.get("status") != "completed":
+        raise RuntimeError(
+            f"public Runtime Run is not completed: {runtime_run!r}"
+        )
+    if SAFE_NO_TRADE and settlements.get("total") != 0:
+        raise RuntimeError(
+            f"safe no-trade game created a settlement intent: {settlements!r}"
+        )
+    if EXPECT_MATCH and not state.get("pairings"):
+        raise RuntimeError(
+            f"public trade probe did not create a pairing: {state!r}"
+        )
+    return {
+        "game": state,
+        "timeline": timeline,
+        "runtimeRun": runtime_run,
+        "settlementIntents": settlements,
+    }
+
+
+def _probe_mcp_data_plane() -> None:
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "arena-real-runtime-e2e",
+                    "version": "1.0",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+    response = httpx.post(
+        f"{API_BASE}/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2026-07-28",
+            "MCP-Method": "server/discover",
+        },
+        json=body,
+        timeout=15,
+    )
+    if response.status_code != 401:
+        raise RuntimeError(
+            "Arena MCP data plane probe did not reach the authenticated "
+            f"endpoint: HTTP {response.status_code} {response.text[:1000]}"
+        )
+
+
 async def main() -> None:
     invites = json.loads(os.environ["ADX_REAL_RUNTIME_E2E_INVITES"])
     if (
@@ -507,7 +640,15 @@ async def main() -> None:
     health = httpx.get(f"{API_BASE}/api/health", timeout=15)
     health.raise_for_status()
     if health.json().get("arena_mcp") is not True:
-        raise RuntimeError(f"Arena MCP is not enabled: {health.json()!r}")
+        _probe_mcp_data_plane()
+    if ROUND_COUNT < 1 or ROUND_COUNT > 10:
+        raise RuntimeError(
+            "ADX_REAL_RUNTIME_E2E_ROUND_COUNT must be between 1 and 10"
+        )
+    if BUYER_RUNTIME not in {"claude-code", "codex"}:
+        raise RuntimeError(
+            "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME must be claude-code or codex"
+        )
 
     run_id = uuid.uuid4().hex[:10]
     with tempfile.TemporaryDirectory(prefix="arena402-real-runtimes-") as temporary:
@@ -567,7 +708,7 @@ async def main() -> None:
                         "gameId": game_id,
                         "eventSeed": EVENT_SEED,
                         "actionTimeoutMs": ACTION_TIMEOUT_MS,
-                        "roundCount": 1,
+                        "roundCount": ROUND_COUNT,
                         "eventMode": "seeded_shuffle",
                         "maxParticipants": 2,
                         "portfolioMode": "manual",
@@ -581,7 +722,15 @@ async def main() -> None:
                     headers=claude_user.mutation_headers,
                     json={
                         "agentId": claude_binding["agent_id"],
-                        "portfolio": {"cash": "20.000000", "holdings": {}},
+                        "portfolio": (
+                            {"cash": "20.000000", "holdings": {}}
+                            if SAFE_NO_TRADE
+                            or BUYER_RUNTIME == "claude-code"
+                            else {
+                                "cash": "0.000000",
+                                "holdings": {"grain": 10},
+                            }
+                        ),
                     },
                 ),
                 codex_user.client.post(
@@ -589,10 +738,14 @@ async def main() -> None:
                     headers=codex_user.mutation_headers,
                     json={
                         "agentId": codex_binding["agent_id"],
-                        "portfolio": {
-                            "cash": "0.000000",
-                            "holdings": {"grain": 10},
-                        },
+                        "portfolio": (
+                            {"cash": "20.000000", "holdings": {}}
+                            if SAFE_NO_TRADE or BUYER_RUNTIME == "codex"
+                            else {
+                                "cash": "0.000000",
+                                "holdings": {"grain": 10},
+                            }
+                        ),
                     },
                 ),
             )
@@ -609,7 +762,11 @@ async def main() -> None:
                 game_id,
                 (claude, codex),
             )
-            evidence = await _database_evidence(game_id)
+            evidence = (
+                await _public_evidence(claude_user, game_id)
+                if PUBLIC_EVIDENCE_ONLY
+                else await _database_evidence(game_id)
+            )
             print(
                 json.dumps(
                     {
@@ -632,6 +789,10 @@ async def main() -> None:
                         },
                         "taskTransport": "mcp",
                         "eventSeed": EVENT_SEED,
+                        "roundCount": ROUND_COUNT,
+                        "safeNoTrade": SAFE_NO_TRADE,
+                        "expectedMatch": EXPECT_MATCH,
+                        "buyerRuntime": BUYER_RUNTIME,
                         "evidence": evidence,
                         "chainWrites": 0,
                     },
@@ -639,6 +800,17 @@ async def main() -> None:
                     default=str,
                 )
             )
+        except Exception as exc:
+            connector_logs = "\n\n".join(
+                (
+                    f"[{connector.kind}]\n"
+                    f"{connector._failure_logs()}"
+                )
+                for connector in (claude, codex)
+            )
+            raise RuntimeError(
+                f"{exc}\nConnector logs:\n{connector_logs}"
+            ) from exc
         finally:
             await asyncio.gather(claude.stop(), codex.stop())
             await asyncio.gather(

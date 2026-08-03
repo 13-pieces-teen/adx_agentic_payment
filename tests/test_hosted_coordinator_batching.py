@@ -53,3 +53,56 @@ def test_decide_result_waiting_uses_one_batch_poll_and_yields_fast_first():
         ("task-fast", "fast-result"),
         ("task-slow", "slow-result"),
     ]
+
+
+def _decide_context(*, cash_atomic: int, holdings: dict[str, int]):
+    return {
+        "game_id": "game-1",
+        "round_id": "round-1",
+        "round_index": 1,
+        "cash_atomic": cash_atomic,
+        "holdings": holdings,
+        "market": {
+            "grain": 1_000_000,
+            "iron": 2_000_000,
+            "warhorse": 8_000_000,
+            "gems": 3_000_000,
+        },
+        "events": [],
+        "market_activity": [],
+        "deadline_at": datetime.now(timezone.utc) + timedelta(seconds=5),
+    }
+
+
+def test_decide_view_only_advertises_actions_backed_by_frozen_assets():
+    buyer = PawnhouseAgentRuntimeCoordinator._decide_view(
+        _decide_context(
+            cash_atomic=20_000_000,
+            holdings={"grain": 0, "iron": 0, "warhorse": 0, "gems": 0},
+        )
+    )
+    assert buyer.limits.allowed_actions == ["buy", "pass"]
+    assert buyer.limits.allowed_goods == [
+        "grain",
+        "iron",
+        "warhorse",
+        "gems",
+    ]
+
+    seller = PawnhouseAgentRuntimeCoordinator._decide_view(
+        _decide_context(
+            cash_atomic=0,
+            holdings={"grain": 2, "iron": 0, "warhorse": 0, "gems": 1},
+        )
+    )
+    assert seller.limits.allowed_actions == ["sell", "pass"]
+    assert seller.limits.allowed_goods == ["grain", "gems"]
+
+    empty = PawnhouseAgentRuntimeCoordinator._decide_view(
+        _decide_context(
+            cash_atomic=0,
+            holdings={"grain": 0, "iron": 0, "warhorse": 0, "gems": 0},
+        )
+    )
+    assert empty.limits.allowed_actions == ["pass"]
+    assert empty.limits.allowed_goods == []

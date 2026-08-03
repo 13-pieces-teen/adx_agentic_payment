@@ -203,6 +203,30 @@ func arenaDecideTask() map[string]any {
 	}
 }
 
+func TestArenaNegotiationPromptMirrorsAuthoritativeConvergenceRules(t *testing.T) {
+	task := arenaDecideTask()
+	task["kind"] = "arena.negotiate"
+	task["negotiationId"] = "negotiation-1"
+	raw, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, prompt, err := decodeArenaTask(raw, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"accept an in-bound counterparty quote",
+		"propose exactly your limitPrice",
+		"reject when remainingTurns <= 1",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("negotiation prompt omitted %q: %s", expected, prompt)
+		}
+	}
+}
+
 func TestArenaNegotiationActionRequiresStrictlyPositiveFixedPointPrice(t *testing.T) {
 	for _, raw := range []string{
 		`{"action":"propose","price":"0","message":"offer"}`,
@@ -278,6 +302,12 @@ func TestArenaActionAcceptsCurrentQuantityAndLimitPriceWireFields(t *testing.T) 
 	if string(action) != string(raw) {
 		t.Fatalf("unexpected canonical Arena action: %s", action)
 	}
+	if _, err := validateArenaAction(
+		"arena.decide",
+		[]byte(`{"action":"buy","good":"grain","quantity":2}`),
+	); err == nil {
+		t.Fatal("current Arena game must reject non-unit trade quantities")
+	}
 }
 
 func TestArenaActionCaptureAcceptsCodexTerminalAgentMessage(t *testing.T) {
@@ -338,6 +368,103 @@ func TestArenaActionCaptureAcceptsCodexTerminalAgentMessage(t *testing.T) {
 	)
 	if _, err := toolOutput.terminal(); err == nil {
 		t.Fatal("Codex tool output must not be treated as a terminal Arena action")
+	}
+}
+
+func TestClaudeArenaActionNormalizesBoundedProviderDivergence(t *testing.T) {
+	action, err := validateClaudeArenaAction(
+		"arena.decide",
+		[]byte(`{"action":"buy","good":"gems","quantity":1,"price":"1.800000"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) !=
+		`{"action":"buy","good":"gems","quantity":1,"limitPrice":"1.800000"}` {
+		t.Fatalf("unexpected normalized Claude decide action: %s", action)
+	}
+
+	longMessage := strings.Repeat("界", 101)
+	action, err = validateClaudeArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"action":"propose","price":"6.000000","message":"`+
+				longMessage+`"}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(action, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(fields["message"].(string))) != 100 {
+		t.Fatalf("public message was not bounded: %s", action)
+	}
+
+	action, err = validateClaudeArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"action":"offer","price":"3.20","message":"Opening offer."}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) !=
+		`{"action":"propose","price":"3.20","message":"Opening offer."}` {
+		t.Fatalf("unexpected normalized Claude negotiation action: %s", action)
+	}
+
+	action, err = validateClaudeArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"type":"propose","quote":"3.700000","message":"Firm and fair."}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) !=
+		`{"action":"propose","price":"3.700000","message":"Firm and fair."}` {
+		t.Fatalf("unexpected normalized Claude negotiation keys: %s", action)
+	}
+
+	action, err = validateClaudeArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"action":"accept","price":"3.000000","message":"成交。"}`,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) != `{"action":"accept"}` {
+		t.Fatalf("Claude accept must use Arena's frozen quote: %s", action)
+	}
+
+	if _, err := validateClaudeArenaAction(
+		"arena.decide",
+		[]byte(
+			`{"action":"buy","good":"gems","price":"1.8","limitPrice":"1.7"}`,
+		),
+	); err == nil {
+		t.Fatal("conflicting Claude price fields must be rejected")
+	}
+	if _, err := validateClaudeArenaAction(
+		"arena.decide",
+		[]byte(`{"action":"pass","unexpected":true}`),
+	); err == nil {
+		t.Fatal("unknown Claude fields must still be rejected")
+	}
+	if _, err := validateClaudeArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"type":"propose","action":"reject","quote":"3","message":"x"}`,
+		),
+	); err == nil {
+		t.Fatal("conflicting Claude negotiation keys must be rejected")
 	}
 }
 

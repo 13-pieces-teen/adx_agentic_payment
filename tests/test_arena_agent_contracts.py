@@ -150,6 +150,7 @@ def test_decide_action_is_a_strict_discriminated_union(payload, expected_type):
         {"action": "pass", "good": "ruby"},
         {"action": "hold"},
         {"action": "buy", "good": ""},
+        {"action": "buy", "good": "ruby", "quantity": 2},
     ],
 )
 def test_invalid_decide_action_is_rejected(payload):

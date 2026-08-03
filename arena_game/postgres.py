@@ -1247,6 +1247,58 @@ class PostgresPawnhouseRepository:
             official_pool_join=True,
         )
 
+    async def add_current_participant(
+        self,
+        *,
+        game_id: str,
+        user_id: str,
+        agent_id: str,
+        portfolio: Portfolio | None,
+        payment_mandate_id: str,
+        join_authorization_id: str,
+    ) -> str:
+        """Join the current game without assuming the Agent Runtime kind."""
+
+        runtime_kind = await self._require_pool().fetchval(
+            """
+            SELECT binding.runtime_kind
+            FROM public.arena_agents AS agent
+            JOIN public.arena_runtime_bindings AS binding
+              ON binding.agent_id = agent.agent_id
+             AND binding.runtime_kind IN ('hosted', 'connector')
+             AND binding.disabled_at IS NULL
+             AND binding.route_status = 'ready'
+            WHERE agent.agent_id = $1
+              AND agent.owner_user_id = $2
+              AND agent.status = 'active'
+            ORDER BY binding.runtime_binding_id
+            LIMIT 1
+            """,
+            agent_id,
+            user_id,
+        )
+        if runtime_kind == "hosted":
+            return await self.add_hosted_participant(
+                game_id=game_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                portfolio=portfolio,
+                payment_mandate_id=payment_mandate_id,
+                join_authorization_id=join_authorization_id,
+                require_current_game=True,
+            )
+        if runtime_kind == "connector":
+            return await self.add_connector_participant(
+                game_id=game_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                portfolio=portfolio,
+                payment_mandate_id=payment_mandate_id,
+                join_authorization_id=join_authorization_id,
+                require_current_game=True,
+            )
+        raise PawnhouseRepositoryError("runtime_not_ready")
+
     async def add_connector_participant(
         self,
         *,
@@ -1255,6 +1307,9 @@ class PostgresPawnhouseRepository:
         agent_id: str,
         portfolio: Portfolio | None,
         settlement_account: SettlementAccount | None = None,
+        payment_mandate_id: str | None = None,
+        join_authorization_id: str | None = None,
+        require_current_game: bool = False,
     ) -> str:
         participant_id = f"gp:{game_id}:{agent_id}"
         portfolio = portfolio or default_join_portfolio(
@@ -1266,7 +1321,8 @@ class PostgresPawnhouseRepository:
             async with connection.transaction():
                 phase = await connection.fetchrow(
                     """
-                    SELECT phase, max_participants, config_snapshot
+                    SELECT phase, max_participants, min_participants,
+                           config_snapshot
                     FROM arena402.games
                     WHERE game_id = $1
                     FOR UPDATE
@@ -1280,12 +1336,32 @@ class PostgresPawnhouseRepository:
                     "portfolio_setup",
                 ):
                     raise PawnhouseRepositoryError("game_not_joinable")
+                existing_participant = await connection.fetchrow(
+                    """
+                    SELECT game_participant_id, agent_id, readiness
+                    FROM arena402.game_participants
+                    WHERE game_id = $1 AND user_id = $2
+                    FOR SHARE
+                    """,
+                    game_id,
+                    user_id,
+                )
+                if existing_participant is not None:
+                    if (
+                        existing_participant["agent_id"] == agent_id
+                        and existing_participant["readiness"] != "withdrawn"
+                    ):
+                        return str(
+                            existing_participant["game_participant_id"]
+                        )
+                    raise PawnhouseRepositoryError("user_already_joined")
                 participant_count = int(
                     await connection.fetchval(
                         """
                         SELECT count(*)
                         FROM arena402.game_participants
                         WHERE game_id = $1
+                          AND readiness <> 'withdrawn'
                         """,
                         game_id,
                     )
@@ -1300,6 +1376,41 @@ class PostgresPawnhouseRepository:
                     else dict(phase["config_snapshot"])
                 )
                 settlement_config = self._settlement_config(game_config)
+                requires_game_coin_provision = (
+                    settlement_config.authorization_mode != "none"
+                    and settlement_config.token_symbol.lower()
+                    == "arena402-g"
+                )
+                if (
+                    payment_mandate_id is not None
+                    and settlement_account is None
+                    and settlement_config.authorization_mode != "none"
+                ):
+                    wallet = await connection.fetchrow(
+                        """
+                        SELECT chain_id, account_address
+                        FROM arena402.user_wallets
+                        WHERE user_id = $1
+                        FOR SHARE
+                        """,
+                        user_id,
+                    )
+                    if wallet is None:
+                        raise PawnhouseRepositoryError("wallet_not_ready")
+                    settlement_account = SettlementAccount(
+                        chain_id=int(wallet["chain_id"]),
+                        address=str(wallet["account_address"]),
+                        custody_mode="sandbox_guest",
+                    )
+                if require_current_game:
+                    pointer = await connection.fetchval(
+                        """
+                        SELECT game_id FROM arena402.current_game
+                        WHERE singleton = TRUE FOR SHARE
+                        """
+                    )
+                    if pointer != game_id:
+                        raise PawnhouseRepositoryError("game_not_current")
                 if settlement_config.authorization_mode != "none":
                     if settlement_account is None:
                         raise PawnhouseRepositoryError(
@@ -1312,6 +1423,40 @@ class PostgresPawnhouseRepository:
                         raise PawnhouseRepositoryError(
                             "settlement_account_chain_mismatch"
                         )
+                if payment_mandate_id is not None:
+                    mandate = await connection.fetchrow(
+                        """
+                        SELECT mandate.mandate_id
+                        FROM arena402.payment_mandates AS mandate
+                        JOIN arena402.join_authorizations AS join_auth
+                          ON join_auth.join_authorization_id =
+                             mandate.join_authorization_id
+                        WHERE mandate.mandate_id = $1
+                          AND mandate.user_id = $2
+                          AND mandate.game_id = $3
+                          AND mandate.revoked_at IS NULL
+                          AND mandate.valid_from <= clock_timestamp()
+                          AND mandate.expires_at > clock_timestamp()
+                          AND mandate.allowed_payee_rule =
+                              'same_game_settlement_account'
+                          AND join_auth.join_authorization_id = $4
+                          AND join_auth.user_id = $2
+                          AND join_auth.game_id = $3
+                          AND join_auth.agent_id = $5
+                          AND join_auth.status = 'pending'
+                          AND join_auth.expires_at > clock_timestamp()
+                        FOR UPDATE OF mandate, join_auth
+                        """,
+                        payment_mandate_id,
+                        user_id,
+                        game_id,
+                        join_authorization_id,
+                        agent_id,
+                    )
+                    if mandate is None:
+                        raise PawnhouseRepositoryError("mandate_not_ready")
+                elif require_current_game:
+                    raise PawnhouseRepositoryError("mandate_not_ready")
                 connector = await connection.fetchrow(
                     """
                     SELECT
@@ -1365,15 +1510,22 @@ class PostgresPawnhouseRepository:
                     INSERT INTO arena402.game_participants (
                         game_participant_id, game_id, user_id, agent_id,
                         runtime_binding_id, runtime_kind,
-                        portfolio_locked_at, readiness, ready_at
+                        portfolio_locked_at, payment_mandate_id,
+                        readiness, ready_at
                     )
                     VALUES (
                         $1, $2, $3, $4, $5, 'connector',
-                        clock_timestamp(),
-                        CASE WHEN $6::boolean
-                            THEN 'ready' ELSE 'pending' END,
-                        CASE WHEN $6::boolean
-                            THEN clock_timestamp() ELSE NULL END
+                        clock_timestamp(), $6::text,
+                        CASE WHEN (
+                            NOT $8::boolean
+                            AND ($6::text IS NULL OR $7::boolean)
+                        )
+                            THEN 'pending' ELSE 'ready' END,
+                        CASE WHEN (
+                            NOT $8::boolean
+                            AND ($6::text IS NULL OR $7::boolean)
+                        )
+                            THEN NULL ELSE clock_timestamp() END
                     )
                     """,
                     participant_id,
@@ -1381,6 +1533,8 @@ class PostgresPawnhouseRepository:
                     user_id,
                     agent_id,
                     connector["runtime_binding_id"],
+                    payment_mandate_id,
+                    requires_game_coin_provision,
                     ready_without_payment,
                 )
                 await connection.execute(
@@ -1447,6 +1601,27 @@ class PostgresPawnhouseRepository:
                         settlement_account.address,
                         settlement_account.custody_mode,
                     )
+                    if requires_game_coin_provision:
+                        assert settlement_config.chain_id is not None
+                        assert settlement_config.token_address is not None
+                        await connection.execute(
+                            """
+                            INSERT INTO arena402.game_coin_provisions (
+                                provision_id, game_id, game_participant_id,
+                                chain_id, token_address, account_address,
+                                amount_atomic
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            ON CONFLICT (game_participant_id) DO NOTHING
+                            """,
+                            f"gcp:{participant_id}",
+                            game_id,
+                            participant_id,
+                            settlement_config.chain_id,
+                            settlement_config.token_address,
+                            settlement_account.address,
+                            portfolio.cash_atomic,
+                        )
                 await connection.execute(
                     """
                     UPDATE arena402.games
@@ -1467,6 +1642,37 @@ class PostgresPawnhouseRepository:
                         "runtimeKind": "connector",
                     },
                 )
+                if payment_mandate_id is not None:
+                    consumed = await connection.execute(
+                        """
+                        UPDATE arena402.join_authorizations
+                        SET status = 'consumed',
+                            consumed_at = clock_timestamp()
+                        WHERE join_authorization_id = $1
+                          AND status = 'pending'
+                        """,
+                        join_authorization_id,
+                    )
+                    if consumed != "UPDATE 1":
+                        raise PawnhouseRepositoryError("mandate_not_ready")
+                if (
+                    not requires_game_coin_provision
+                    and payment_mandate_id is not None
+                ):
+                    ready_count = int(
+                        await connection.fetchval(
+                            """
+                            SELECT count(*) FROM arena402.game_participants
+                            WHERE game_id = $1 AND readiness = 'ready'
+                            """,
+                            game_id,
+                        )
+                    )
+                    if ready_count >= int(phase["min_participants"]):
+                        await self._start_game_locked(
+                            connection,
+                            game_id=game_id,
+                        )
         return participant_id
 
     async def withdraw_current_game_participant(
@@ -3023,10 +3229,14 @@ class PostgresPawnhouseRepository:
                         negotiation.status
                         is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
                     ):
-                        await self._freeze_settlement_intent(
+                        intent = await self._freeze_settlement_intent(
                             connection,
                             negotiation_id=negotiation_id,
                         )
+                        if intent is None:
+                            negotiation.status = (
+                                NegotiationStatus.SETTLEMENT_FAILED
+                            )
         return {
             "negotiationId": negotiation_id,
             "status": negotiation.status.value,
@@ -5337,23 +5547,45 @@ class PostgresPawnhouseRepository:
 
                 runtime = await connection.fetchrow(
                     """
-                    SELECT b.runtime_binding_id
+                    SELECT agent.agent_id
                     FROM public.arena_agents AS agent
-                    JOIN public.arena_runtime_bindings AS b
-                      ON b.agent_id = agent.agent_id
-                     AND b.runtime_kind = 'hosted'
-                     AND b.disabled_at IS NULL
-                     AND b.route_status = 'ready'
-                    JOIN public.arena_hosted_configs AS hosted
-                      ON hosted.hosted_config_id = b.hosted_config_id
-                     AND hosted.agent_id = agent.agent_id
-                     AND hosted.status = 'ready'
-                    JOIN public.arena_model_credentials AS credential
-                      ON credential.credential_id = hosted.credential_id
-                     AND credential.status = 'valid'
                     WHERE agent.agent_id = $1
                       AND agent.owner_user_id = $2
                       AND agent.status = 'active'
+                      AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM public.arena_runtime_bindings AS binding
+                            JOIN public.arena_hosted_configs AS hosted
+                              ON hosted.hosted_config_id =
+                                 binding.hosted_config_id
+                             AND hosted.agent_id = agent.agent_id
+                             AND hosted.status = 'ready'
+                            JOIN public.arena_model_credentials AS credential
+                              ON credential.credential_id =
+                                 hosted.credential_id
+                             AND credential.status = 'valid'
+                            WHERE binding.agent_id = agent.agent_id
+                              AND binding.runtime_kind = 'hosted'
+                              AND binding.disabled_at IS NULL
+                              AND binding.route_status = 'ready'
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM public.arena_runtime_bindings AS binding
+                            JOIN LATERAL
+                                resolve_connector_binding_for_arena(
+                                    agent.owner_user_id,
+                                    binding.connector_binding_id
+                                ) AS route
+                              ON route.binding_epoch =
+                                 binding.connector_binding_epoch
+                            WHERE binding.agent_id = agent.agent_id
+                              AND binding.runtime_kind = 'connector'
+                              AND binding.disabled_at IS NULL
+                              AND binding.route_status = 'ready'
+                        )
+                      )
                     """,
                     agent_id,
                     user_id,
@@ -6094,10 +6326,12 @@ class PostgresPawnhouseRepository:
                 negotiation.status
                 is NegotiationStatus.ACCEPTED_PENDING_SETTLEMENT
             ):
-                await self._freeze_settlement_intent(
+                intent = await self._freeze_settlement_intent(
                     connection,
                     negotiation_id=negotiation.negotiation_id,
                 )
+                if intent is None:
+                    negotiation.status = NegotiationStatus.SETTLEMENT_FAILED
             outputs.append(
                 {
                     "negotiationId": negotiation.negotiation_id,
@@ -6180,6 +6414,39 @@ class PostgresPawnhouseRepository:
         )
         settlement_config = self._settlement_config(game_config)
         if settlement_config.authorization_mode == "none":
+            completed_at = datetime.now(timezone.utc)
+            await connection.execute(
+                """
+                UPDATE arena402.pairings
+                SET status = 'settlement_failed',
+                    completed_at = COALESCE(completed_at, $2)
+                WHERE pairing_id = $1
+                  AND status = 'accepted_pending_settlement'
+                """,
+                row["pairing_id"],
+                completed_at,
+            )
+            await connection.execute(
+                """
+                UPDATE arena402.negotiations
+                SET status = 'settlement_failed',
+                    next_role = 'none',
+                    completed_at = COALESCE(completed_at, $2)
+                WHERE negotiation_id = $1
+                  AND status = 'accepted_pending_settlement'
+                """,
+                negotiation_id,
+                completed_at,
+            )
+            await self._pairing_closed_event(
+                connection,
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                pairing_id=str(row["pairing_id"]),
+                negotiation_id=negotiation_id,
+                status=NegotiationStatus.SETTLEMENT_FAILED.value,
+                safe_error_code="settlement_disabled",
+            )
             return None
         if row["accepted_price_atomic"] is None:
             raise PawnhouseRepositoryError(
@@ -7170,6 +7437,7 @@ class PostgresPawnhouseRepository:
         negotiation_id: str,
         status: str,
         settlement_intent_id: str | None = None,
+        safe_error_code: str | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "pairingId": pairing_id,
@@ -7178,6 +7446,8 @@ class PostgresPawnhouseRepository:
         }
         if settlement_intent_id is not None:
             payload["settlementIntentId"] = settlement_intent_id
+        if safe_error_code is not None:
+            payload["safeErrorCode"] = safe_error_code
         await self._event(
             connection,
             game_id=game_id,

@@ -49,6 +49,10 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
+    async def add_current_participant(self, **values):
+        self.participants.append(values)
+        return f"gp:{values['game_id']}:{values['agent_id']}"
+
     async def withdraw_current_game_participant(self, **values):
         return {
             "gameId": values["game_id"],
@@ -404,6 +408,8 @@ def test_owner_can_add_registered_connector_agent_to_game() -> None:
                 "address": "0x1111111111111111111111111111111111111111",
                 "custodyMode": "wallet",
             },
+            "paymentMandateId": "mandate-local-1",
+            "joinAuthorizationId": "ja-local-1",
         },
     )
 
@@ -418,6 +424,14 @@ def test_owner_can_add_registered_connector_agent_to_game() -> None:
     assert (
         repository.participants[-1]["settlement_account"].chain_id
         == 1439
+    )
+    assert (
+        repository.participants[-1]["payment_mandate_id"]
+        == "mandate-local-1"
+    )
+    assert (
+        repository.participants[-1]["join_authorization_id"]
+        == "ja-local-1"
     )
 
 

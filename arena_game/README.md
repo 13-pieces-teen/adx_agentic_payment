@@ -46,8 +46,9 @@ schema.
 - The event schedule is committed before play and can be verified after the
   seed is revealed.
 - Rankings use only terminal net worth. Ties are ordered by stable Agent ID.
-- Orders default to quantity one for wire compatibility, while explicit
-  quantities are clipped by Arena inventory and matched at the smaller side.
+- Current AgentTask buy/sell actions are fixed to one unit; the lower
+  persistence model remains quantity-aware for historical records and internal
+  settlement arithmetic.
 - A `balanced_auto` game assigns each ready participant one deterministic good
   unit plus cash at portfolio lock; `manual` remains the default mode.
 

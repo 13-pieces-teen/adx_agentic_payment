@@ -160,6 +160,11 @@ Factory 在同一数据库事务中冻结 participant view、Game Agent 配置�
 - `sell`：选择一种已有货物，进入卖方池；
 - `pass`：本回合不交易。
 
+冻结输入中的 `allowedActions` 必须反映该 Participant 当时真正可执行的方向：
+零现金不开放 `buy`，无正持仓不开放 `sell`，`pass` 始终开放；仅卖方的
+`allowedGoods` 只包含其正持仓货物。Arena 后端仍会独立重复余额、库存与限价
+校验，不能只信任 Prompt 约束。
+
 Hosted Prompt v5 要求 Agent 把 `market` 视为已包含当前 market-target 事件效果，
 不得重复应用；逐一比较全部允许货物，并按照冻结的私有策略画像计算 `fairValue`、
 买卖触发阈值和作为保留价的 `limitPrice`。官方池按优先级循环十种数值画像，覆盖
@@ -232,6 +237,9 @@ FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
 转移。`accept` 是候选 Runtime 动作，只有 Arena 校验并应用后才能进入该状态。
 链上确认并完成库存提交后，协商进入 `settled`；授权失败或链上回滚后进入
 `settlement_failed`，不再长期停留在待结算状态。
+仅供隔离测试的 `authorizationMode=none` 不具有支付能力；若这种 Game 的协商
+被接受，Arena 必须以 `settlement_disabled` 明确关闭为
+`settlement_failed`，不得移动库存，也不得继续卡在待结算。
 Arena 将冻结：
 
 - `gameId`、`roundId`、`negotiationId`；
@@ -387,14 +395,16 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 合法候选动作是严格 union：
 
 ```json
-{"action": "sell", "good": "grain", "quantity": 2, "limitPrice": "8.500000"}
+{"action": "sell", "good": "grain", "quantity": 1, "limitPrice": "8.500000"}
 ```
 
 或 `{"action":"buy","good":"grain"}`、`{"action":"pass"}`。buy/sell 的
-`quantity` 是 1–1,000,000 的可选整数，省略时默认为 1；`limitPrice` 是可选的
-正定点小数保留价。`pass` 不得带额外交易字段，所有 wire schema 均拒绝 extra
-fields。Codex Structured Outputs 使用 root object + required nullable 占位，
-Connector 只移除该 Adapter 约定的 `null` 字段后再执行同一严格 wire 校验。
+当前 Agent 动作的 `quantity` 只能是 1，省略时也默认为 1；多单位策略必须拆到
+后续回合，不能在一次 AgentTask 中放大成交量。`limitPrice` 是可选的正定点小数
+保留价。`pass` 不得带额外交易字段，所有 wire schema 均拒绝 extra fields。
+Codex Structured Outputs 使用 root object + required nullable 占位，Connector
+只移除该 Adapter 约定的 `null` 字段后再执行同一严格 wire 校验；数据库对新写入
+的成功 buy/sell 结果也保留同一固定数量约束。
 
 ### Negotiate
 

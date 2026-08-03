@@ -150,6 +150,12 @@ SCHEMA_IDENTITY_READINESS_SQL_PATH = (
     / "migrations"
     / "053_arena_schema_identity_readiness.sql"
 )
+FIXED_TRADE_QUANTITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "054_arena_fixed_trade_quantity.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -793,3 +799,23 @@ def test_concurrency_migrations_are_selected_for_arena_scope(monkeypatch):
     assert PROVIDER_CAPACITY_SQL_PATH in selected
     assert RUNTIME_RUN_FENCING_SQL_PATH in selected
     assert OFFICIAL_LITELLM_CAPACITY_SQL_PATH in selected
+
+
+def test_fixed_trade_quantity_migration_is_forward_only_and_selected(
+    monkeypatch,
+):
+    sql = FIXED_TRADE_QUANTITY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "arena_agent_task_results_fixed_trade_quantity_check" in sql
+    assert "candidate_action ->> 'action' NOT IN ('buy', 'sell')" in sql
+    assert "NOT (candidate_action ? 'quantity')" in sql
+    assert "candidate_action -> 'quantity' = '1'::JSONB" in sql
+    assert "NOT VALID" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert FIXED_TRADE_QUANTITY_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )

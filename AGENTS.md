@@ -26,10 +26,13 @@ The repository contains three maintained foundations:
 The bounded/revocable PaymentMandate, permanent GitHub-user wallet binding,
 x402 V2 HTTP envelope, isolated testnet CSV signer, and unattended settlement
 worker are implemented with Fake E2E coverage. The Local Connector game adapter
-is integrated, but real CC/Codex Connector game E2E, Realtime frontend
-projection, standard public Facilitator acceptance, and complete production
-acceptance are not complete yet. A fresh self-hosted-Facilitator testnet
-settlement E2E has completed. The former in-memory
+is integrated, and a real Claude Code/Codex Connector-only Docker game has
+completed pairing plus accepted negotiation through WSS, stateless MCP, and the
+Arena Result Sink. That payment-disabled run intentionally produced no
+SettlementIntent or chain write. Real payment-enabled Connector settlement,
+Realtime frontend projection, standard public Facilitator acceptance, and
+complete production acceptance are not complete yet. A fresh
+self-hosted-Facilitator testnet settlement E2E has completed. The former in-memory
 `matching/` and Supabase/ELO business path have been removed.
 
 Frontend product development is owned by the separate

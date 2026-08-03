@@ -7,9 +7,12 @@
 > durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排；另已实现默认
 > 关闭的 WSS wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动
 > cursor sync，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E。
-> 2026-07-31 已用真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合
-> Connector-only 比赛并由 Result Sink 应用两项结果；该局无配对/协商/结算。
-> 生产重连和 Hosted/Connector mixed 真实 E2E 仍待验收。
+> 2026-08-02 已用真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合
+> Connector-only 比赛：双方形成 grain 买卖池、FCFS pairing、两轮公开协商和
+> accept，四项结果均由 Result Sink 应用。该隔离局使用
+> `authorizationMode=none`，因此以 `settlement_disabled` 关闭并保持 0 链写入，
+> 不是支付成功证据。生产重连、Hosted/Connector mixed 和 payment-enabled
+> Connector 真实 E2E 仍待验收。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
@@ -97,21 +100,34 @@ reasoning/thinking 载荷时无需特殊处理，实际返回私有推理载荷�
    `connector_binding_id + binding_epoch`；
 7. 用户通过 `POST /api/local-agents` 把 owner-scoped Connector Binding 注册为
    Arena Agent；
-8. 用户通过
-   `POST /api/v1/pawnhouse/games/{game_id}/connector-participants` 加入 Game，
-   Arena 创建 Game Agent 并冻结该引用；
+8. 产品 Current Game 先通过
+   `POST /api/v1/games/{game_id}/join-preflight` 校验 Local/Hosted Runtime、
+   钱包和受限 PaymentMandate 要求，再统一调用
+   `POST /api/v1/games/{game_id}/participants` 入局；Arena 按已注册 Agent 的
+   Runtime Kind 分流，并冻结 Connector 引用。Operator/隔离测试仍可使用
+   `POST /api/v1/pawnhouse/games/{game_id}/connector-participants`；
 9. 回合创建 AgentTask 后，Dispatcher 在没有 Session 时先幂等排队
    `session.start`，获得 Connector-owned `session_id` 后再排队 typed
    `task.dispatch`。Session 和本地 `working_directory` 不复制进 Arena 业务状态。
    typed Task 实际在 Connector 创建的短生命周期空目录运行，不继承参赛时冻结目录
    中的项目指令；Claude 使用 no-tools profile，Codex 使用 read-only sandbox
-   profile。两端都会在 readiness 字段不一致时拒绝执行。
+   profile；Arena Codex Task 还使用代码固定的 HTTPS-only Provider profile，
+   避免 CLI 模型 WebSocket 失败后才回退 HTTPS。该 profile 不携带平台提供的
+   endpoint 或凭据。Claude Adapter 只对已观测到的安全偏差做有界规范化：
+   公开协商消息最多保留 100 个 Unicode 字符，Decide-only `price` 仅在无冲突时
+   规范为 `limitPrice`，Negotiation-only `offer` 规范为 `propose`，无冲突的
+   `type/quote` 规范为 `action/price`；冲突别名与其他未知字段仍拒绝。Claude
+   `accept` 附带的冗余 `price/message` 会被丢弃，因为接受价只能来自 Arena
+   冻结的上一条对手报价；当前 Game 的动作 Schema 同时把交易数量固定为 1。
+   两端都会在 readiness 字段不一致时拒绝执行。
 
-2026-07-31 的隔离 Docker 实测使用宿主机既有登录态启动真实 Claude Code 与
+2026-08-02 的隔离 Docker 实测使用宿主机既有登录态启动真实 Claude Code 与
 Codex CLI，通过 WSS 创建 Connector-owned Session，再经 stateless MCP
-claim/submit AgentTask。两项 `arena.decide` 均为 Runtime `succeeded`、Result Sink
-`applied`，比赛终态生成两条排名且 0 链写入。Codex 选择 `pass`、Claude 选择
-`buy grain`，因此这条证据不覆盖 pairing、negotiate 或 settlement。
+claim/submit AgentTask。Codex 的 buy、Claude 的 sell、Codex 的 propose 与 Claude
+的 accept 共四项 Task 均为 Runtime `succeeded`、Result Sink `applied`；Arena
+生成一个 FCFS pairing 和两条公开协商消息。测试没有提供 PaymentMandate，
+接受后以 `settlement_disabled` 显式终结，不创建 SettlementIntent、不移动库存，
+且 0 链写入。
 
 默认 `ADX_CONNECTOR_TASK_TRANSPORT=wss` 继续使用上述 Dispatcher。启用
 `ADX_ARENA_MCP_ENABLED=true` 并把 Connector 设为 `mcp` 时，WSS 仍负责在线状态、

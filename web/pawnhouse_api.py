@@ -141,6 +141,14 @@ class AddHostedParticipantBody(_Body):
 class AddConnectorParticipantBody(_Body):
     agent_id: _Id = Field(alias="agentId")
     portfolio: PortfolioBody | None = None
+    payment_mandate_id: _Id | None = Field(
+        default=None,
+        alias="paymentMandateId",
+    )
+    join_authorization_id: _Id | None = Field(
+        default=None,
+        alias="joinAuthorizationId",
+    )
     settlement_account: "SettlementAccountBody | None" = Field(
         default=None,
         alias="settlementAccount",
@@ -770,7 +778,7 @@ def create_pawnhouse_participation_router(
                     holdings=body.portfolio.holdings,
                 )
             )
-            participant_id = await repository.add_hosted_participant(
+            participant_id = await repository.add_current_participant(
                 game_id=game_id,
                 user_id=principal.user_id,
                 agent_id=body.agent_id,
@@ -943,6 +951,8 @@ def create_pawnhouse_participation_router(
                 agent_id=body.agent_id,
                 portfolio=portfolio,
                 settlement_account=settlement_account,
+                payment_mandate_id=body.payment_mandate_id,
+                join_authorization_id=body.join_authorization_id,
             )
         except (PortfolioError, SettlementError) as exc:
             raise HTTPException(

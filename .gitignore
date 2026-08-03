@@ -36,6 +36,9 @@ __pycache__/
 htmlcov/
 coverage/
 
+# Local research papers
+papers/
+
 # Logs and operating-system files
 *.log
 .DS_Store
