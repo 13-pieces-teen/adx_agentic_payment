@@ -557,6 +557,20 @@ func TestAgentDrivenMarketTaskKindsUseStrictLocalRuntimeActions(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Codex nullable select fields were not normalized: %v", err)
 	}
+	engage, err := validateCodexArenaAction(
+		"arena.market.select",
+		[]byte(
+			`{"action":"engage","requestId":"request:task-rfq:1",`+
+				`"message":"Let us negotiate."}`,
+		),
+	)
+	if err != nil {
+		t.Fatalf("Codex engage explanation was not normalized: %v", err)
+	}
+	if string(engage) !=
+		`{"action":"engage","requestId":"request:task-rfq:1"}` {
+		t.Fatalf("Codex engage changed the business choice: %s", engage)
+	}
 }
 
 func newTestSupervisor(t *testing.T) *Supervisor {

@@ -283,6 +283,19 @@ func validateCodexArenaAction(taskKind string, raw []byte) (json.RawMessage, err
 			delete(fields, key)
 		}
 	}
+	if taskKind == "arena.market.select" {
+		var action string
+		if rawAction, found := fields["action"]; found {
+			_ = json.Unmarshal(rawAction, &action)
+		}
+		if action == "engage" {
+			// The Codex-compatible root schema must expose the reject_all
+			// message as nullable. Keep the Agent's engage/requestId choice,
+			// but do not let a harmless explanatory message violate the
+			// stricter business union.
+			delete(fields, "message")
+		}
+	}
 	normalized, err := json.Marshal(fields)
 	if err != nil {
 		return nil, fmt.Errorf("normalize Codex Arena action: %w", err)
