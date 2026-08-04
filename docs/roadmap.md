@@ -638,8 +638,14 @@ create game
       返回 `runtime_failed`；保留的 Runtime Event 显示 Claude Code 因
       `UNKNOWN_CERTIFICATE_VERIFICATION_ERROR` 无法连接其 API，并在客户端内部
       重试 10 次。该失败属于本机 Claude Code/API 连接环境，不作为 Arena 或
-      Connector 机制 Bug；Arena 正确收敛为 `market_timeout`。待外部连接恢复后
-      重跑 RFQ + Engage + negotiation + Deal，并补 Hosted/Connector mixed 证据。
+      Connector 机制 Bug；Arena 正确收敛为 `market_timeout`。随后使用两个独立
+      Codex CLI 0.146.0 Connector 的 `real-runtimes-9efb7dc941` 已完成两条
+      Intent、一条 RFQ、一条 Engage 和三轮 negotiation：买方先报
+      `3.600000`，卖方还价 `4.500000`，超过买方 `4.200000` 上限后买方自主
+      reject。7 个真实 Runtime Result 均成功应用，形成 1 个 Engagement、
+      1 个兼容 Pairing、3 条 negotiation message、0 Deal、0 SettlementIntent、
+      0 inventory commit 和 0 chain write。真实 Agent Deal 与
+      Hosted/Connector mixed 证据仍待补。
 - [x] Phase C payment-disabled foundation：只有 buyer RFQ Result + seller
       Engage Result 才能物化兼容 Pairing/Negotiation；接受后冻结包含 proposal /
       acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 已完成

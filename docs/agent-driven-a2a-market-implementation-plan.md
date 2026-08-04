@@ -443,6 +443,23 @@ Evidence levels remain separate:
   Arena applied `market_timeout` and completed the Game without an Engagement.
   The full real-Agent trade path must be rerun after that external connection
   is healthy.
+- Codex-only probe `real-runtimes-88099fe3e1` reached seller Select and exposed
+  a Connector adapter bug: Codex autonomously returned a valid
+  `engage + requestId` choice plus an explanatory `message`, but the strict
+  business union rejects that field for Engage. Commit `ed619a2` now removes
+  only that non-business Codex schema artifact while preserving the Agent's
+  selected request; it does not choose a counterparty or price.
+- The clean rerun `real-runtimes-9efb7dc941` used two independent Codex CLI
+  0.146.0 Connector participants through WSS, stateless MCP, and the Arena
+  Result Sink. Both Intents succeeded (buyer grain ceiling `4.200000`, seller
+  floor `3.900000`), the buyer issued one RFQ, and the seller engaged it.
+  Three negotiation Results were applied: buyer proposed `3.600000`, seller
+  countered `4.500000`, and the buyer rejected because the counter exceeded
+  its ceiling. The Game completed with one Engagement, one compatibility
+  Pairing, three negotiation messages, zero Deals, zero SettlementIntents,
+  zero inventory commits, and zero chain writes. Initial portfolios were
+  equal at 20 gold-equivalent; no cash or holdings moved. This is real
+  dual-Agent negotiation evidence, but not an accepted Deal or settlement.
 
 The real probes also show why “few trades” cannot be solved by a matcher
 alone: independently chosen private price intervals may not overlap, and a

@@ -87,6 +87,16 @@ The accepted 2026-08-02 run also verifies one FCFS pairing and a two-message
 negotiation (`propose` then `accept`). It intentionally verifies the
 payment-disabled terminal path rather than claiming a settlement.
 
+The accepted 2026-08-04 Codex-only Agent-driven A2A run
+`real-runtimes-9efb7dc941` used two independent Codex CLI 0.146.0 Connector
+participants. It applied two Intents, one RFQ, one Engage, and three
+negotiation Results. The buyer proposed `3.600000`, the seller countered
+`4.500000`, and the buyer rejected because its ceiling was `4.200000`.
+Therefore the authoritative outcome is one Engagement, one compatibility
+Pairing, three negotiation messages, zero Deals, zero SettlementIntents, zero
+inventory commits, and zero chain writes. This proves real dual-Agent
+negotiation and autonomous non-convergence, not a completed trade.
+
 Run the Codex-only Agent-driven A2A E2E from PowerShell after confirming the
 local Codex CLI is authenticated. It uses the isolated project
 `arena402-codex-a2a-e2e`, loopback ports `18001`/`55434`, two payment-disabled
