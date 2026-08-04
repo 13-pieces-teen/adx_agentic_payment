@@ -73,6 +73,10 @@ EXPECT_MATCH = os.getenv(
     "ADX_REAL_RUNTIME_E2E_EXPECT_MATCH",
     "",
 ).strip().lower() in {"1", "true", "yes"}
+EXPECT_DEAL = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_EXPECT_DEAL",
+    "",
+).strip().lower() in {"1", "true", "yes"}
 BUYER_RUNTIME = os.getenv(
     "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME",
     "claude-code",
@@ -493,6 +497,28 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
             """,
             game_id,
         )
+        deal_rows = await connection.fetch(
+            """
+            SELECT
+                deal_id,
+                engagement_id,
+                request_id,
+                round_id,
+                buyer_participant_id,
+                seller_participant_id,
+                good_id,
+                quantity,
+                unit_price_atomic,
+                latest_proposal_result_id,
+                acceptance_result_id,
+                accepted_by_participant_id,
+                created_at
+            FROM arena402.market_deals
+            WHERE game_id = $1
+            ORDER BY created_at, deal_id
+            """,
+            game_id,
+        )
         counts = await connection.fetchrow(
             """
             SELECT
@@ -510,6 +536,31 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
                  WHERE game_id = $1) AS market_engagements,
                 (SELECT count(*) FROM arena402.market_deals
                  WHERE game_id = $1) AS market_deals,
+                (
+                    SELECT count(*)
+                    FROM arena402.inventory_commits AS inventory_commit
+                    JOIN arena402.settlement_intents AS intent
+                      ON intent.settlement_intent_id =
+                         inventory_commit.settlement_intent_id
+                    WHERE intent.game_id = $1
+                ) AS inventory_commits,
+                (
+                    SELECT count(*)
+                    FROM arena402.balances AS balance
+                    JOIN arena402.game_participants AS participant
+                      ON participant.game_participant_id =
+                         balance.game_participant_id
+                    WHERE participant.game_id = $1
+                      AND balance.cash_atomic <>
+                          balance.initial_cash_atomic
+                ) AS cash_mutations,
+                (
+                    SELECT count(*)
+                    FROM arena402.holdings AS holding
+                    WHERE holding.game_id = $1
+                      AND holding.quantity <>
+                          holding.initial_quantity
+                ) AS holding_mutations,
                 (SELECT count(*) FROM arena402.rankings
                  WHERE game_id = $1) AS rankings
             """,
@@ -558,12 +609,36 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
         raise RuntimeError(
             f"no-payment E2E created settlement intents: {dict(counts)!r}"
         )
+    if (
+        int(counts["inventory_commits"]) != 0
+        or int(counts["cash_mutations"]) != 0
+        or int(counts["holding_mutations"]) != 0
+    ):
+        raise RuntimeError(
+            "no-payment E2E moved authoritative inventory: "
+            f"{dict(counts)!r}"
+        )
     if EXPECT_MATCH and (
         int(counts["pairings"]) < 1
         or int(counts["negotiation_messages"]) < 1
     ):
         raise RuntimeError(
             f"trade probe did not reach negotiation: {dict(counts)!r}"
+        )
+    deal_values = [dict(row) for row in deal_rows]
+    for deal in deal_values:
+        if (
+            deal["latest_proposal_result_id"]
+            == deal["acceptance_result_id"]
+            or int(deal["quantity"]) != 1
+            or int(deal["unit_price_atomic"]) <= 0
+        ):
+            raise RuntimeError(
+                f"Deal lacks immutable Agent Result provenance: {deal!r}"
+            )
+    if EXPECT_DEAL and not deal_values:
+        raise RuntimeError(
+            f"real-Agent probe completed without a Deal: {dict(counts)!r}"
         )
 
     config = game["config_snapshot"]
@@ -583,6 +658,7 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
         "tasks": task_values,
         "decisions": [row["public_payload"] for row in decisions],
         "negotiations": [dict(row) for row in negotiation_rows],
+        "deals": deal_values,
         "counts": dict(counts),
     }
 
@@ -857,6 +933,7 @@ async def main() -> None:
                         "marketProtocol": MARKET_PROTOCOL,
                         "safeNoTrade": SAFE_NO_TRADE,
                         "expectedMatch": EXPECT_MATCH,
+                        "expectedDeal": EXPECT_DEAL,
                         "buyerRuntime": RUNTIME_KINDS[buyer_seat],
                         "buyerSeat": connectors[buyer_seat].label,
                         "evidenceClass": "real_local_connector_agents",
