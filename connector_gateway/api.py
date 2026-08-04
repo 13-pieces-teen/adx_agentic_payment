@@ -463,8 +463,13 @@ def create_production_connector_router(
                         else "github_failed"
                     )
                 else:
+                    destination = (
+                        "/founding402/claim"
+                        if issued.new_account
+                        else return_to
+                    )
                     response = RedirectResponse(
-                        f"{auth.config.public_app_url}{return_to}",
+                        f"{auth.config.public_app_url}{destination}",
                         status_code=307,
                         headers={"Cache-Control": "no-store"},
                     )

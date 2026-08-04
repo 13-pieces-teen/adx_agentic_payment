@@ -104,10 +104,9 @@ def test_production_configuration_fails_closed(monkeypatch):
     config = ConnectorGatewayConfig.from_env()
     assert config.session_cookie_name == "adx_session"
     assert config.csrf_cookie_name == "adx_csrf"
-    assert config.public_registration_enabled is False
+    assert config.public_registration_enabled is True
 
     monkeypatch.delenv("ADX_BOOTSTRAP_INVITE_HASH")
-    monkeypatch.setenv("ADX_PUBLIC_REGISTRATION_ENABLED", "true")
     config = ConnectorGatewayConfig.from_env()
     assert config.public_registration_enabled is True
     assert config.bootstrap_invite_hash is None
@@ -260,7 +259,9 @@ def test_github_callback_creates_session_without_persisting_access_token():
 
     assert callback.status_code == 307
     assert callback.headers["cache-control"] == "no-store"
-    assert callback.headers["location"] == "https://www.arena402.com/agents?tab=hosted"
+    assert callback.headers["location"] == (
+        "https://www.arena402.com/founding402/claim"
+    )
     assert oauth_client.exchanges == [
         {
             "code": "temporary-code",
@@ -324,7 +325,7 @@ def test_github_subject_not_mutable_login_owns_arena_identity():
     ).json()["user"]
     client.cookies.clear()
 
-    def github_sign_in() -> dict:
+    def github_sign_in() -> tuple[dict, str]:
         started = client.get(
             "/api/auth/github/start",
             follow_redirects=False,
@@ -336,15 +337,19 @@ def test_github_subject_not_mutable_login_owns_arena_identity():
             follow_redirects=False,
         )
         assert response.status_code == 307
-        return client.get("/api/auth/session").json()["user"]
+        return client.get("/api/auth/session").json()["user"], response.headers[
+            "location"
+        ]
 
-    first = github_sign_in()
+    first, first_location = github_sign_in()
     assert first["user_id"] != local["user_id"]
     assert first["username"] == "github-7654321"
+    assert first_location == "https://arena402.com/founding402/claim"
     client.cookies.clear()
-    second = github_sign_in()
+    second, second_location = github_sign_in()
     assert second["user_id"] == first["user_id"]
     assert second["username"] == first["username"]
+    assert second_location == "https://arena402.com/agents"
 
 
 def test_github_callback_uses_frontend_error_contract_and_rejects_bad_state():

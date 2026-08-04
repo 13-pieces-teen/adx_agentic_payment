@@ -60,6 +60,7 @@ class IssuedSession:
     signed_cookie: str
     csrf_token: str
     expires_at: datetime
+    new_account: bool = False
 
 
 class ConnectorAuth:
@@ -150,7 +151,7 @@ class ConnectorAuth:
             raise AuthError(401, "Invalid or already used invite") from exc
         except DuplicateIdentityError as exc:
             raise AuthError(409, "Username is already registered") from exc
-        return await self._issue_session(user)
+        return await self._issue_session(user, new_account=True)
 
     async def register(
         self, invite_code: str | None, username: str, password: str
@@ -179,7 +180,7 @@ class ConnectorAuth:
             )
         except DuplicateIdentityError as exc:
             raise AuthError(409, "Username is already registered") from exc
-        return await self._issue_session(user)
+        return await self._issue_session(user, new_account=True)
 
     async def login(self, username: str, password: str) -> IssuedSession:
         await self.initialize()
@@ -361,7 +362,7 @@ class ConnectorAuth:
         if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38})", normalized_login):
             raise AuthError(502, "github_failed")
         try:
-            user = await self.repository.get_or_create_oauth_user(
+            user, new_account = await self.repository.get_or_create_oauth_user(
                 "github",
                 subject,
                 normalized_login,
@@ -371,7 +372,7 @@ class ConnectorAuth:
             raise AuthError(409, "github_failed") from exc
         if user.get("disabled_at") is not None:
             raise AuthError(403, "account_disabled")
-        return await self._issue_session(user)
+        return await self._issue_session(user, new_account=new_account)
 
     @staticmethod
     def safe_return_to(value: str | None) -> str:
@@ -448,7 +449,12 @@ class ConnectorAuth:
             samesite="lax",
         )
 
-    async def _issue_session(self, user: dict[str, Any]) -> IssuedSession:
+    async def _issue_session(
+        self,
+        user: dict[str, Any],
+        *,
+        new_account: bool = False,
+    ) -> IssuedSession:
         raw_token = secrets.token_urlsafe(48)
         csrf_token = secrets.token_urlsafe(32)
         created_at = _now()
@@ -482,6 +488,7 @@ class ConnectorAuth:
             signed_cookie=self._signer.dumps(raw_token),
             csrf_token=csrf_token,
             expires_at=expires_at,
+            new_account=new_account,
         )
 
     def _normalize_username(self, value: str) -> str:
