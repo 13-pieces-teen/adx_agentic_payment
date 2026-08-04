@@ -115,6 +115,8 @@ def create_game_operator_router(
                 event_mode=body.event_mode,
                 action_timeout_ms=body.action_timeout_ms,
                 max_participants=body.max_participants,
+                portfolio_mode=body.portfolio_mode,
+                market_protocol=body.market_protocol,
                 settlement_config=settlement_config,
                 operator_user_id=principal.user_id,
             )

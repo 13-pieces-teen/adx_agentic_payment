@@ -88,6 +88,59 @@ class ArenaScriptedProvider:
             }:
                 return {"action": "buy", "good": "iron"}
             return {"action": "sell", "good": "iron"}
+        if request.task_kind == "arena.market.intent":
+            if request.model_id in {
+                ARENA_SCRIPTED_BUYER_MODEL,
+                ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
+            }:
+                return {
+                    "action": "buy",
+                    "good": "iron",
+                    "quantity": 1,
+                    "publicPrice": "7.000000",
+                    "limitPrice": "8.000000",
+                    "message": "Seeking one iron lot.",
+                }
+            return {
+                "action": "sell",
+                "good": "iron",
+                "quantity": 1,
+                "publicPrice": "7.000000",
+                "limitPrice": "6.000000",
+                "message": "Offering one iron lot.",
+            }
+        if request.task_kind == "arena.market.rfq":
+            directory = arena_input.get("directory")
+            if not isinstance(directory, list) or not directory:
+                return {"action": "pass"}
+            target = directory[0]
+            if not isinstance(target, Mapping):
+                raise ProviderInvocationError(
+                    "invalid_structured_output"
+                )
+            return {
+                "action": "request_negotiations",
+                "requests": [
+                    {
+                        "targetIntentId": target["intentId"],
+                        "openingPrice": target["publicPrice"],
+                        "message": "I choose this seller.",
+                    }
+                ],
+            }
+        if request.task_kind == "arena.market.select":
+            requests = arena_input.get("requests")
+            if not isinstance(requests, list) or not requests:
+                return {"action": "reject_all"}
+            selected = requests[0]
+            if not isinstance(selected, Mapping):
+                raise ProviderInvocationError(
+                    "invalid_structured_output"
+                )
+            return {
+                "action": "engage",
+                "requestId": selected["requestId"],
+            }
 
         role = arena_input.get("role")
         if role == "buyer":

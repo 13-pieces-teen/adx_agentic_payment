@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Run two Hosted Agents through all five Pawnhouse rounds.
+"""Run two development Hosted actors through complete Pawnhouse rounds.
 
-The development-only scripted models propose and reject rather than accept, so
-the game can prove durable multi-round Hosted execution without signing,
+The development-only scripted models publish compatible intents and accept an
+in-bound negotiation.  The game always uses ``authorizationMode=none``, so an
+accepted negotiation can prove the immutable deal boundary without signing,
 broadcasting, or pretending that an unpaid trade settled.
+
+With ``--market-protocol agent_a2a.v1`` this is a Fake E2E baseline for the
+real task/result/orchestration path. Scripted actors remain test fixtures and
+must not be reported as real-Agent evidence.
 """
 
 from __future__ import annotations
@@ -36,6 +41,13 @@ def main() -> int:
         ),
     )
     parser.add_argument("--timeout-seconds", type=float, default=120)
+    parser.add_argument("--round-count", type=int, default=1)
+    parser.add_argument("--action-timeout-ms", type=int, default=15_000)
+    parser.add_argument(
+        "--market-protocol",
+        choices=("fcfs.v1", "agent_a2a.v1"),
+        default="agent_a2a.v1",
+    )
     args = parser.parse_args()
     buyer_invite = os.environ.get("ARENA_BUYER_INVITE")
     seller_invite = os.environ.get("ARENA_SELLER_INVITE")
@@ -51,12 +63,12 @@ def main() -> int:
     buyer_agent_id = _create_hosted_agent(
         buyer_session,
         role="full-game-buyer",
-        model_id="arena-rejecting-buyer-v1",
+        model_id="arena-buyer-v1",
     )
     seller_agent_id = _create_hosted_agent(
         seller_session,
         role="full-game-seller",
-        model_id="arena-rejecting-seller-v1",
+        model_id="arena-seller-v1",
     )
 
     game_id = (
@@ -71,7 +83,15 @@ def main() -> int:
         body={
             "gameId": game_id,
             "eventSeed": f"full-hosted-{secrets.token_hex(12)}",
-            "actionTimeoutMs": 120_000,
+            "actionTimeoutMs": args.action_timeout_ms,
+            "roundCount": args.round_count,
+            "eventMode": (
+                "fixed_demo"
+                if args.round_count == 5
+                else "seeded_shuffle"
+            ),
+            "marketProtocol": args.market_protocol,
+            "settlement": {"authorizationMode": "none"},
         },
     )
     buyer_session.request(
@@ -154,6 +174,8 @@ def main() -> int:
     summary = {
         "gameId": game_id,
         "phase": state.get("phase"),
+        "marketProtocol": args.market_protocol,
+        "evidenceClass": "fake_scripted_runtime",
         "roundCount": state.get("roundCount"),
         "currentRound": state.get("currentRound"),
         "completedRoundCount": sum(
@@ -165,6 +187,17 @@ def main() -> int:
             "runtime.run_completed"
         ),
         "decisionCount": event_types.count("decision.applied"),
+        "marketIntentCount": event_types.count(
+            "market.intent_published"
+        ),
+        "marketRfqBatchCount": event_types.count("market.rfq_sent"),
+        "marketEngagementCount": event_types.count(
+            "market.engagement_created"
+        ),
+        "marketNegotiationCount": event_types.count(
+            "market.negotiation_created"
+        ),
+        "marketDealCount": event_types.count("market.deal_frozen"),
         "pairingCount": event_types.count("pairing.created"),
         "negotiationMessageCount": event_types.count(
             "negotiation.message"
@@ -185,18 +218,34 @@ def main() -> int:
         "eventSeedRevealed": state.get("eventSeed") is not None,
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    expected = (
+    common_expected = (
         summary["phase"] == "completed"
-        and summary["completedRoundCount"] == summary["roundCount"] == 5
-        and summary["worldEventCount"] == 5
-        and summary["runtimeRunCompletedCount"] == 5
-        and summary["decisionCount"] == 10
-        and summary["pairingCount"] == 5
-        and summary["negotiationMessageCount"] == 10
-        and summary["roundClosedCount"] == 5
+        and summary["completedRoundCount"]
+        == summary["roundCount"]
+        == args.round_count
+        and summary["worldEventCount"] == args.round_count
+        and summary["runtimeRunCompletedCount"] == args.round_count
+        and summary["negotiationMessageCount"] == 2 * args.round_count
+        and summary["roundClosedCount"] == args.round_count
         and summary["settlementIntentCount"] == 0
         and len(rankings) == 2
     )
+    if args.market_protocol == "agent_a2a.v1":
+        expected = (
+            common_expected
+            and summary["decisionCount"] == 0
+            and summary["marketIntentCount"] == 2 * args.round_count
+            and summary["marketRfqBatchCount"] == args.round_count
+            and summary["marketEngagementCount"] == args.round_count
+            and summary["marketNegotiationCount"] == args.round_count
+            and summary["marketDealCount"] == args.round_count
+        )
+    else:
+        expected = (
+            common_expected
+            and summary["decisionCount"] == 2 * args.round_count
+            and summary["pairingCount"] == args.round_count
+        )
     return 0 if expected else 1
 
 

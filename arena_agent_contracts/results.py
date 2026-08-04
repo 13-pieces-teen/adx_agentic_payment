@@ -6,7 +6,7 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from .actions import AgentActionV1
+from .market import AgentDrivenMarketActionV1
 from .tasks import Identifier
 
 AGENT_TASK_RESULT_SCHEMA_VERSION_V1: Final = "arena.agent-result.v1"
@@ -38,7 +38,7 @@ class AgentTaskResultV1(BaseModel):
     task_id: Identifier
     schema_version: Literal["arena.agent-result.v1"]
     status: Literal["succeeded", "failed", "timed_out", "cancelled"]
-    action: AgentActionV1 | None = None
+    action: AgentDrivenMarketActionV1 | None = None
 
     @model_validator(mode="after")
     def enforce_status_shape(self) -> "AgentTaskResultV1":

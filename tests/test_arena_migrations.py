@@ -156,6 +156,36 @@ FIXED_TRADE_QUANTITY_SQL_PATH = (
     / "migrations"
     / "054_arena_fixed_trade_quantity.sql"
 )
+AGENT_DRIVEN_A2A_MARKET_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "055_arena_agent_driven_a2a_market.sql"
+)
+AGENT_DRIVEN_RUNTIME_TASKS_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "056_arena_agent_driven_runtime_tasks.sql"
+)
+AGENT_DRIVEN_ROUND_PROTOCOL_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "057_arena_agent_driven_round_protocol.sql"
+)
+AGENT_MARKET_PROJECTION_PRIVILEGES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "058_arena_agent_market_projection_privileges.sql"
+)
+AGENT_NEGOTIATION_AUTONOMY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "059_arena_agent_negotiation_autonomy.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -818,4 +848,202 @@ def test_fixed_trade_quantity_migration_is_forward_only_and_selected(
     )
     assert FIXED_TRADE_QUANTITY_SQL_PATH in migrate_module.migration_files(
         "arena"
+    )
+
+
+def test_agent_driven_a2a_market_requires_agent_result_provenance_and_privacy(
+    monkeypatch,
+):
+    sql = AGENT_DRIVEN_A2A_MARKET_SQL_PATH.read_text(encoding="utf-8")
+
+    for relation in (
+        "CREATE TABLE arena402.market_result_applications",
+        "CREATE TABLE arena402.market_projection_receipts",
+        "CREATE TABLE arena402.market_intents",
+        "CREATE TABLE arena402.market_negotiation_requests",
+        "CREATE TABLE arena402.market_engagements",
+        "CREATE TABLE arena402.participant_round_slots",
+        "CREATE TABLE arena402.market_deals",
+    ):
+        assert relation in sql
+    assert (
+        "result_id TEXT PRIMARY KEY\n"
+        "        REFERENCES public.arena_agent_task_results(result_id)"
+    ) in sql
+    for action_kind in (
+        "'intent'",
+        "'rfq'",
+        "'engage'",
+        "'proposal'",
+        "'acceptance'",
+    ):
+        assert f"CHECK (source_action_kind = {action_kind})" in sql or (
+            f"CHECK (selection_action_kind = {action_kind})" in sql
+            or f"CHECK (latest_proposal_action_kind = {action_kind})" in sql
+            or f"CHECK (acceptance_action_kind = {action_kind})" in sql
+        )
+    assert sql.count(
+        "REFERENCES arena402.market_result_applications("
+    ) >= 6
+    assert "selection_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "latest_proposal_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "acceptance_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "latest_proposal_result_id <> acceptance_result_id" in sql
+    assert "quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity = 1)" in sql
+    assert "CREATE VIEW arena402.market_directory_public" in sql
+    public_view = sql.split(
+        "CREATE VIEW arena402.market_directory_public",
+        maxsplit=1,
+    )[1].split("REVOKE ALL ON TABLE", maxsplit=1)[0]
+    assert "limit_price_atomic" not in public_view
+    api_grants = sql.split(
+        "REVOKE ALL ON TABLE",
+        maxsplit=1,
+    )[1]
+    assert (
+        "GRANT SELECT ON TABLE arena402.market_directory_public TO"
+        in api_grants
+    )
+    assert "market_intents TO adx_arena_api" not in api_grants
+    intent_table = sql.split(
+        "CREATE TABLE arena402.market_intents",
+        maxsplit=1,
+    )[1].split(
+        "CREATE TABLE arena402.market_negotiation_requests",
+        maxsplit=1,
+    )[0]
+    request_table = sql.split(
+        "CREATE TABLE arena402.market_negotiation_requests",
+        maxsplit=1,
+    )[1].split(
+        "CREATE TABLE arena402.market_engagements",
+        maxsplit=1,
+    )[0]
+    assert "source_result_id TEXT NOT NULL UNIQUE" in intent_table
+    assert "source_result_id TEXT NOT NULL," in request_table
+    assert "source_result_id TEXT NOT NULL UNIQUE" not in request_table
+    assert "UNIQUE (source_result_id, seller_intent_id)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert AGENT_DRIVEN_A2A_MARKET_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
+
+
+def test_agent_driven_runtime_task_kinds_preserve_fcfs_and_fail_closed(
+    monkeypatch,
+):
+    sql = AGENT_DRIVEN_RUNTIME_TASKS_SQL_PATH.read_text(encoding="utf-8")
+
+    assert (
+        "RENAME TO apply_arena_agent_task_result_fcfs_v1"
+        in sql
+    )
+    assert (
+        "RETURN public.apply_arena_agent_task_result_fcfs_v1(p_result_id)"
+        in sql
+    )
+    for task_kind in (
+        "arena.market.intent",
+        "arena.market.rfq",
+        "arena.market.select",
+    ):
+        assert task_kind in sql
+    for violation in (
+        "market_price_required",
+        "market_price_boundary_violation",
+        "rfq_target_not_visible",
+        "request_not_visible",
+        "insufficient_inventory",
+    ):
+        assert violation in sql
+    assert "'market_timeout'" in sql
+    assert (
+        "GRANT EXECUTE ON FUNCTION apply_arena_agent_task_result(TEXT)"
+        in sql
+    )
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_DRIVEN_RUNTIME_TASKS_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_agent_driven_round_protocol_is_opt_in_and_keeps_fcfs_default(
+    monkeypatch,
+):
+    sql = AGENT_DRIVEN_ROUND_PROTOCOL_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert "DEFAULT 'fcfs.v1'" in sql
+    assert "'agent_a2a.v1'" in sql
+    assert "games_market_protocol_snapshot_check" in sql
+    assert "UPDATE public.games" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_DRIVEN_ROUND_PROTOCOL_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_agent_market_projection_receives_read_only_authority(
+    monkeypatch,
+):
+    sql = AGENT_MARKET_PROJECTION_PRIVILEGES_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert "GRANT SELECT ON TABLE" in sql
+    assert "public.arena_agent_tasks" in sql
+    assert "public.arena_agent_task_results" in sql
+    assert "public.arena_applied_agent_actions" in sql
+    assert "TO adx_arena_core" in sql
+    assert "GRANT INSERT" not in sql
+    assert "GRANT UPDATE" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_MARKET_PROJECTION_PRIVILEGES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_agent_negotiation_policy_validates_bounds_without_choosing_strategy(
+    monkeypatch,
+):
+    sql = AGENT_NEGOTIATION_AUTONOMY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION "
+        "apply_arena_agent_task_result_fcfs_v1" in sql
+    )
+    assert "buyer_opening_proposal_required" in sql
+    assert "counterparty_proposal_required" in sql
+    assert "final_turn_must_close" in sql
+    assert "limit_price_violation" in sql
+    assert "in_bound_quote_must_accept" not in sql
+    assert "out_of_bound_quote_must_counter" not in sql
+    assert "counter_must_equal_limit" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_NEGOTIATION_AUTONOMY_SQL_PATH
+        in migrate_module.migration_files("arena")
     )

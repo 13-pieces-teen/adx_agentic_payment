@@ -3,7 +3,8 @@
 > 状态：Hosted Runtime、统一 Task/Result、生产 Game Operator API、通用 Join 的
 > Game Core 投影和 Arena 接线已实现；Local Connector 已完成 Local Agent identity、
 > 冻结 route、Connector-owned session、数据库 Task
-> dispatcher、`arena.decide` / `arena.negotiate` typed transport、终态 Result
+> dispatcher、`arena.decide` / `arena.negotiate` /
+> `arena.market.intent/rfq/select` typed transport、终态 Result
 > durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排；另已实现默认
 > 关闭的 WSS wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动
 > cursor sync，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E。
@@ -13,6 +14,9 @@
 > `authorizationMode=none`，因此以 `settlement_disabled` 关闭并保持 0 链写入，
 > 不是支付成功证据。生产重连、Hosted/Connector mixed 和 payment-enabled
 > Connector 真实 E2E 仍待验收。
+> 2026-08-04 又完成一局 opt-in `agent_a2a.v1` 真实 Connector Intent/Discovery：
+> Claude 与 Codex 分别发布 grain 买卖意图，因私有限价区间不相交而没有
+> Engagement；这是真实 Agent 决策证据，但不是协商成交证据。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
@@ -155,11 +159,17 @@ Local Agent 依赖 Connector 在线。心跳丢失后的恢复窗口是 30 秒�
 ## 统一游戏调用
 
 Arena 为每次逻辑行动创建不可变、版本化的 AgentTask，并在创建事务中冻结 participant
-view、Game Agent 配置、绝对 `deadlineAt` 和 hash。两种 Task kind 为：
+view、Game Agent 配置、绝对 `deadlineAt` 和 hash。当前 Task kind 为：
 
 - `arena.decide`：结果 `action="buy" | "sell" | "pass"`；
 - `arena.negotiate`：结果
-  `action="propose" | "accept" | "reject"`。
+  `action="propose" | "accept" | "reject"`；
+- `arena.market.intent`：Agent 发布带公开参考价和私有硬边界的
+  `buy | sell` Intent，或 `pass`；
+- `arena.market.rfq`：买方 Agent 从冻结、未排序的公开目录选择最多三个目标并
+  `request_negotiations`，或 `pass`；
+- `arena.market.select`：卖方 Agent 从冻结的入站 RFQ 中选择
+  `engage(requestId)`，或 `reject_all`。
 
 所有 Runtime 使用同一 Game 的 `action_timeout_ms`；具体默认值由真实
 Provider/Model/thinking 与 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，而不是在

@@ -10,7 +10,24 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
+from arena_agent_contracts import (
+    ArenaMarketIntentInputV1,
+    ArenaMarketRfqInputV1,
+    ArenaMarketSelectInputV1,
+    BuyAction,
+    EngageRequestActionV1,
+    MarketIntentActionV1,
+    MarketRfqActionV1,
+    MarketSelectionActionV1,
+    PassAction,
+    RejectAllRequestsActionV1,
+    RequestNegotiationsActionV1,
+    SellAction,
+)
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
+from arena_core.models import AppliedArenaAction
 from db_pool_config import api_pool_max_size
 
 from .events import (
@@ -53,6 +70,10 @@ class PawnhouseRepositoryError(RuntimeError):
 _INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 CURRENT_GAME_START_THRESHOLD = 10
 CURRENT_GAME_MAX_PARTICIPANTS = 100
+
+_MARKET_INTENT_ACTION_ADAPTER = TypeAdapter(MarketIntentActionV1)
+_MARKET_RFQ_ACTION_ADAPTER = TypeAdapter(MarketRfqActionV1)
+_MARKET_SELECT_ACTION_ADAPTER = TypeAdapter(MarketSelectionActionV1)
 
 
 def _json(value: object) -> str:
@@ -137,6 +158,7 @@ class PostgresPawnhouseRepository:
         min_participants: int = 2,
         max_participants: int = 16,
         portfolio_mode: str = "manual",
+        market_protocol: str = "fcfs.v1",
         settlement_config: SettlementConfig | None = None,
         operator_user_id: str | None = None,
     ) -> dict[str, object]:
@@ -150,6 +172,8 @@ class PostgresPawnhouseRepository:
             raise PawnhouseRepositoryError("invalid_participant_range")
         if portfolio_mode not in {"manual", "balanced_auto"}:
             raise PawnhouseRepositoryError("invalid_portfolio_mode")
+        if market_protocol not in {"fcfs.v1", "agent_a2a.v1"}:
+            raise PawnhouseRepositoryError("invalid_market_protocol")
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
         config = {
@@ -171,6 +195,7 @@ class PostgresPawnhouseRepository:
                 "gems": 0,
             },
             "fixedTradeQuantity": 1,
+            "marketProtocol": market_protocol,
             "goldScale": 1_000_000,
             "settlement": resolved_settlement.to_snapshot(),
             "schemaVersion": "arena.pawnhouse-game.v1",
@@ -188,13 +213,15 @@ class PostgresPawnhouseRepository:
                     max_negotiation_turns=max_negotiation_turns,
                     min_participants=min_participants,
                     max_participants=max_participants,
+                    market_protocol=market_protocol,
                     config=config,
                     operator_user_id=operator_user_id,
-                    claim_current=True,
+                    claim_current=market_protocol == "fcfs.v1",
                 )
         return {
             "gameId": game_id,
             "phase": "registration",
+            "marketProtocol": market_protocol,
             "eventScheduleCommitment": commitment,
         }
 
@@ -252,6 +279,7 @@ class PostgresPawnhouseRepository:
                 "gems": 0,
             },
             "fixedTradeQuantity": 1,
+            "marketProtocol": "fcfs.v1",
             "goldScale": 1_000_000,
             "settlement": resolved_settlement.to_snapshot(),
             "currentGameManaged": True,
@@ -300,6 +328,7 @@ class PostgresPawnhouseRepository:
                     max_negotiation_turns=max_negotiation_turns,
                     min_participants=start_threshold,
                     max_participants=max_participants,
+                    market_protocol="fcfs.v1",
                     config=config,
                     operator_user_id=None,
                     claim_current=False,
@@ -339,6 +368,7 @@ class PostgresPawnhouseRepository:
         max_negotiation_turns: int,
         min_participants: int,
         max_participants: int,
+        market_protocol: str,
         config: Mapping[str, object],
         operator_user_id: str | None,
         claim_current: bool,
@@ -349,10 +379,10 @@ class PostgresPawnhouseRepository:
                 game_id, round_count, action_timeout_ms,
                 max_negotiation_turns, min_participants, max_participants,
                 config_snapshot, event_seed, event_schedule_commitment,
-                operator_user_id
+                operator_user_id, market_protocol
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10
+                $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11
             )
             ON CONFLICT (game_id) DO NOTHING
             RETURNING game_id
@@ -367,6 +397,7 @@ class PostgresPawnhouseRepository:
             event_seed,
             commitment,
             operator_user_id,
+            market_protocol,
         )
         if inserted is None:
             raise PawnhouseRepositoryError("game_already_exists")
@@ -502,7 +533,7 @@ class PostgresPawnhouseRepository:
             async with connection.transaction():
                 phase = await connection.fetchrow(
                     """
-                    SELECT phase, max_participants
+                    SELECT phase, max_participants, market_protocol
                     FROM arena402.games
                     WHERE game_id = $1
                     FOR UPDATE
@@ -513,6 +544,10 @@ class PostgresPawnhouseRepository:
                     raise PawnhouseRepositoryError("game_not_found")
                 if phase["phase"] not in ("registration", "portfolio_setup"):
                     raise PawnhouseRepositoryError("game_not_joinable")
+                if phase["market_protocol"] == "agent_a2a.v1":
+                    raise PawnhouseRepositoryError(
+                        "agent_market_requires_agent_runtime"
+                    )
                 participant_count = int(
                     await connection.fetchval(
                         """
@@ -1998,7 +2033,9 @@ class PostgresPawnhouseRepository:
             async with connection.transaction():
                 round_row = await connection.fetchrow(
                     """
-                    SELECT r.round_id, r.phase, r.round_index
+                    SELECT
+                        r.round_id, r.phase, r.round_index,
+                        g.market_protocol
                     FROM arena402.rounds AS r
                     JOIN arena402.games AS g ON g.game_id = r.game_id
                     WHERE r.game_id = $1
@@ -2009,6 +2046,10 @@ class PostgresPawnhouseRepository:
                 )
                 if round_row is None or round_row["phase"] != "decide":
                     raise PawnhouseRepositoryError("round_not_in_decide")
+                if round_row["market_protocol"] != "fcfs.v1":
+                    raise PawnhouseRepositoryError(
+                        "rule_market_requires_fcfs_protocol"
+                    )
                 configs = await connection.fetch(
                     """
                     SELECT
@@ -2148,7 +2189,7 @@ class PostgresPawnhouseRepository:
             async with connection.transaction():
                 round_row = await connection.fetchrow(
                     """
-                    SELECT r.round_id, r.phase
+                    SELECT r.round_id, r.phase, g.market_protocol
                     FROM arena402.rounds AS r
                     JOIN arena402.games AS g ON g.game_id = r.game_id
                     WHERE r.game_id = $1
@@ -2210,12 +2251,16 @@ class PostgresPawnhouseRepository:
                     public_payload={
                         "runtimeRunId": run_id,
                         "runtimeKind": runtime_kind,
+                        "marketProtocol": str(
+                            round_row["market_protocol"]
+                        ),
                     },
                 )
         return {
             "gameId": game_id,
             "roundId": round_row["round_id"],
             "runtimeRunId": run_id,
+            "marketProtocol": str(round_row["market_protocol"]),
             "status": "queued",
         }
 
@@ -2261,7 +2306,12 @@ class PostgresPawnhouseRepository:
             WHERE run.runtime_run_id = candidate.runtime_run_id
             RETURNING
                 run.runtime_run_id, run.game_id, run.round_id, run.stage,
-                run.lease_epoch
+                run.lease_epoch,
+                (
+                    SELECT game.market_protocol
+                    FROM arena402.games AS game
+                    WHERE game.game_id = run.game_id
+                ) AS market_protocol
             """,
             worker_id,
             lease_seconds,
@@ -2388,7 +2438,8 @@ class PostgresPawnhouseRepository:
             round_row = await connection.fetchrow(
                 """
                 SELECT
-                    r.round_id, r.round_index, r.phase_deadline_at
+                    r.round_id, r.round_index, r.phase_deadline_at,
+                    g.action_timeout_ms
                 FROM arena402.rounds AS r
                 JOIN arena402.games AS g ON g.game_id = r.game_id
                 WHERE r.game_id = $1
@@ -2527,6 +2578,9 @@ class PostgresPawnhouseRepository:
                         "round_id": round_row["round_id"],
                         "round_index": round_row["round_index"],
                         "deadline_at": round_row["phase_deadline_at"],
+                        "action_timeout_ms": int(
+                            round_row["action_timeout_ms"]
+                        ),
                         "participant_id": participant[
                             "game_participant_id"
                         ],
@@ -2604,6 +2658,1472 @@ class PostgresPawnhouseRepository:
                     }
                 )
         return contexts
+
+    async def agent_market_round_phase(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> str:
+        """Return the persisted compatibility phase for agent_a2a.v1."""
+
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT round.phase
+            FROM arena402.rounds AS round
+            JOIN arena402.games AS game
+              ON game.game_id = round.game_id
+            WHERE round.game_id = $1
+              AND round.round_id = $2
+              AND game.market_protocol = 'agent_a2a.v1'
+            """,
+            game_id,
+            round_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_round_not_found"
+            )
+        return str(row["phase"])
+
+    async def advance_agent_market_stage(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+        expected_phase: str,
+        next_phase: str,
+        market_stage: str,
+    ) -> None:
+        """Open the next bounded A2A stage without choosing an action."""
+
+        allowed = {
+            ("decide", "match", "rfq"),
+            ("match", "negotiate", "select"),
+        }
+        if (expected_phase, next_phase, market_stage) not in allowed:
+            raise ValueError("invalid agent market stage transition")
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT round.phase, game.action_timeout_ms
+                    FROM arena402.rounds AS round
+                    JOIN arena402.games AS game
+                      ON game.game_id = round.game_id
+                    WHERE round.game_id = $1
+                      AND round.round_id = $2
+                      AND game.market_protocol = 'agent_a2a.v1'
+                    FOR UPDATE OF round
+                    """,
+                    game_id,
+                    round_id,
+                )
+                if row is None:
+                    raise PawnhouseRepositoryError(
+                        "agent_market_round_not_found"
+                    )
+                phase = str(row["phase"])
+                if phase == next_phase:
+                    return
+                if phase != expected_phase:
+                    raise PawnhouseRepositoryError(
+                        "agent_market_stage_conflict"
+                    )
+                deadline = await connection.fetchval(
+                    """
+                    UPDATE arena402.rounds
+                    SET phase = $3,
+                        phase_deadline_at = (
+                            clock_timestamp()
+                            + $4 * interval '1 millisecond'
+                        )
+                    WHERE game_id = $1
+                      AND round_id = $2
+                      AND phase = $5
+                    RETURNING phase_deadline_at
+                    """,
+                    game_id,
+                    round_id,
+                    next_phase,
+                    int(row["action_timeout_ms"]),
+                    expected_phase,
+                )
+                if deadline is None:
+                    raise PawnhouseRepositoryError(
+                        "agent_market_stage_conflict"
+                    )
+                public_phase = (
+                    "matching"
+                    if next_phase == "match"
+                    else "negotiate"
+                )
+                await connection.execute(
+                    """
+                    UPDATE public.rounds
+                    SET phase = $2,
+                        deadline_at = $3
+                    WHERE round_id = $1
+                    """,
+                    round_id,
+                    public_phase,
+                    deadline,
+                )
+                await self._event(
+                    connection,
+                    game_id=game_id,
+                    round_id=round_id,
+                    event_type="market.stage_opened",
+                    source_key=f"{round_id}:market-stage:{market_stage}",
+                    public_payload={
+                        "marketProtocol": "agent_a2a.v1",
+                        "stage": market_stage,
+                        "deadlineAt": deadline.isoformat(),
+                    },
+                )
+
+    async def agent_market_rfq_contexts(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> list[dict[str, object]]:
+        """Build unranked seller directories for every open buyer Intent."""
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            round_row = await connection.fetchrow(
+                """
+                SELECT round.round_index, round.phase_deadline_at
+                FROM arena402.rounds AS round
+                JOIN arena402.games AS game
+                  ON game.game_id = round.game_id
+                WHERE round.game_id = $1
+                  AND round.round_id = $2
+                  AND round.phase = 'match'
+                  AND game.market_protocol = 'agent_a2a.v1'
+                """,
+                game_id,
+                round_id,
+            )
+            if round_row is None:
+                raise PawnhouseRepositoryError(
+                    "agent_market_round_not_in_rfq"
+                )
+            buyers = await connection.fetch(
+                """
+                SELECT
+                    intent.*,
+                    balance.cash_atomic,
+                    game_agent.config_snapshot
+                FROM arena402.market_intents AS intent
+                JOIN arena402.balances AS balance
+                  ON balance.game_participant_id =
+                     intent.game_participant_id
+                JOIN public.game_agents AS game_agent
+                  ON game_agent.game_agent_id =
+                     intent.game_participant_id
+                WHERE intent.game_id = $1
+                  AND intent.round_id = $2
+                  AND intent.side = 'buy'
+                  AND intent.status = 'open'
+                  AND intent.expires_at > clock_timestamp()
+                ORDER BY intent.intent_id
+                """,
+                game_id,
+                round_id,
+            )
+            sellers = await connection.fetch(
+                """
+                SELECT
+                    intent.*,
+                    participant.agent_id,
+                    COALESCE(agent.name, participant.agent_id)
+                        AS display_name
+                FROM arena402.market_intents AS intent
+                JOIN arena402.game_participants AS participant
+                  ON participant.game_participant_id =
+                     intent.game_participant_id
+                 AND participant.game_id = intent.game_id
+                LEFT JOIN public.arena_agents AS agent
+                  ON agent.agent_id = participant.agent_id
+                WHERE intent.game_id = $1
+                  AND intent.round_id = $2
+                  AND intent.side = 'sell'
+                  AND intent.status = 'open'
+                  AND intent.expires_at > clock_timestamp()
+                ORDER BY intent.intent_id
+                """,
+                game_id,
+                round_id,
+            )
+        contexts: list[dict[str, object]] = []
+        for buyer in buyers:
+            directory = []
+            for seller in sellers:
+                if (
+                    str(seller["good_id"]) != str(buyer["good_id"])
+                    or str(seller["game_participant_id"])
+                    == str(buyer["game_participant_id"])
+                    or int(buyer["limit_price_atomic"])
+                    < int(seller["limit_price_atomic"])
+                ):
+                    continue
+                directory.append(
+                    {
+                        "intent_id": str(seller["intent_id"]),
+                        "agent_id": str(seller["agent_id"]),
+                        "display_name": str(seller["display_name"]),
+                        "good": str(seller["good_id"]),
+                        "quantity": int(seller["quantity"]),
+                        "public_price_atomic": int(
+                            seller["public_price_atomic"]
+                        ),
+                        "expires_at": seller["expires_at"],
+                    }
+                )
+            config = buyer["config_snapshot"]
+            contexts.append(
+                {
+                    "game_id": game_id,
+                    "round_id": round_id,
+                    "round_index": int(round_row["round_index"]),
+                    "deadline_at": round_row["phase_deadline_at"],
+                    "participant_id": str(
+                        buyer["game_participant_id"]
+                    ),
+                    "buyer_intent_id": str(buyer["intent_id"]),
+                    "good": str(buyer["good_id"]),
+                    "quantity": int(buyer["quantity"]),
+                    "public_price_atomic": int(
+                        buyer["public_price_atomic"]
+                    ),
+                    "limit_price_atomic": int(
+                        buyer["limit_price_atomic"]
+                    ),
+                    "cash_atomic": int(buyer["cash_atomic"]),
+                    "directory": directory,
+                    "events": [],
+                    "config_snapshot": (
+                        json.loads(config)
+                        if isinstance(config, str)
+                        else dict(config)
+                    ),
+                }
+            )
+        return contexts
+
+    async def agent_market_select_contexts(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> list[dict[str, object]]:
+        """Build each seller's frozen inbound RFQ set without ranking it."""
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            round_row = await connection.fetchrow(
+                """
+                SELECT round.round_index, round.phase_deadline_at
+                FROM arena402.rounds AS round
+                JOIN arena402.games AS game
+                  ON game.game_id = round.game_id
+                WHERE round.game_id = $1
+                  AND round.round_id = $2
+                  AND round.phase = 'negotiate'
+                  AND game.market_protocol = 'agent_a2a.v1'
+                """,
+                game_id,
+                round_id,
+            )
+            if round_row is None:
+                raise PawnhouseRepositoryError(
+                    "agent_market_round_not_in_select"
+                )
+            sellers = await connection.fetch(
+                """
+                SELECT
+                    intent.*,
+                    holding.quantity AS inventory_available,
+                    game_agent.config_snapshot
+                FROM arena402.market_intents AS intent
+                JOIN arena402.holdings AS holding
+                  ON holding.game_participant_id =
+                     intent.game_participant_id
+                 AND holding.good_id = intent.good_id
+                JOIN public.game_agents AS game_agent
+                  ON game_agent.game_agent_id =
+                     intent.game_participant_id
+                WHERE intent.game_id = $1
+                  AND intent.round_id = $2
+                  AND intent.side = 'sell'
+                  AND intent.status = 'open'
+                  AND intent.expires_at > clock_timestamp()
+                  AND EXISTS (
+                      SELECT 1
+                      FROM arena402.market_negotiation_requests AS request
+                      WHERE request.seller_intent_id = intent.intent_id
+                        AND request.status = 'pending'
+                  )
+                ORDER BY intent.intent_id
+                """,
+                game_id,
+                round_id,
+            )
+            contexts: list[dict[str, object]] = []
+            for seller in sellers:
+                requests = await connection.fetch(
+                    """
+                    SELECT
+                        request.request_id,
+                        buyer_participant.agent_id AS buyer_agent_id,
+                        COALESCE(
+                            buyer_agent.name,
+                            buyer_participant.agent_id
+                        ) AS buyer_display_name,
+                        request.opening_price_atomic,
+                        request.public_message,
+                        request.created_at
+                    FROM arena402.market_negotiation_requests AS request
+                    JOIN arena402.game_participants AS buyer_participant
+                      ON buyer_participant.game_participant_id =
+                         request.buyer_participant_id
+                     AND buyer_participant.game_id = request.game_id
+                    LEFT JOIN public.arena_agents AS buyer_agent
+                      ON buyer_agent.agent_id =
+                         buyer_participant.agent_id
+                    WHERE request.seller_intent_id = $1
+                      AND request.status = 'pending'
+                    ORDER BY request.created_at, request.request_id
+                    """,
+                    seller["intent_id"],
+                )
+                config = seller["config_snapshot"]
+                contexts.append(
+                    {
+                        "game_id": game_id,
+                        "round_id": round_id,
+                        "round_index": int(round_row["round_index"]),
+                        "deadline_at": round_row["phase_deadline_at"],
+                        "participant_id": str(
+                            seller["game_participant_id"]
+                        ),
+                        "seller_intent_id": str(seller["intent_id"]),
+                        "good": str(seller["good_id"]),
+                        "quantity": int(seller["quantity"]),
+                        "public_price_atomic": int(
+                            seller["public_price_atomic"]
+                        ),
+                        "limit_price_atomic": int(
+                            seller["limit_price_atomic"]
+                        ),
+                        "inventory_available": int(
+                            seller["inventory_available"]
+                        ),
+                        "requests": [
+                            {
+                                "request_id": str(row["request_id"]),
+                                "buyer_agent_id": str(
+                                    row["buyer_agent_id"]
+                                ),
+                                "buyer_display_name": str(
+                                    row["buyer_display_name"]
+                                ),
+                                "opening_price_atomic": int(
+                                    row["opening_price_atomic"]
+                                ),
+                                "message": str(row["public_message"]),
+                                "received_at": row["created_at"],
+                            }
+                            for row in requests
+                        ],
+                        "events": [],
+                        "config_snapshot": (
+                            json.loads(config)
+                            if isinstance(config, str)
+                            else dict(config)
+                        ),
+                    }
+                )
+        return contexts
+
+    async def project_agent_market_result(
+        self,
+        *,
+        result_id: str,
+    ) -> dict[str, object]:
+        """Synchronously reach the durable projection boundary for one Result."""
+
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT
+                applied.task_id,
+                applied.result_id,
+                applied.task_kind,
+                applied.application_outcome,
+                applied.applied_action,
+                applied.authoritative_entered_at,
+                applied.applied_at,
+                receipt.result_id AS projected_result_id
+            FROM public.arena_applied_agent_actions AS applied
+            LEFT JOIN arena402.market_projection_receipts AS receipt
+              ON receipt.result_id = applied.result_id
+            WHERE applied.result_id = $1
+              AND applied.task_kind IN (
+                  'arena.market.intent',
+                  'arena.market.rfq',
+                  'arena.market.select'
+              )
+            """,
+            result_id,
+        )
+        if row is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_application_not_found"
+            )
+        if row["projected_result_id"] is not None:
+            return {
+                "taskId": str(row["task_id"]),
+                "resultId": str(row["result_id"]),
+                "kind": str(row["task_kind"]),
+                "outcome": str(row["application_outcome"]),
+                "projected": True,
+                "replayed": True,
+            }
+        raw_action = row["applied_action"]
+        if isinstance(raw_action, str):
+            raw_action = json.loads(raw_action)
+        application = AppliedArenaAction(
+            task_id=str(row["task_id"]),
+            result_id=str(row["result_id"]),
+            kind=str(row["task_kind"]),  # type: ignore[arg-type]
+            outcome=str(row["application_outcome"]),
+            action=(
+                None
+                if raw_action is None
+                else dict(raw_action)
+            ),
+            entered_at=row["authoritative_entered_at"],
+            applied_at=row["applied_at"],
+        )
+        return await self.project_agent_market_application(application)
+
+    async def materialize_agent_market_engagements(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> list[str]:
+        """Create negotiation records only from Agent-selected Engagements."""
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    """
+                    SELECT
+                        engagement.*,
+                        buyer.source_result_id AS buyer_result_id,
+                        buyer.limit_price_atomic
+                            AS buyer_limit_price_atomic,
+                        seller.source_result_id AS seller_result_id,
+                        seller.limit_price_atomic
+                            AS seller_limit_price_atomic,
+                        request.opening_price_atomic
+                    FROM arena402.market_engagements AS engagement
+                    JOIN arena402.market_intents AS buyer
+                      ON buyer.intent_id = engagement.buyer_intent_id
+                    JOIN arena402.market_intents AS seller
+                      ON seller.intent_id = engagement.seller_intent_id
+                    JOIN arena402.market_negotiation_requests AS request
+                      ON request.request_id = engagement.request_id
+                    LEFT JOIN arena402.negotiations AS negotiation
+                      ON negotiation.negotiation_id =
+                         engagement.negotiation_id
+                    WHERE engagement.game_id = $1
+                      AND engagement.round_id = $2
+                      AND engagement.status = 'active'
+                      AND negotiation.negotiation_id IS NULL
+                    ORDER BY engagement.engagement_id
+                    FOR UPDATE OF engagement
+                    """,
+                    game_id,
+                    round_id,
+                )
+                negotiation_ids: list[str] = []
+                for row in rows:
+                    buyer_entry_id = (
+                        f"pool:market:{row['buyer_intent_id']}"
+                    )
+                    seller_entry_id = (
+                        f"pool:market:{row['seller_intent_id']}"
+                    )
+                    for (
+                        entry_id,
+                        participant_id,
+                        source_result_id,
+                        side,
+                        limit_price,
+                    ) in (
+                        (
+                            buyer_entry_id,
+                            row["buyer_participant_id"],
+                            row["buyer_result_id"],
+                            "buy",
+                            row["buyer_limit_price_atomic"],
+                        ),
+                        (
+                            seller_entry_id,
+                            row["seller_participant_id"],
+                            row["seller_result_id"],
+                            "sell",
+                            row["seller_limit_price_atomic"],
+                        ),
+                    ):
+                        await connection.execute(
+                            """
+                            INSERT INTO arena402.pool_entries (
+                                pool_entry_id,
+                                game_id,
+                                round_id,
+                                game_participant_id,
+                                source_result_id,
+                                side,
+                                good_id,
+                                quantity,
+                                limit_price_atomic,
+                                status
+                            )
+                            VALUES (
+                                $1, $2, $3, $4, $5, $6, $7, 1, $8,
+                                'paired'
+                            )
+                            ON CONFLICT (source_result_id) DO NOTHING
+                            """,
+                            entry_id,
+                            game_id,
+                            round_id,
+                            participant_id,
+                            source_result_id,
+                            side,
+                            row["good_id"],
+                            limit_price,
+                        )
+                    pairing_id = f"pairing:{row['engagement_id']}"
+                    sequence = int(
+                        await connection.fetchval(
+                            """
+                            SELECT COALESCE(max(pairing_sequence), 0) + 1
+                            FROM arena402.pairings
+                            WHERE round_id = $1
+                              AND good_id = $2
+                            """,
+                            round_id,
+                            row["good_id"],
+                        )
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.pairings (
+                            pairing_id,
+                            game_id,
+                            round_id,
+                            good_id,
+                            buyer_entry_id,
+                            seller_entry_id,
+                            buyer_participant_id,
+                            seller_participant_id,
+                            pairing_sequence,
+                            quantity,
+                            buyer_limit_price_atomic,
+                            seller_limit_price_atomic
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, 1,
+                            $10, $11
+                        )
+                        ON CONFLICT (pairing_id) DO NOTHING
+                        """,
+                        pairing_id,
+                        game_id,
+                        round_id,
+                        row["good_id"],
+                        buyer_entry_id,
+                        seller_entry_id,
+                        row["buyer_participant_id"],
+                        row["seller_participant_id"],
+                        sequence,
+                        row["buyer_limit_price_atomic"],
+                        row["seller_limit_price_atomic"],
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.negotiations (
+                            negotiation_id,
+                            pairing_id,
+                            game_id,
+                            round_id,
+                            buyer_participant_id,
+                            seller_participant_id,
+                            max_turns,
+                            action_deadline_at
+                        )
+                        SELECT
+                            $1, $2, $3, $4, $5, $6,
+                            game.max_negotiation_turns,
+                            clock_timestamp()
+                            + game.action_timeout_ms
+                              * interval '1 millisecond'
+                        FROM arena402.games AS game
+                        WHERE game.game_id = $3
+                          AND game.market_protocol = 'agent_a2a.v1'
+                        ON CONFLICT (negotiation_id) DO NOTHING
+                        """,
+                        row["negotiation_id"],
+                        pairing_id,
+                        game_id,
+                        round_id,
+                        row["buyer_participant_id"],
+                        row["seller_participant_id"],
+                    )
+                    await self._event(
+                        connection,
+                        game_id=game_id,
+                        round_id=round_id,
+                        event_type="market.negotiation_created",
+                        source_key=(
+                            f"{row['engagement_id']}:"
+                            "negotiation-created"
+                        ),
+                        public_payload={
+                            "engagementId": str(row["engagement_id"]),
+                            "negotiationId": str(row["negotiation_id"]),
+                            "requestId": str(row["request_id"]),
+                            "good": str(row["good_id"]),
+                        },
+                    )
+                    negotiation_ids.append(str(row["negotiation_id"]))
+        return negotiation_ids
+
+    async def pending_agent_market_applications(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[AppliedArenaAction]:
+        """Return applied market Results not yet durably projected."""
+
+        if limit <= 0:
+            return []
+        rows = await self._require_pool().fetch(
+            """
+            SELECT
+                applied.task_id,
+                applied.result_id,
+                applied.task_kind,
+                applied.application_outcome,
+                applied.applied_action,
+                applied.authoritative_entered_at,
+                applied.applied_at
+            FROM public.arena_applied_agent_actions AS applied
+            LEFT JOIN arena402.market_projection_receipts AS receipt
+              ON receipt.result_id = applied.result_id
+            WHERE applied.task_kind IN (
+                'arena.market.intent',
+                'arena.market.rfq',
+                'arena.market.select'
+            )
+              AND receipt.result_id IS NULL
+            ORDER BY applied.applied_at, applied.task_id
+            LIMIT $1
+            """,
+            min(limit, 1000),
+        )
+        applications: list[AppliedArenaAction] = []
+        for row in rows:
+            action = row["applied_action"]
+            if isinstance(action, str):
+                action = json.loads(action)
+            applications.append(
+                AppliedArenaAction(
+                    task_id=str(row["task_id"]),
+                    result_id=str(row["result_id"]),
+                    kind=str(row["task_kind"]),  # type: ignore[arg-type]
+                    outcome=str(row["application_outcome"]),
+                    action=(
+                        None
+                        if action is None
+                        else dict(action)
+                    ),
+                    entered_at=row["authoritative_entered_at"],
+                    applied_at=row["applied_at"],
+                )
+            )
+        return applications
+
+    async def project_agent_market_application(
+        self,
+        application: AppliedArenaAction,
+    ) -> dict[str, object]:
+        """Project one applied real-Agent market Result idempotently.
+
+        The caller supplies only an applied-action pointer. This method
+        re-reads the authoritative task, input, action, and Result provenance
+        inside the database transaction before touching market state.
+        """
+
+        if application.kind not in {
+            "arena.market.intent",
+            "arena.market.rfq",
+            "arena.market.select",
+        }:
+            raise PawnhouseRepositoryError(
+                "agent_market_task_kind_invalid"
+            )
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                row = await connection.fetchrow(
+                    """
+                    SELECT
+                        task.task_id,
+                        task.task_kind,
+                        task.game_id,
+                        task.round_id,
+                        task.game_agent_id,
+                        task.deadline_at,
+                        task.input_snapshot,
+                        applied.result_id,
+                        applied.application_outcome,
+                        applied.applied_action,
+                        applied.authoritative_entered_at
+                    FROM public.arena_applied_agent_actions AS applied
+                    JOIN public.arena_agent_tasks AS task
+                      ON task.task_id = applied.task_id
+                    WHERE applied.task_id = $1
+                      AND applied.result_id = $2
+                      AND applied.task_kind = $3
+                    """,
+                    application.task_id,
+                    application.result_id,
+                    application.kind,
+                )
+                if row is None:
+                    raise PawnhouseRepositoryError(
+                        "agent_market_application_not_found"
+                    )
+                outcome = str(row["application_outcome"])
+                if outcome != "candidate":
+                    projection = {
+                        "taskId": str(row["task_id"]),
+                        "resultId": str(row["result_id"]),
+                        "kind": str(row["task_kind"]),
+                        "outcome": outcome,
+                        "projected": False,
+                    }
+                    await self._record_market_projection_locked(
+                        connection,
+                        row=row,
+                    )
+                    return projection
+
+                input_snapshot = row["input_snapshot"]
+                if isinstance(input_snapshot, str):
+                    input_snapshot = json.loads(input_snapshot)
+                applied_action = row["applied_action"]
+                if isinstance(applied_action, str):
+                    applied_action = json.loads(applied_action)
+                if not isinstance(input_snapshot, Mapping) or not isinstance(
+                    applied_action,
+                    Mapping,
+                ):
+                    raise PawnhouseRepositoryError(
+                        "agent_market_application_invalid"
+                    )
+
+                try:
+                    if application.kind == "arena.market.intent":
+                        task_input = ArenaMarketIntentInputV1.model_validate(
+                            input_snapshot
+                        )
+                        action = _MARKET_INTENT_ACTION_ADAPTER.validate_python(
+                            dict(applied_action),
+                            strict=True,
+                        )
+                        projection = await self._project_market_intent_locked(
+                            connection,
+                            row=row,
+                            task_input=task_input,
+                            action=action,
+                        )
+                    elif application.kind == "arena.market.rfq":
+                        task_input = ArenaMarketRfqInputV1.model_validate(
+                            input_snapshot
+                        )
+                        action = _MARKET_RFQ_ACTION_ADAPTER.validate_python(
+                            dict(applied_action),
+                            strict=True,
+                        )
+                        projection = await self._project_market_rfq_locked(
+                            connection,
+                            row=row,
+                            task_input=task_input,
+                            action=action,
+                        )
+                    else:
+                        task_input = ArenaMarketSelectInputV1.model_validate(
+                            input_snapshot
+                        )
+                        action = (
+                            _MARKET_SELECT_ACTION_ADAPTER.validate_python(
+                                dict(applied_action),
+                                strict=True,
+                            )
+                        )
+                        projection = (
+                            await self._project_market_selection_locked(
+                                connection,
+                                row=row,
+                                task_input=task_input,
+                                action=action,
+                            )
+                        )
+                    await self._record_market_projection_locked(
+                        connection,
+                        row=row,
+                    )
+                    return projection
+                except ValidationError:
+                    raise PawnhouseRepositoryError(
+                        "agent_market_application_invalid"
+                    ) from None
+
+    @staticmethod
+    async def _record_market_projection_locked(
+        connection: Any,
+        *,
+        row: Mapping[str, object],
+    ) -> None:
+        receipt = await connection.fetchrow(
+            """
+            INSERT INTO arena402.market_projection_receipts (
+                result_id,
+                task_id,
+                task_kind,
+                application_outcome
+            )
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (result_id) DO UPDATE
+            SET result_id = EXCLUDED.result_id
+            WHERE market_projection_receipts.task_id = EXCLUDED.task_id
+              AND market_projection_receipts.task_kind
+                      = EXCLUDED.task_kind
+              AND market_projection_receipts.application_outcome
+                      = EXCLUDED.application_outcome
+            RETURNING result_id
+            """,
+            row["result_id"],
+            row["task_id"],
+            row["task_kind"],
+            row["application_outcome"],
+        )
+        if receipt is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_projection_receipt_conflict"
+            )
+
+    @staticmethod
+    async def _claim_market_result_locked(
+        connection: Any,
+        *,
+        row: Mapping[str, object],
+        action_kind: str,
+        action_id: str,
+    ) -> None:
+        claimed = await connection.fetchrow(
+            """
+            INSERT INTO arena402.market_result_applications (
+                result_id,
+                game_id,
+                round_id,
+                game_participant_id,
+                action_kind,
+                action_id,
+                applied_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (result_id) DO UPDATE
+            SET result_id = EXCLUDED.result_id
+            WHERE market_result_applications.action_kind
+                      = EXCLUDED.action_kind
+              AND market_result_applications.action_id
+                      = EXCLUDED.action_id
+              AND market_result_applications.game_id
+                      = EXCLUDED.game_id
+              AND market_result_applications.round_id
+                      = EXCLUDED.round_id
+              AND market_result_applications.game_participant_id
+                      = EXCLUDED.game_participant_id
+            RETURNING result_id
+            """,
+            row["result_id"],
+            row["game_id"],
+            row["round_id"],
+            row["game_agent_id"],
+            action_kind,
+            action_id,
+            row["authoritative_entered_at"],
+        )
+        if claimed is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_result_reuse_conflict"
+            )
+
+    async def _project_market_intent_locked(
+        self,
+        connection: Any,
+        *,
+        row: Mapping[str, object],
+        task_input: ArenaMarketIntentInputV1,
+        action: MarketIntentActionV1,
+    ) -> dict[str, object]:
+        if isinstance(action, PassAction):
+            return {
+                "taskId": str(row["task_id"]),
+                "resultId": str(row["result_id"]),
+                "kind": str(row["task_kind"]),
+                "outcome": "candidate",
+                "projected": False,
+                "action": "pass",
+            }
+        if not isinstance(action, (BuyAction, SellAction)):
+            raise PawnhouseRepositoryError(
+                "agent_market_intent_action_invalid"
+            )
+        if action.public_price is None or action.limit_price is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_intent_price_missing"
+            )
+
+        intent_id = (
+            f"intent:{row['round_id']}:{row['game_agent_id']}"
+        )
+        await self._claim_market_result_locked(
+            connection,
+            row=row,
+            action_kind="intent",
+            action_id=intent_id,
+        )
+        inserted = await connection.fetchrow(
+            """
+            INSERT INTO arena402.market_intents (
+                intent_id,
+                game_id,
+                round_id,
+                game_participant_id,
+                source_result_id,
+                source_action_kind,
+                side,
+                good_id,
+                quantity,
+                public_price_atomic,
+                limit_price_atomic,
+                public_message,
+                expires_at,
+                created_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, 'intent', $6, $7, 1,
+                $8, $9, $10, $11, $12
+            )
+            ON CONFLICT (source_result_id) DO UPDATE
+            SET source_result_id = EXCLUDED.source_result_id
+            WHERE market_intents.intent_id = EXCLUDED.intent_id
+              AND market_intents.game_id = EXCLUDED.game_id
+              AND market_intents.round_id = EXCLUDED.round_id
+              AND market_intents.game_participant_id
+                      = EXCLUDED.game_participant_id
+              AND market_intents.side = EXCLUDED.side
+              AND market_intents.good_id = EXCLUDED.good_id
+              AND market_intents.public_price_atomic
+                      = EXCLUDED.public_price_atomic
+              AND market_intents.limit_price_atomic
+                      = EXCLUDED.limit_price_atomic
+            RETURNING intent_id
+            """,
+            intent_id,
+            row["game_id"],
+            row["round_id"],
+            row["game_agent_id"],
+            row["result_id"],
+            action.action,
+            action.good,
+            gold(str(action.public_price)),
+            gold(str(action.limit_price)),
+            action.message,
+            task_input.market_expires_at,
+            row["authoritative_entered_at"],
+        )
+        if inserted is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_intent_idempotency_conflict"
+            )
+        await self._event(
+            connection,
+            game_id=str(row["game_id"]),
+            round_id=str(row["round_id"]),
+            event_type="market.intent_published",
+            source_key=str(row["result_id"]),
+            public_payload={
+                "intentId": intent_id,
+                "participantId": str(row["game_agent_id"]),
+                "side": action.action,
+                "good": action.good,
+                "quantity": 1,
+                "publicPriceAtomic": gold(str(action.public_price)),
+                "message": action.message,
+            },
+        )
+        return {
+            "taskId": str(row["task_id"]),
+            "resultId": str(row["result_id"]),
+            "kind": str(row["task_kind"]),
+            "outcome": "candidate",
+            "projected": True,
+            "intentId": intent_id,
+        }
+
+    async def _project_market_rfq_locked(
+        self,
+        connection: Any,
+        *,
+        row: Mapping[str, object],
+        task_input: ArenaMarketRfqInputV1,
+        action: MarketRfqActionV1,
+    ) -> dict[str, object]:
+        if isinstance(action, PassAction):
+            return {
+                "taskId": str(row["task_id"]),
+                "resultId": str(row["result_id"]),
+                "kind": str(row["task_kind"]),
+                "outcome": "candidate",
+                "projected": False,
+                "action": "pass",
+            }
+        if not isinstance(action, RequestNegotiationsActionV1):
+            raise PawnhouseRepositoryError(
+                "agent_market_rfq_action_invalid"
+            )
+        batch_id = f"rfq-batch:{row['task_id']}"
+        await self._claim_market_result_locked(
+            connection,
+            row=row,
+            action_kind="rfq",
+            action_id=batch_id,
+        )
+        buyer = await connection.fetchrow(
+            """
+            SELECT intent_id, game_participant_id, good_id, status
+            FROM arena402.market_intents
+            WHERE intent_id = $1
+              AND game_id = $2
+              AND round_id = $3
+              AND side = 'buy'
+            FOR SHARE
+            """,
+            task_input.buyer_intent_id,
+            row["game_id"],
+            row["round_id"],
+        )
+        if (
+            buyer is None
+            or str(buyer["game_participant_id"])
+            != str(row["game_agent_id"])
+            or str(buyer["good_id"]) != task_input.good
+            or str(buyer["status"]) != "open"
+        ):
+            raise PawnhouseRepositoryError(
+                "agent_market_buyer_intent_invalid"
+            )
+
+        request_ids: list[str] = []
+        for sequence, candidate in enumerate(action.requests, start=1):
+            seller = await connection.fetchrow(
+                """
+                SELECT intent_id, game_participant_id, good_id, status
+                FROM arena402.market_intents
+                WHERE intent_id = $1
+                  AND game_id = $2
+                  AND round_id = $3
+                  AND side = 'sell'
+                FOR SHARE
+                """,
+                candidate.target_intent_id,
+                row["game_id"],
+                row["round_id"],
+            )
+            if (
+                seller is None
+                or str(seller["status"]) != "open"
+                or str(seller["good_id"]) != task_input.good
+                or str(seller["game_participant_id"])
+                == str(row["game_agent_id"])
+            ):
+                raise PawnhouseRepositoryError(
+                    "agent_market_seller_intent_invalid"
+                )
+            request_id = f"request:{row['task_id']}:{sequence}"
+            inserted = await connection.fetchrow(
+                """
+                INSERT INTO arena402.market_negotiation_requests (
+                    request_id,
+                    game_id,
+                    round_id,
+                    buyer_intent_id,
+                    seller_intent_id,
+                    buyer_participant_id,
+                    seller_participant_id,
+                    good_id,
+                    source_result_id,
+                    source_action_kind,
+                    opening_price_atomic,
+                    public_message,
+                    created_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8,
+                    $9, 'rfq', $10, $11, $12
+                )
+                ON CONFLICT (request_id) DO UPDATE
+                SET request_id = EXCLUDED.request_id
+                WHERE market_negotiation_requests.source_result_id
+                          = EXCLUDED.source_result_id
+                  AND market_negotiation_requests.seller_intent_id
+                          = EXCLUDED.seller_intent_id
+                  AND market_negotiation_requests.opening_price_atomic
+                          = EXCLUDED.opening_price_atomic
+                  AND market_negotiation_requests.public_message
+                          = EXCLUDED.public_message
+                RETURNING request_id
+                """,
+                request_id,
+                row["game_id"],
+                row["round_id"],
+                task_input.buyer_intent_id,
+                candidate.target_intent_id,
+                row["game_agent_id"],
+                seller["game_participant_id"],
+                task_input.good,
+                row["result_id"],
+                gold(str(candidate.opening_price)),
+                candidate.message,
+                row["authoritative_entered_at"],
+            )
+            if inserted is None:
+                raise PawnhouseRepositoryError(
+                    "agent_market_rfq_idempotency_conflict"
+                )
+            request_ids.append(request_id)
+
+        await self._event(
+            connection,
+            game_id=str(row["game_id"]),
+            round_id=str(row["round_id"]),
+            event_type="market.rfq_sent",
+            source_key=str(row["result_id"]),
+            public_payload={
+                "buyerIntentId": task_input.buyer_intent_id,
+                "requestIds": request_ids,
+                "count": len(request_ids),
+            },
+        )
+        return {
+            "taskId": str(row["task_id"]),
+            "resultId": str(row["result_id"]),
+            "kind": str(row["task_kind"]),
+            "outcome": "candidate",
+            "projected": True,
+            "requestIds": request_ids,
+        }
+
+    async def _project_market_selection_locked(
+        self,
+        connection: Any,
+        *,
+        row: Mapping[str, object],
+        task_input: ArenaMarketSelectInputV1,
+        action: MarketSelectionActionV1,
+    ) -> dict[str, object]:
+        if isinstance(action, RejectAllRequestsActionV1):
+            action_id = f"reject-all:{row['task_id']}"
+            await self._claim_market_result_locked(
+                connection,
+                row=row,
+                action_kind="reject",
+                action_id=action_id,
+            )
+            request_ids = [
+                request.request_id for request in task_input.requests
+            ]
+            await connection.execute(
+                """
+                UPDATE arena402.market_negotiation_requests
+                SET status = 'rejected'
+                WHERE request_id = ANY($1::text[])
+                  AND game_id = $2
+                  AND round_id = $3
+                  AND seller_participant_id = $4
+                  AND status = 'pending'
+                """,
+                request_ids,
+                row["game_id"],
+                row["round_id"],
+                row["game_agent_id"],
+            )
+            await self._event(
+                connection,
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                event_type="market.rfq_rejected",
+                source_key=str(row["result_id"]),
+                public_payload={
+                    "sellerIntentId": task_input.seller_intent_id,
+                    "requestIds": request_ids,
+                    "message": action.message,
+                },
+            )
+            return {
+                "taskId": str(row["task_id"]),
+                "resultId": str(row["result_id"]),
+                "kind": str(row["task_kind"]),
+                "outcome": "candidate",
+                "projected": True,
+                "rejectedRequestIds": request_ids,
+            }
+        if not isinstance(action, EngageRequestActionV1):
+            raise PawnhouseRepositoryError(
+                "agent_market_selection_action_invalid"
+            )
+
+        request = await connection.fetchrow(
+            """
+            SELECT
+                request.*,
+                buyer.limit_price_atomic
+                    AS buyer_limit_price_atomic,
+                seller.limit_price_atomic
+                    AS seller_limit_price_atomic,
+                buyer_balance.cash_atomic AS buyer_cash_atomic,
+                seller_holding.quantity AS seller_inventory
+            FROM arena402.market_negotiation_requests AS request
+            JOIN arena402.market_intents AS buyer
+              ON buyer.intent_id = request.buyer_intent_id
+            JOIN arena402.market_intents AS seller
+              ON seller.intent_id = request.seller_intent_id
+            JOIN arena402.balances AS buyer_balance
+              ON buyer_balance.game_participant_id =
+                 request.buyer_participant_id
+            JOIN arena402.holdings AS seller_holding
+              ON seller_holding.game_participant_id =
+                 request.seller_participant_id
+             AND seller_holding.good_id = request.good_id
+            WHERE request.request_id = $1
+              AND request.game_id = $2
+              AND request.round_id = $3
+              AND buyer.status = 'open'
+              AND seller.status = 'open'
+              AND buyer.expires_at > clock_timestamp()
+              AND seller.expires_at > clock_timestamp()
+            FOR UPDATE OF request
+            """,
+            action.request_id,
+            row["game_id"],
+            row["round_id"],
+        )
+        if (
+            request is None
+            or str(request["seller_participant_id"])
+            != str(row["game_agent_id"])
+        ):
+            raise PawnhouseRepositoryError(
+                "agent_market_request_ownership_invalid"
+            )
+        engagement_id = f"engagement:{action.request_id}"
+        existing = await connection.fetchrow(
+            """
+            SELECT engagement_id, selection_result_id
+            FROM arena402.market_engagements
+            WHERE engagement_id = $1
+            """,
+            engagement_id,
+        )
+        if existing is not None:
+            if str(existing["selection_result_id"]) != str(
+                row["result_id"]
+            ):
+                raise PawnhouseRepositoryError(
+                    "agent_market_engagement_idempotency_conflict"
+                )
+            return {
+                "taskId": str(row["task_id"]),
+                "resultId": str(row["result_id"]),
+                "kind": str(row["task_kind"]),
+                "outcome": "candidate",
+                "projected": True,
+                "engagementId": engagement_id,
+            }
+        if str(request["status"]) != "pending":
+            raise PawnhouseRepositoryError(
+                "agent_market_request_not_pending"
+            )
+        if (
+            int(request["buyer_limit_price_atomic"])
+            < int(request["seller_limit_price_atomic"])
+            or int(request["buyer_cash_atomic"])
+            < int(request["opening_price_atomic"])
+            or int(request["seller_inventory"]) < 1
+        ):
+            raise PawnhouseRepositoryError(
+                "agent_market_engagement_assets_invalid"
+            )
+
+        participants = sorted(
+            (
+                str(request["buyer_participant_id"]),
+                str(request["seller_participant_id"]),
+            )
+        )
+        for participant_id in participants:
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                (
+                    f"agent-market-slot:{row['round_id']}:"
+                    f"{participant_id}"
+                ),
+            )
+        await self._claim_market_result_locked(
+            connection,
+            row=row,
+            action_kind="engage",
+            action_id=engagement_id,
+        )
+        await connection.execute(
+            """
+            INSERT INTO arena402.market_engagements (
+                engagement_id,
+                negotiation_id,
+                request_id,
+                game_id,
+                round_id,
+                buyer_intent_id,
+                seller_intent_id,
+                buyer_participant_id,
+                seller_participant_id,
+                good_id,
+                selection_result_id,
+                selection_action_kind
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, 'engage'
+            )
+            """,
+            engagement_id,
+            f"negotiation:{action.request_id}",
+            action.request_id,
+            row["game_id"],
+            row["round_id"],
+            request["buyer_intent_id"],
+            request["seller_intent_id"],
+            request["buyer_participant_id"],
+            request["seller_participant_id"],
+            request["good_id"],
+            row["result_id"],
+        )
+        for participant_id in participants:
+            reserved = await connection.fetchrow(
+                """
+                INSERT INTO arena402.participant_round_slots (
+                    game_id,
+                    round_id,
+                    game_participant_id,
+                    status,
+                    engagement_id
+                )
+                VALUES ($1, $2, $3, 'reserved', $4)
+                ON CONFLICT (round_id, game_participant_id) DO UPDATE
+                SET status = 'reserved',
+                    engagement_id = EXCLUDED.engagement_id,
+                    version = participant_round_slots.version + 1,
+                    updated_at = clock_timestamp()
+                WHERE participant_round_slots.status = 'available'
+                   OR (
+                       participant_round_slots.status = 'reserved'
+                       AND participant_round_slots.engagement_id
+                               = EXCLUDED.engagement_id
+                   )
+                RETURNING game_participant_id
+                """,
+                row["game_id"],
+                row["round_id"],
+                participant_id,
+                engagement_id,
+            )
+            if reserved is None:
+                raise PawnhouseRepositoryError(
+                    "agent_market_participant_busy"
+                )
+        updated = await connection.fetchrow(
+            """
+            UPDATE arena402.market_negotiation_requests
+            SET status = 'engaged'
+            WHERE request_id = $1
+              AND status = 'pending'
+            RETURNING request_id
+            """,
+            action.request_id,
+        )
+        if updated is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_request_not_pending"
+            )
+        await connection.execute(
+            """
+            UPDATE arena402.market_intents
+            SET status = 'reserved'
+            WHERE intent_id IN ($1, $2)
+              AND status = 'open'
+            """,
+            request["buyer_intent_id"],
+            request["seller_intent_id"],
+        )
+        await self._event(
+            connection,
+            game_id=str(row["game_id"]),
+            round_id=str(row["round_id"]),
+            event_type="market.engagement_created",
+            source_key=str(row["result_id"]),
+            public_payload={
+                "engagementId": engagement_id,
+                "requestId": action.request_id,
+                "buyerParticipantId": str(
+                    request["buyer_participant_id"]
+                ),
+                "sellerParticipantId": str(
+                    request["seller_participant_id"]
+                ),
+                "good": str(request["good_id"]),
+            },
+        )
+        return {
+            "taskId": str(row["task_id"]),
+            "resultId": str(row["result_id"]),
+            "kind": str(row["task_kind"]),
+            "outcome": "candidate",
+            "projected": True,
+            "engagementId": engagement_id,
+        }
 
     async def apply_hosted_decision(
         self,
@@ -3213,6 +4733,12 @@ class PostgresPawnhouseRepository:
                         negotiation.status.value,
                         completed_at,
                     )
+                    await self._sync_agent_market_negotiation_locked(
+                        connection,
+                        negotiation_id=negotiation_id,
+                        terminal_result_id=result_id,
+                        agent_authored=action is not None,
+                    )
                     if negotiation.status in {
                         NegotiationStatus.REJECTED,
                         NegotiationStatus.TIMEOUT,
@@ -3237,6 +4763,31 @@ class PostgresPawnhouseRepository:
                             negotiation.status = (
                                 NegotiationStatus.SETTLEMENT_FAILED
                             )
+                            await connection.execute(
+                                """
+                                UPDATE arena402.market_engagements
+                                SET status = 'settlement_failed',
+                                    completed_at = COALESCE(
+                                        completed_at,
+                                        clock_timestamp()
+                                    )
+                                WHERE negotiation_id = $1
+                                  AND status =
+                                      'accepted_pending_settlement'
+                                """,
+                                negotiation_id,
+                            )
+                        else:
+                            await connection.execute(
+                                """
+                                UPDATE arena402.market_engagements
+                                SET status = 'settling'
+                                WHERE negotiation_id = $1
+                                  AND status =
+                                      'accepted_pending_settlement'
+                                """,
+                                negotiation_id,
+                            )
         return {
             "negotiationId": negotiation_id,
             "status": negotiation.status.value,
@@ -3247,6 +4798,305 @@ class PostgresPawnhouseRepository:
                 else None
             ),
         }
+
+    async def _sync_agent_market_negotiation_locked(
+        self,
+        connection: Any,
+        *,
+        negotiation_id: str,
+        terminal_result_id: str,
+        agent_authored: bool,
+    ) -> None:
+        """Project terminal negotiation provenance onto its Engagement."""
+
+        row = await connection.fetchrow(
+            """
+            SELECT
+                engagement.*,
+                negotiation.status AS negotiation_status,
+                negotiation.accepted_price_atomic
+            FROM arena402.market_engagements AS engagement
+            JOIN arena402.negotiations AS negotiation
+              ON negotiation.negotiation_id =
+                 engagement.negotiation_id
+            WHERE engagement.negotiation_id = $1
+            FOR UPDATE OF engagement
+            """,
+            negotiation_id,
+        )
+        if row is None:
+            return
+        status = str(row["negotiation_status"])
+        if status == "accepted_pending_settlement":
+            proposal = await connection.fetchrow(
+                """
+                SELECT
+                    source_result_id,
+                    turn_sequence,
+                    actor_role
+                FROM arena402.negotiation_messages
+                WHERE negotiation_id = $1
+                  AND action = 'propose'
+                ORDER BY turn_sequence DESC
+                LIMIT 1
+                """,
+                negotiation_id,
+            )
+            acceptance = await connection.fetchrow(
+                """
+                SELECT source_result_id, actor_role
+                FROM arena402.negotiation_messages
+                WHERE negotiation_id = $1
+                  AND source_result_id = $2
+                  AND action = 'accept'
+                """,
+                negotiation_id,
+                terminal_result_id,
+            )
+            if (
+                proposal is None
+                or acceptance is None
+                or row["accepted_price_atomic"] is None
+            ):
+                raise PawnhouseRepositoryError(
+                    "agent_market_deal_provenance_missing"
+                )
+            proposal_action_id = (
+                f"proposal:{row['engagement_id']}:"
+                f"{proposal['turn_sequence']}"
+            )
+            acceptance_action_id = (
+                f"acceptance:{row['engagement_id']}"
+            )
+            await self._claim_market_negotiation_result_locked(
+                connection,
+                result_id=str(proposal["source_result_id"]),
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                participant_id=(
+                    str(row["buyer_participant_id"])
+                    if str(proposal["actor_role"]) == "buyer"
+                    else str(row["seller_participant_id"])
+                ),
+                action_kind="proposal",
+                action_id=proposal_action_id,
+            )
+            await self._claim_market_negotiation_result_locked(
+                connection,
+                result_id=str(acceptance["source_result_id"]),
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                participant_id=(
+                    str(row["buyer_participant_id"])
+                    if str(acceptance["actor_role"]) == "buyer"
+                    else str(row["seller_participant_id"])
+                ),
+                action_kind="acceptance",
+                action_id=acceptance_action_id,
+            )
+            deal_id = f"deal:{row['engagement_id']}"
+            await connection.execute(
+                """
+                INSERT INTO arena402.market_deals (
+                    deal_id,
+                    engagement_id,
+                    request_id,
+                    game_id,
+                    round_id,
+                    buyer_participant_id,
+                    seller_participant_id,
+                    good_id,
+                    quantity,
+                    unit_price_atomic,
+                    latest_proposal_result_id,
+                    latest_proposal_action_kind,
+                    acceptance_result_id,
+                    acceptance_action_kind,
+                    accepted_by_participant_id
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, 1, $9,
+                    $10, 'proposal', $11, 'acceptance', $12
+                )
+                ON CONFLICT (engagement_id) DO NOTHING
+                """,
+                deal_id,
+                row["engagement_id"],
+                row["request_id"],
+                row["game_id"],
+                row["round_id"],
+                row["buyer_participant_id"],
+                row["seller_participant_id"],
+                row["good_id"],
+                row["accepted_price_atomic"],
+                proposal["source_result_id"],
+                acceptance["source_result_id"],
+                (
+                    row["buyer_participant_id"]
+                    if str(acceptance["actor_role"]) == "buyer"
+                    else row["seller_participant_id"]
+                ),
+            )
+            await connection.execute(
+                """
+                UPDATE arena402.market_engagements
+                SET status = 'accepted_pending_settlement',
+                    terminal_source_result_id = $2,
+                    terminal_action_kind = 'acceptance'
+                WHERE negotiation_id = $1
+                  AND status = 'active'
+                """,
+                negotiation_id,
+                acceptance["source_result_id"],
+            )
+            await connection.execute(
+                """
+                UPDATE arena402.participant_round_slots
+                SET status = 'consumed',
+                    version = version + 1,
+                    updated_at = clock_timestamp()
+                WHERE engagement_id = $1
+                  AND status = 'reserved'
+                """,
+                row["engagement_id"],
+            )
+            await self._event(
+                connection,
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                event_type="market.deal_frozen",
+                source_key=f"{deal_id}:frozen",
+                public_payload={
+                    "dealId": deal_id,
+                    "engagementId": str(row["engagement_id"]),
+                    "negotiationId": negotiation_id,
+                    "good": str(row["good_id"]),
+                    "quantity": 1,
+                    "unitPriceAtomic": str(
+                        row["accepted_price_atomic"]
+                    ),
+                },
+            )
+            return
+
+        if status not in {"rejected", "timeout"}:
+            return
+        engagement_status = (
+            "rejected" if status == "rejected" else "timed_out"
+        )
+        terminal_kind = None
+        terminal_result = None
+        if agent_authored and status == "rejected":
+            terminal_kind = "reject"
+            terminal_result = terminal_result_id
+            await self._claim_market_negotiation_result_locked(
+                connection,
+                result_id=terminal_result_id,
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                participant_id=(
+                    str(row["buyer_participant_id"])
+                    if await connection.fetchval(
+                        """
+                        SELECT actor_role = 'buyer'
+                        FROM arena402.negotiation_messages
+                        WHERE source_result_id = $1
+                        """,
+                        terminal_result_id,
+                    )
+                    else str(row["seller_participant_id"])
+                ),
+                action_kind="reject",
+                action_id=f"reject:{row['engagement_id']}",
+            )
+        await connection.execute(
+            """
+            UPDATE arena402.market_engagements
+            SET status = $2,
+                terminal_source_result_id = $3,
+                terminal_action_kind = $4,
+                completed_at = COALESCE(
+                    completed_at,
+                    clock_timestamp()
+                )
+            WHERE negotiation_id = $1
+              AND status = 'active'
+            """,
+            negotiation_id,
+            engagement_status,
+            terminal_result,
+            terminal_kind,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.participant_round_slots
+            SET status = 'available',
+                engagement_id = NULL,
+                version = version + 1,
+                updated_at = clock_timestamp()
+            WHERE engagement_id = $1
+              AND status = 'reserved'
+            """,
+            row["engagement_id"],
+        )
+
+    @staticmethod
+    async def _claim_market_negotiation_result_locked(
+        connection: Any,
+        *,
+        result_id: str,
+        game_id: str,
+        round_id: str,
+        participant_id: str,
+        action_kind: str,
+        action_id: str,
+    ) -> None:
+        claimed = await connection.fetchrow(
+            """
+            INSERT INTO arena402.market_result_applications (
+                result_id,
+                game_id,
+                round_id,
+                game_participant_id,
+                action_kind,
+                action_id,
+                applied_at
+            )
+            SELECT
+                result.result_id,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                result.result_received_at
+            FROM public.arena_agent_task_results AS result
+            WHERE result.result_id = $1
+            ON CONFLICT (result_id) DO UPDATE
+            SET result_id = EXCLUDED.result_id
+            WHERE market_result_applications.game_id =
+                      EXCLUDED.game_id
+              AND market_result_applications.round_id =
+                      EXCLUDED.round_id
+              AND market_result_applications.game_participant_id =
+                      EXCLUDED.game_participant_id
+              AND market_result_applications.action_kind =
+                      EXCLUDED.action_kind
+              AND market_result_applications.action_id =
+                      EXCLUDED.action_id
+            RETURNING result_id
+            """,
+            result_id,
+            game_id,
+            round_id,
+            participant_id,
+            action_kind,
+            action_id,
+        )
+        if claimed is None:
+            raise PawnhouseRepositoryError(
+                "agent_market_negotiation_result_invalid"
+            )
 
     async def hosted_run_status(
         self,
@@ -4613,6 +6463,7 @@ class PostgresPawnhouseRepository:
                 SELECT
                     game.game_id,
                     game.started_at,
+                    game.market_protocol,
                     round.round_id,
                     round.phase AS round_phase,
                     runtime.participant_count,
@@ -4674,6 +6525,7 @@ class PostgresPawnhouseRepository:
                     started_at,
                     CASE
                         WHEN round_phase = 'decide'
+                         AND market_protocol = 'fcfs.v1'
                          AND participant_count > 0
                          AND all_rule
                         THEN 'run_rule'
@@ -4727,7 +6579,7 @@ class PostgresPawnhouseRepository:
         async with pool.acquire() as connection:
             game = await connection.fetchrow(
                 """
-                SELECT phase, current_round
+                SELECT phase, current_round, market_protocol
                 FROM arena402.games
                 WHERE game_id = $1
                 """,
@@ -4807,7 +6659,10 @@ class PostgresPawnhouseRepository:
             runtime_kinds
         ).issubset({"hosted", "connector"})
         if phase == "decide":
-            if set(runtime_kinds) == {"rule"}:
+            if (
+                game["market_protocol"] == "fcfs.v1"
+                and set(runtime_kinds) == {"rule"}
+            ):
                 action = "run_rule"
             elif task_runtime_game:
                 if runtime_run is None:
@@ -4839,6 +6694,7 @@ class PostgresPawnhouseRepository:
             "roundId": str(round_row["round_id"]),
             "roundIndex": int(round_row["round_index"]),
             "roundPhase": phase,
+            "marketProtocol": str(game["market_protocol"]),
             "runtimeKinds": runtime_kinds,
             "activeNegotiations": active_negotiations,
             "pendingSettlements": pending_settlements,

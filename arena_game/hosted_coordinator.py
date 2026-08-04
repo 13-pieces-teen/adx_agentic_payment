@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from arena_agent_contracts import (
@@ -14,6 +14,11 @@ from arena_agent_contracts import (
     ArenaDecideLimitsV1,
     ArenaGoodRuleV1,
     ArenaMarketActivityV1,
+    ArenaMarketDirectoryEntryV1,
+    ArenaMarketIntentInputV1,
+    ArenaMarketRfqInputV1,
+    ArenaMarketSelectInputV1,
+    ArenaInboundRfqV1,
     ArenaNegotiateInputV1,
     ArenaNegotiationMessageV1,
     ArenaPublicCounterpartyV1,
@@ -126,6 +131,9 @@ class PawnhouseAgentRuntimeCoordinator:
                 game_id=str(claimed["game_id"]),
                 round_id=str(claimed["round_id"]),
                 lease_epoch=lease_epoch,
+                market_protocol=str(
+                    claimed.get("market_protocol") or "fcfs.v1"
+                ),
             )
         except asyncio.CancelledError:
             raise
@@ -158,6 +166,7 @@ class PawnhouseAgentRuntimeCoordinator:
         game_id: str,
         round_id: str,
         lease_epoch: int,
+        market_protocol: str,
     ) -> None:
         process = asyncio.create_task(
             self._process(
@@ -165,6 +174,7 @@ class PawnhouseAgentRuntimeCoordinator:
                 game_id=game_id,
                 round_id=round_id,
                 lease_epoch=lease_epoch,
+                market_protocol=market_protocol,
             ),
             name=f"arena-runtime-run:{run_id}",
         )
@@ -211,7 +221,20 @@ class PawnhouseAgentRuntimeCoordinator:
         game_id: str,
         round_id: str,
         lease_epoch: int,
+        market_protocol: str,
     ) -> None:
+        if market_protocol == "agent_a2a.v1":
+            await self._process_agent_market(
+                run_id=run_id,
+                game_id=game_id,
+                round_id=round_id,
+                lease_epoch=lease_epoch,
+            )
+            return
+        if market_protocol != "fcfs.v1":
+            raise PawnhouseRepositoryError(
+                "runtime_run_market_protocol_invalid"
+            )
         await self._pawnhouse.mark_hosted_run_running(
             runtime_run_id=run_id,
             worker_id=self._worker_id,
@@ -295,6 +318,172 @@ class PawnhouseAgentRuntimeCoordinator:
                 for negotiation_id in negotiation_ids
             )
         )
+
+    async def _process_agent_market(
+        self,
+        *,
+        run_id: str,
+        game_id: str,
+        round_id: str,
+        lease_epoch: int,
+    ) -> None:
+        """Resume the durable intent -> RFQ -> select -> negotiate chain."""
+
+        while True:
+            phase = await self._pawnhouse.agent_market_round_phase(
+                game_id=game_id,
+                round_id=round_id,
+            )
+            if phase == "decide":
+                await self._pawnhouse.mark_hosted_run_running(
+                    runtime_run_id=run_id,
+                    worker_id=self._worker_id,
+                    lease_epoch=lease_epoch,
+                    stage="decide",
+                    lease_seconds=self._lease_seconds,
+                )
+                contexts = await self._pawnhouse.hosted_decide_contexts(
+                    game_id=game_id
+                )
+                tasks = [
+                    await self._factory.create_market_intent_task(
+                        game_agent_id=str(context["participant_id"]),
+                        participant_view=self._market_intent_view(
+                            context
+                        ),
+                        config_snapshot=dict(
+                            context["config_snapshot"]
+                        ),
+                    )
+                    for context in contexts
+                ]
+                await self._wait_apply_and_project_market_tasks(
+                    tasks,
+                    run_id=run_id,
+                    lease_epoch=lease_epoch,
+                )
+                await self._pawnhouse.advance_agent_market_stage(
+                    game_id=game_id,
+                    round_id=round_id,
+                    expected_phase="decide",
+                    next_phase="match",
+                    market_stage="rfq",
+                )
+                continue
+            if phase == "match":
+                await self._pawnhouse.mark_hosted_run_running(
+                    runtime_run_id=run_id,
+                    worker_id=self._worker_id,
+                    lease_epoch=lease_epoch,
+                    stage="match",
+                    lease_seconds=self._lease_seconds,
+                )
+                contexts = (
+                    await self._pawnhouse.agent_market_rfq_contexts(
+                        game_id=game_id,
+                        round_id=round_id,
+                    )
+                )
+                tasks = [
+                    await self._factory.create_market_rfq_task(
+                        game_agent_id=str(context["participant_id"]),
+                        participant_view=self._market_rfq_view(context),
+                        config_snapshot=dict(
+                            context["config_snapshot"]
+                        ),
+                    )
+                    for context in contexts
+                ]
+                await self._wait_apply_and_project_market_tasks(
+                    tasks,
+                    run_id=run_id,
+                    lease_epoch=lease_epoch,
+                )
+                await self._pawnhouse.advance_agent_market_stage(
+                    game_id=game_id,
+                    round_id=round_id,
+                    expected_phase="match",
+                    next_phase="negotiate",
+                    market_stage="select",
+                )
+                continue
+            if phase == "negotiate":
+                await self._pawnhouse.mark_hosted_run_running(
+                    runtime_run_id=run_id,
+                    worker_id=self._worker_id,
+                    lease_epoch=lease_epoch,
+                    stage="negotiate",
+                    lease_seconds=self._lease_seconds,
+                )
+                contexts = (
+                    await self._pawnhouse.agent_market_select_contexts(
+                        game_id=game_id,
+                        round_id=round_id,
+                    )
+                )
+                tasks = [
+                    await self._factory.create_market_select_task(
+                        game_agent_id=str(context["participant_id"]),
+                        participant_view=self._market_select_view(
+                            context
+                        ),
+                        config_snapshot=dict(
+                            context["config_snapshot"]
+                        ),
+                    )
+                    for context in contexts
+                ]
+                await self._wait_apply_and_project_market_tasks(
+                    tasks,
+                    run_id=run_id,
+                    lease_epoch=lease_epoch,
+                )
+                await self._pawnhouse.materialize_agent_market_engagements(
+                    game_id=game_id,
+                    round_id=round_id,
+                )
+                negotiation_ids = (
+                    await self._pawnhouse.active_hosted_negotiation_ids(
+                        game_id=game_id,
+                        round_id=round_id,
+                    )
+                )
+                await asyncio.gather(
+                    *(
+                        self._run_negotiation(
+                            negotiation_id,
+                            run_id=run_id,
+                            lease_epoch=lease_epoch,
+                        )
+                        for negotiation_id in negotiation_ids
+                    )
+                )
+                return
+            raise PawnhouseRepositoryError(
+                "agent_market_round_phase_invalid"
+            )
+
+    async def _wait_apply_and_project_market_tasks(
+        self,
+        tasks: list[Any],
+        *,
+        run_id: str,
+        lease_epoch: int,
+    ) -> None:
+        async for _, result in self._iter_terminal_results(tasks):
+            await self._pawnhouse.renew_hosted_run_lease(
+                runtime_run_id=run_id,
+                worker_id=self._worker_id,
+                lease_epoch=lease_epoch,
+                lease_seconds=self._lease_seconds,
+            )
+            await self._arena_core.apply_result(
+                result_id=result.result.result_id,
+                server_clock=lambda: datetime.now(timezone.utc),
+            )
+            await self._pawnhouse.project_agent_market_result(
+                result_id=result.result.result_id,
+            )
 
     async def _run_negotiation(
         self,
@@ -496,6 +685,106 @@ class PawnhouseAgentRuntimeCoordinator:
                 )
                 for item in list(context.get("market_activity", []))
             ],
+            deadline_at=context["deadline_at"],
+        )
+
+    @classmethod
+    def _market_intent_view(
+        cls,
+        context: dict[str, object],
+    ) -> ArenaMarketIntentInputV1:
+        payload = cls._decide_view(context).model_dump(
+            mode="python",
+            by_alias=False,
+        )
+        payload["phase"] = "market_intent"
+        payload["market_protocol"] = "agent_a2a.v1"
+        payload["market_expires_at"] = (
+            context["deadline_at"]
+            + timedelta(
+                milliseconds=2 * int(context["action_timeout_ms"])
+            )
+        )
+        return ArenaMarketIntentInputV1.model_validate(payload)
+
+    @staticmethod
+    def _market_rfq_view(
+        context: dict[str, object],
+    ) -> ArenaMarketRfqInputV1:
+        return ArenaMarketRfqInputV1(
+            phase="market_rfq",
+            market_protocol="agent_a2a.v1",
+            game_id=str(context["game_id"]),
+            round_id=str(context["round_id"]),
+            round_index=int(context["round_index"]),
+            buyer_intent_id=str(context["buyer_intent_id"]),
+            good=str(context["good"]),
+            quantity=int(context["quantity"]),
+            public_price=_gold_decimal(
+                int(context["public_price_atomic"])
+            ),
+            limit_price=_gold_decimal(
+                int(context["limit_price_atomic"])
+            ),
+            cash=_gold_decimal(int(context["cash_atomic"])),
+            directory=[
+                ArenaMarketDirectoryEntryV1(
+                    intent_id=str(entry["intent_id"]),
+                    agent_id=str(entry["agent_id"]),
+                    display_name=str(entry["display_name"]),
+                    good=str(entry["good"]),
+                    quantity=int(entry["quantity"]),
+                    public_price=_gold_decimal(
+                        int(entry["public_price_atomic"])
+                    ),
+                    expires_at=entry["expires_at"],
+                )
+                for entry in list(context["directory"])
+            ],
+            max_outbound_rfq=3,
+            events=_public_events(list(context["events"])),
+            deadline_at=context["deadline_at"],
+        )
+
+    @staticmethod
+    def _market_select_view(
+        context: dict[str, object],
+    ) -> ArenaMarketSelectInputV1:
+        return ArenaMarketSelectInputV1(
+            phase="market_select",
+            market_protocol="agent_a2a.v1",
+            game_id=str(context["game_id"]),
+            round_id=str(context["round_id"]),
+            round_index=int(context["round_index"]),
+            seller_intent_id=str(context["seller_intent_id"]),
+            good=str(context["good"]),
+            quantity=int(context["quantity"]),
+            public_price=_gold_decimal(
+                int(context["public_price_atomic"])
+            ),
+            limit_price=_gold_decimal(
+                int(context["limit_price_atomic"])
+            ),
+            inventory_available=int(
+                context["inventory_available"]
+            ),
+            requests=[
+                ArenaInboundRfqV1(
+                    request_id=str(request["request_id"]),
+                    buyer_agent_id=str(request["buyer_agent_id"]),
+                    buyer_display_name=str(
+                        request["buyer_display_name"]
+                    ),
+                    opening_price=_gold_decimal(
+                        int(request["opening_price_atomic"])
+                    ),
+                    message=str(request["message"]),
+                    received_at=request["received_at"],
+                )
+                for request in list(context["requests"])
+            ],
+            max_engagements=1,
+            events=_public_events(list(context["events"])),
             deadline_at=context["deadline_at"],
         )
 

@@ -129,6 +129,21 @@ class BuyAction(_StrictWireModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    public_price: PositiveFixedDecimal | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    message: PublicMessage | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("message")
+    @classmethod
+    def reject_blank_message(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("message must contain visible text")
+        return value
 
 
 class SellAction(_StrictWireModel):
@@ -142,6 +157,21 @@ class SellAction(_StrictWireModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    public_price: PositiveFixedDecimal | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    message: PublicMessage | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("message")
+    @classmethod
+    def reject_blank_message(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("message must contain visible text")
+        return value
 
 
 class PassAction(_StrictWireModel):

@@ -164,7 +164,7 @@ def test_decision_prompt_prevents_event_double_counting_and_herding() -> None:
     assert "Pass only when no legal action satisfies" in built.system_instructions
 
 
-def test_negotiation_prompt_defines_numeric_limit_and_convergence_rules() -> None:
+def test_negotiation_prompt_defines_bounds_without_choosing_strategy() -> None:
     built = PromptBuilder().build(
         _task(negotiate=True),
         strategy_instructions="Negotiate for positive value.",
@@ -177,11 +177,17 @@ def test_negotiation_prompt_defines_numeric_limit_and_convergence_rules() -> Non
     assert "positive opening proposal at or below limitPrice" in (
         built.system_instructions
     )
-    assert "open at 95% of limitPrice" in built.system_instructions
-    assert "accept immediately" in built.system_instructions
-    assert "counter exactly at your own limitPrice" in built.system_instructions
-    assert "never widen the gap" in built.system_instructions
-    assert "remainingTurns is 1 or 0" in built.system_instructions
+    assert "You may reject any quote" in built.system_instructions
+    assert "counter with any price inside your boundary" in (
+        built.system_instructions
+    )
+    assert "final turn" in built.system_instructions
+    assert "open at 95% of limitPrice" not in built.system_instructions
+    assert "accept immediately" not in built.system_instructions
+    assert "counter exactly at your own limitPrice" not in (
+        built.system_instructions
+    )
+    assert "never widen the gap" not in built.system_instructions
 
 
 @pytest.mark.parametrize(

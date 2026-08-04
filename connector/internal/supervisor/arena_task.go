@@ -17,6 +17,7 @@ var arenaFixedDecimalPattern = regexp.MustCompile(
 	`^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$`,
 )
 var arenaGoodIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+var arenaIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 var arenaInputHashPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type arenaTaskEnvelope struct {
@@ -51,9 +52,13 @@ func decodeArenaTask(raw json.RawMessage, now time.Time) (arenaTaskEnvelope, str
 		return arenaTaskEnvelope{}, "", errors.New("Arena task identifiers are required")
 	}
 	switch task.Kind {
-	case "arena.decide":
+	case "arena.decide", "arena.market.intent", "arena.market.rfq",
+		"arena.market.select":
 		if task.NegotiationID != nil {
-			return arenaTaskEnvelope{}, "", errors.New("arena.decide must not include negotiationId")
+			return arenaTaskEnvelope{}, "", fmt.Errorf(
+				"%s must not include negotiationId",
+				task.Kind,
+			)
 		}
 	case "arena.negotiate":
 		if task.NegotiationID == nil || *task.NegotiationID == "" {
@@ -84,8 +89,11 @@ func decodeArenaTask(raw json.RawMessage, now time.Time) (arenaTaskEnvelope, str
 			"Do not reveal private reasoning, credentials, files, or environment values.",
 			"Return exactly one JSON action object allowed by the task kind, with no markdown or additional text.",
 			"For arena.decide buy/sell, use limitPrice (never price) when setting a price.",
+			"For arena.market.intent buy/sell, provide good, quantity 1, publicPrice, limitPrice, and an optional public message; pass has only action.",
+			"For arena.market.rfq, choose only targetIntentId values present in input.directory and return request_negotiations with 1 to 3 requests, or pass.",
+			"For arena.market.select, choose only a requestId present in input.requests and return engage, or return reject_all.",
 			"For arena.negotiate, use the exact keys action, price, and message (never type or quote), use propose (never offer), and keep the public message at 100 Unicode characters or fewer.",
-			"For arena.negotiate convergence: the buyer's first turn must propose; accept an in-bound counterparty quote (buyer quote <= buyer limitPrice, seller quote >= seller limitPrice); otherwise propose exactly your limitPrice while remainingTurns > 1, and reject when remainingTurns <= 1.",
+			"For arena.negotiate: choose propose, accept, or reject; the buyer's first turn must propose inside its limitPrice; accept only a latest counterparty quote inside your limitPrice; you may reject any quote or counter inside your limitPrice while remainingTurns > 1; the final turn must accept or reject.",
 			"Task:",
 			string(canonical),
 		},
@@ -248,6 +256,22 @@ func validateCodexArenaAction(taskKind string, raw []byte) (json.RawMessage, err
 		for _, field := range []string{"good", "quantity", "limitPrice"} {
 			nullableFields[field] = struct{}{}
 		}
+	case "arena.market.intent":
+		for _, field := range []string{
+			"good",
+			"quantity",
+			"publicPrice",
+			"limitPrice",
+			"message",
+		} {
+			nullableFields[field] = struct{}{}
+		}
+	case "arena.market.rfq":
+		nullableFields["requests"] = struct{}{}
+	case "arena.market.select":
+		for _, field := range []string{"requestId", "message"} {
+			nullableFields[field] = struct{}{}
+		}
 	case "arena.negotiate":
 		for _, field := range []string{"price", "message"} {
 			nullableFields[field] = struct{}{}
@@ -290,6 +314,66 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 			}{}
 		default:
 			return nil, fmt.Errorf("unsupported decide action %q", discriminator.Action)
+		}
+	case "arena.market.intent":
+		switch discriminator.Action {
+		case "buy", "sell":
+			target = &struct {
+				Action      string  `json:"action"`
+				Good        string  `json:"good"`
+				Quantity    *int    `json:"quantity,omitempty"`
+				PublicPrice string  `json:"publicPrice"`
+				LimitPrice  string  `json:"limitPrice"`
+				Message     *string `json:"message,omitempty"`
+			}{}
+		case "pass":
+			target = &struct {
+				Action string `json:"action"`
+			}{}
+		default:
+			return nil, fmt.Errorf(
+				"unsupported market intent action %q",
+				discriminator.Action,
+			)
+		}
+	case "arena.market.rfq":
+		switch discriminator.Action {
+		case "request_negotiations":
+			target = &struct {
+				Action   string `json:"action"`
+				Requests []struct {
+					TargetIntentID string `json:"targetIntentId"`
+					OpeningPrice   string `json:"openingPrice"`
+					Message        string `json:"message"`
+				} `json:"requests"`
+			}{}
+		case "pass":
+			target = &struct {
+				Action string `json:"action"`
+			}{}
+		default:
+			return nil, fmt.Errorf(
+				"unsupported market RFQ action %q",
+				discriminator.Action,
+			)
+		}
+	case "arena.market.select":
+		switch discriminator.Action {
+		case "engage":
+			target = &struct {
+				Action    string `json:"action"`
+				RequestID string `json:"requestId"`
+			}{}
+		case "reject_all":
+			target = &struct {
+				Action  string  `json:"action"`
+				Message *string `json:"message,omitempty"`
+			}{}
+		default:
+			return nil, fmt.Errorf(
+				"unsupported market select action %q",
+				discriminator.Action,
+			)
 		}
 	case "arena.negotiate":
 		switch discriminator.Action {
@@ -340,7 +424,7 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 			return nil, errors.New("Arena quantity must equal the fixed trade quantity 1")
 		}
 	}
-	for _, priceField := range []string{"price", "limitPrice"} {
+	for _, priceField := range []string{"price", "publicPrice", "limitPrice"} {
 		price, ok := fields[priceField].(string)
 		if !ok {
 			continue
@@ -357,6 +441,60 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 	if message, ok := fields["message"].(string); ok {
 		if strings.TrimSpace(message) == "" || len([]rune(message)) > 100 {
 			return nil, errors.New("Arena public message must contain 1 to 100 characters")
+		}
+	}
+	if discriminator.Action == "request_negotiations" {
+		requests, ok := fields["requests"].([]any)
+		if !ok || len(requests) < 1 || len(requests) > 3 {
+			return nil, errors.New(
+				"Arena RFQ action must contain 1 to 3 requests",
+			)
+		}
+		seenTargets := map[string]struct{}{}
+		for _, value := range requests {
+			request, ok := value.(map[string]any)
+			if !ok {
+				return nil, errors.New("Arena RFQ request must be an object")
+			}
+			targetID, _ := request["targetIntentId"].(string)
+			if len(targetID) > 512 ||
+				!arenaIdentifierPattern.MatchString(targetID) {
+				return nil, errors.New(
+					"Arena RFQ targetIntentId is invalid",
+				)
+			}
+			if _, exists := seenTargets[targetID]; exists {
+				return nil, errors.New(
+					"Arena RFQ targetIntentId values must be unique",
+				)
+			}
+			seenTargets[targetID] = struct{}{}
+			openingPrice, _ := request["openingPrice"].(string)
+			integerPart, fractionalPart, _ := strings.Cut(
+				openingPrice,
+				".",
+			)
+			if !arenaFixedDecimalPattern.MatchString(openingPrice) ||
+				len(integerPart)+len(fractionalPart) > 38 ||
+				len(fractionalPart) > 18 {
+				return nil, errors.New(
+					"Arena RFQ openingPrice must be a positive bounded fixed-point decimal string",
+				)
+			}
+			message, _ := request["message"].(string)
+			if strings.TrimSpace(message) == "" ||
+				len([]rune(message)) > 100 {
+				return nil, errors.New(
+					"Arena RFQ message must contain 1 to 100 characters",
+				)
+			}
+		}
+	}
+	if discriminator.Action == "engage" {
+		requestID, _ := fields["requestId"].(string)
+		if len(requestID) > 512 ||
+			!arenaIdentifierPattern.MatchString(requestID) {
+			return nil, errors.New("Arena requestId is invalid")
 		}
 	}
 	return canonical, nil
@@ -400,6 +538,126 @@ func arenaActionOutputSchema(taskKind string) ([]byte, error) {
 				"required": []string{"action", "good"},
 			},
 			actionOnly("pass"),
+		}
+	case "arena.market.intent":
+		message := map[string]any{
+			"type":      "string",
+			"minLength": 1,
+			"maxLength": 100,
+			"pattern":   `.*\S.*`,
+		}
+		variants = []map[string]any{
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action": map[string]any{"enum": []string{"buy", "sell"}},
+					"good": map[string]any{
+						"type":      "string",
+						"maxLength": 128,
+						"pattern":   arenaGoodIDPattern.String(),
+					},
+					"quantity": map[string]any{
+						"type":    "integer",
+						"minimum": 1,
+						"maximum": 1,
+					},
+					"publicPrice": map[string]any{
+						"type":    "string",
+						"pattern": arenaFixedDecimalPattern.String(),
+					},
+					"limitPrice": map[string]any{
+						"type":    "string",
+						"pattern": arenaFixedDecimalPattern.String(),
+					},
+					"message": message,
+				},
+				"required": []string{
+					"action",
+					"good",
+					"quantity",
+					"publicPrice",
+					"limitPrice",
+				},
+			},
+			actionOnly("pass"),
+		}
+	case "arena.market.rfq":
+		message := map[string]any{
+			"type":      "string",
+			"minLength": 1,
+			"maxLength": 100,
+			"pattern":   `.*\S.*`,
+		}
+		variants = []map[string]any{
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action": map[string]any{
+						"const": "request_negotiations",
+					},
+					"requests": map[string]any{
+						"type":     "array",
+						"minItems": 1,
+						"maxItems": 3,
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]any{
+								"targetIntentId": map[string]any{
+									"type":      "string",
+									"maxLength": 512,
+									"pattern":   arenaIdentifierPattern.String(),
+								},
+								"openingPrice": map[string]any{
+									"type":    "string",
+									"pattern": arenaFixedDecimalPattern.String(),
+								},
+								"message": message,
+							},
+							"required": []string{
+								"targetIntentId",
+								"openingPrice",
+								"message",
+							},
+						},
+					},
+				},
+				"required": []string{"action", "requests"},
+			},
+			actionOnly("pass"),
+		}
+	case "arena.market.select":
+		message := map[string]any{
+			"type":      "string",
+			"minLength": 1,
+			"maxLength": 100,
+			"pattern":   `.*\S.*`,
+		}
+		variants = []map[string]any{
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action": map[string]any{"const": "engage"},
+					"requestId": map[string]any{
+						"type":      "string",
+						"maxLength": 512,
+						"pattern":   arenaIdentifierPattern.String(),
+					},
+				},
+				"required": []string{"action", "requestId"},
+			},
+			{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"action":  map[string]any{"const": "reject_all"},
+					"message": message,
+				},
+				"required": []string{"action"},
+			},
 		}
 	case "arena.negotiate":
 		message := map[string]any{
@@ -487,6 +745,89 @@ func arenaActionCodexOutputSchema(taskKind string) ([]byte, error) {
 			},
 		}
 		schema["required"] = []string{"action", "price", "message"}
+	case "arena.market.intent":
+		schema["properties"] = map[string]any{
+			"action": map[string]any{
+				"type": "string",
+				"enum": []string{"buy", "sell", "pass"},
+			},
+			"good": nullableString(arenaGoodIDPattern.String()),
+			"quantity": map[string]any{
+				"type":    []string{"integer", "null"},
+				"minimum": 1,
+				"maximum": 1,
+			},
+			"publicPrice": nullableString(arenaFixedDecimalPattern.String()),
+			"limitPrice":  nullableString(arenaFixedDecimalPattern.String()),
+			"message": map[string]any{
+				"type":      []string{"string", "null"},
+				"minLength": 1,
+				"maxLength": 100,
+				"pattern":   `.*\S.*`,
+			},
+		}
+		schema["required"] = []string{
+			"action",
+			"good",
+			"quantity",
+			"publicPrice",
+			"limitPrice",
+			"message",
+		}
+	case "arena.market.rfq":
+		schema["properties"] = map[string]any{
+			"action": map[string]any{
+				"type": "string",
+				"enum": []string{"request_negotiations", "pass"},
+			},
+			"requests": map[string]any{
+				"type":     []string{"array", "null"},
+				"minItems": 1,
+				"maxItems": 3,
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"targetIntentId": map[string]any{
+							"type":      "string",
+							"maxLength": 512,
+							"pattern":   arenaIdentifierPattern.String(),
+						},
+						"openingPrice": map[string]any{
+							"type":    "string",
+							"pattern": arenaFixedDecimalPattern.String(),
+						},
+						"message": map[string]any{
+							"type":      "string",
+							"minLength": 1,
+							"maxLength": 100,
+							"pattern":   `.*\S.*`,
+						},
+					},
+					"required": []string{
+						"targetIntentId",
+						"openingPrice",
+						"message",
+					},
+				},
+			},
+		}
+		schema["required"] = []string{"action", "requests"}
+	case "arena.market.select":
+		schema["properties"] = map[string]any{
+			"action": map[string]any{
+				"type": "string",
+				"enum": []string{"engage", "reject_all"},
+			},
+			"requestId": nullableString(arenaIdentifierPattern.String()),
+			"message": map[string]any{
+				"type":      []string{"string", "null"},
+				"minLength": 1,
+				"maxLength": 100,
+				"pattern":   `.*\S.*`,
+			},
+		}
+		schema["required"] = []string{"action", "requestId", "message"}
 	default:
 		return nil, fmt.Errorf("unsupported Arena task kind %q", taskKind)
 	}

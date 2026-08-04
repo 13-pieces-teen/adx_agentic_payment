@@ -7,7 +7,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from arena_agent_contracts import AgentTaskResultV1, ArenaAgentTaskV1
+from arena_agent_contracts import (
+    AgentTaskResultV1,
+    ArenaAgentTaskV1,
+    ArenaTaskKindV1,
+)
 
 
 class TaskStatus(str, Enum):
@@ -104,7 +108,13 @@ class ResultSubmissionReceipt:
 @dataclass(frozen=True, slots=True)
 class ArenaApplication:
     accepted: bool
-    outcome: Literal["candidate", "default_pass", "negotiation_timeout", "cancelled"]
+    outcome: Literal[
+        "candidate",
+        "default_pass",
+        "negotiation_timeout",
+        "market_timeout",
+        "cancelled",
+    ]
     action: dict[str, Any] | None = None
     rejection_reason: str | None = None
 
@@ -113,7 +123,7 @@ class ArenaApplication:
 class AppliedArenaAction:
     task_id: str
     result_id: str
-    kind: Literal["arena.decide", "arena.negotiate"]
+    kind: ArenaTaskKindV1
     outcome: str
     action: dict[str, Any] | None
     entered_at: datetime

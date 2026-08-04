@@ -600,14 +600,54 @@ create game
       Provider key 的情况下以 `market-v4` 刷新并重新验证官方配置。
 - [x] 历史 Game 公共投影返回冻结优先的 `displayName + agentId`，独立前端结果页
       以 Agent 名称为主、短 ID 为辅，不再把 UUID-like `agentId` 当作名称。
-- [x] FCFS 改为价格兼容订单内配对；Hosted Prompt v5 明确事件不得重复计价、
-      全货物比较、保留价语义和确定性协商收敛规则，越过自身限价的结构化动作只
-      允许一次有界修正 Attempt，Arena 的独立限价、余额与库存校验保持不变。
+- [x] FCFS 改为价格兼容订单内配对；Hosted Prompt 明确事件不得重复计价、
+      全货物比较和保留价语义，越过自身限价的结构化动作只允许一次有界修正
+      Attempt。`059` 移除了 Arena 强迫界内报价必须接受、界外报价必须按极限价
+      反价的策略性规则；Arena 只保留顺序、末轮闭合、限价、余额和库存校验。
 - [x] 产品 Current Game 默认从五回合调整为八回合，从十张版本化事件牌组中按
       Game seed 无重复抽取八张；固定五回合 Demo 和 1–10 回合配置能力保持不变。
 
 ### Phase 9：Post-MVP
 
+- [ ] 按
+      [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)
+      将中心 `fcfs.v1` 迁移为版本化 `agent_a2a.v1`：Agent 自主发布 Intent、
+      发现市场、发送 RFQ、选择请求和协商；Arena 只负责 Gateway、校验、并发占位、
+      Deal 冻结与 Settlement handoff。
+- [x] Phase A foundation：已加入严格的 Intent/RFQ/Engage wire contracts、
+      无策略协议状态机、`055_arena_agent_driven_a2a_market.sql` 持久化约束和
+      不变量测试；它只证明协议、所有权、跨动作 Result 幂等、私有限价与
+      Participant round-slot，不得描述为真实 Agent 自主撮合。
+- [x] Phase A Runtime integration：`056_arena_agent_driven_runtime_tasks.sql`
+      已使新任务类型共用 PostgreSQL AgentTask Repository、Result Consumer 和
+      Deadline Finalizer；旧 `arena.decide/negotiate` 仍委托冻结的
+      `fcfs.v1` apply policy。
+- [x] Phase A Market projection：生产 Worker 会重扫尚无 receipt 的 applied
+      market Result，并原子、幂等地投影 Intent、单 Result 多目标 RFQ 和带双方
+      Participant round-slot 的 Engagement；公开事件不含私有限价。
+- [x] Phase A Round integration：`057` 以 Game 冻结
+      `market_protocol=agent_a2a.v1`，编排 intent → RFQ → select →
+      negotiate；规则状态机不能误入该路径，Current Game 继续使用 `fcfs.v1`。
+- [x] Phase B substrate：已加入 `arena.market.intent/rfq/select`、Hosted
+      Prompt/Driver 结构化输出和 Local Connector 通用任务投递；Fake Provider
+      测试只证明 transport/schema/Result Sink，不是真实 Agent 证据。
+- [ ] Phase B E2E：本机真实 Claude Code + Codex 已完成
+      `agent_a2a.v1` Intent/Discovery 局，但买方上限 `3.600000` 低于卖方下限
+      `4.300000`，因此按协议无 Engagement；另一次角色互换验证了 180 秒 deadline
+      的确定性 pass。第三次局中限价区间已经相交，但 Claude RFQ 在约 291 秒后
+      返回 `runtime_failed`；保留的 Runtime Event 显示 Claude Code 因
+      `UNKNOWN_CERTIFICATE_VERIFICATION_ERROR` 无法连接其 API，并在客户端内部
+      重试 10 次。该失败属于本机 Claude Code/API 连接环境，不作为 Arena 或
+      Connector 机制 Bug；Arena 正确收敛为 `market_timeout`。待外部连接恢复后
+      重跑 RFQ + Engage + negotiation + Deal，并补 Hosted/Connector mixed 证据。
+- [x] Phase C payment-disabled foundation：只有 buyer RFQ Result + seller
+      Engage Result 才能物化兼容 Pairing/Negotiation；接受后冻结包含 proposal /
+      acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 已完成
+      一笔 Deal、零 SettlementIntent、零资产移动；真实 Agent Deal 与
+      payment-enabled Injective testnet 仍分别待验收。
+- [ ] Phase D 实现标准 Native A2A Endpoint Adapter，并完成
+      Hosted/Connector/Native A2A 混合局；内部 WSS 或 Fake 状态机不得称为标准
+      Native A2A。
 - 100 Agent 单局与 4 Facilitator shard 的生产配置基础已落地；容量、故障恢复和
   live testnet 仍按 [`arena-scale-out-design.md`](arena-scale-out-design.md)
   分阶段验收。300 active Agent、多局并发仍是 Post-MVP；

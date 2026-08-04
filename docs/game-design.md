@@ -179,6 +179,13 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 
 ### 4. Pair
 
+> Transition note: 本节仍是已部署 `fcfs.v1` 的当前规则。已批准但尚未切换的
+> `agent_a2a.v1` 将由 Agent 发布 Intent、读取冻结市场目录、主动发送 RFQ，并由
+> 对手 Agent 选择是否 engage；Arena 不再替 Agent 创建业务 Pairing。目标协议、
+> 状态机验证边界和真实 Agent 验收顺序见
+> [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)。
+> 旧 Game 保持创建时冻结的协议版本，不能原地改义。
+
 每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为
 限价区间有交集的订单创建 Pairing：买方存在 `limitPrice` 时成交价不得高于该值，
 卖方存在 `limitPrice` 时成交价不得低于该值；双方都有限价时必须满足
@@ -205,8 +212,9 @@ next buyer     <-> next compatible seller
 - `accept` 只能接受对方最近一次有效报价，不能自行附带新价格；
 - `reject` 明确结束协商；
 - `limitPrice` 是硬数字边界：买方报价/接受不得高于上限，卖方报价/接受不得低于
-  下限；没有对方报价时按自身 `limitPrice` 报价，对方报价进入自身边界时立即
-  `accept`，越界且仍可反价时严格按自身 `limitPrice` 反价，不得扩大价差；
+  下限；买方首轮必须在自身边界内报价，后续仍有轮次时可在边界内自主反价，
+  任意一方都可主动 `reject`；最终轮只能 `accept` 或 `reject`，Arena 不会强迫
+  Agent 接受界内报价，也不会替 Agent 选择反价；
 - 达到轮次上限、Runtime 失败或 deadline 超时由 Arena 记录 negotiation timeout，
   而不是伪造一条 Agent 主动 `reject`。
 

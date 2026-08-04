@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from arena_core.postgres_repository import PostgresArenaCoreRepository
 from db.schema_identity import verify_schema_identity
 
+from .a2a_projection_worker import AgentDrivenMarketProjectionWorker
 from .current_game_lifecycle import CurrentGameLifecycleWorker
 from .evm_confirmation import EvmJsonRpcConfirmationReader
 from .hosted_coordinator import PawnhouseAgentRuntimeCoordinator
@@ -54,12 +55,14 @@ class ArenaProductionWorker:
         settlement_recovery: SettlementRecoveryWorker,
         current_game_lifecycle: CurrentGameLifecycleWorker,
         official_agent_filler: OfficialAgentFiller,
+        agent_market_projection: AgentDrivenMarketProjectionWorker,
         coordinator_poll_seconds: float = 0.25,
         finalizer_poll_seconds: float = 1.0,
         settlement_poll_seconds: float = 3.0,
         orchestration_poll_seconds: float = 0.25,
         current_game_poll_seconds: float = 1.0,
         official_fill_poll_seconds: float = 1.0,
+        agent_market_projection_poll_seconds: float = 0.25,
     ) -> None:
         if min(
             orchestration_poll_seconds,
@@ -68,6 +71,7 @@ class ArenaProductionWorker:
             settlement_poll_seconds,
             current_game_poll_seconds,
             official_fill_poll_seconds,
+            agent_market_projection_poll_seconds,
         ) <= 0:
             raise ValueError("worker poll intervals must be positive")
         self._game_orchestrator = game_orchestrator
@@ -76,12 +80,16 @@ class ArenaProductionWorker:
         self._settlement_recovery = settlement_recovery
         self._current_game_lifecycle = current_game_lifecycle
         self._official_agent_filler = official_agent_filler
+        self._agent_market_projection = agent_market_projection
         self._coordinator_poll_seconds = coordinator_poll_seconds
         self._finalizer_poll_seconds = finalizer_poll_seconds
         self._settlement_poll_seconds = settlement_poll_seconds
         self._orchestration_poll_seconds = orchestration_poll_seconds
         self._current_game_poll_seconds = current_game_poll_seconds
         self._official_fill_poll_seconds = official_fill_poll_seconds
+        self._agent_market_projection_poll_seconds = (
+            agent_market_projection_poll_seconds
+        )
         self._stopping = asyncio.Event()
 
     def stop(self) -> None:
@@ -118,6 +126,10 @@ class ArenaProductionWorker:
             asyncio.create_task(
                 self._official_fill_loop(),
                 name="arena-official-agent-filler",
+            ),
+            asyncio.create_task(
+                self._agent_market_projection_loop(),
+                name="arena-agent-market-projection",
             ),
         ]
         await self._stopping.wait()
@@ -195,6 +207,16 @@ class ArenaProductionWorker:
             except Exception:
                 _LOGGER.exception("arena_official_agent_fill_cycle_failed")
             await self._wait(self._official_fill_poll_seconds)
+
+    async def _agent_market_projection_loop(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                await self._agent_market_projection.run_once(limit=100)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("arena_agent_market_projection_cycle_failed")
+            await self._wait(self._agent_market_projection_poll_seconds)
 
     async def _wait(self, seconds: float) -> None:
         try:
@@ -277,6 +299,7 @@ async def main() -> None:
         ),
     )
     official_agent_filler = OfficialAgentFiller(repository=pawnhouse)
+    agent_market_projection = AgentDrivenMarketProjectionWorker(pawnhouse)
     worker = ArenaProductionWorker(
         game_orchestrator=game_orchestrator,
         coordinator=coordinator,
@@ -284,6 +307,7 @@ async def main() -> None:
         settlement_recovery=settlement_recovery,
         current_game_lifecycle=current_game_lifecycle,
         official_agent_filler=official_agent_filler,
+        agent_market_projection=agent_market_projection,
         coordinator_poll_seconds=float(
             os.getenv("ADX_ARENA_WORKER_POLL_SECONDS", "0.25")
         ),
@@ -301,6 +325,12 @@ async def main() -> None:
         ),
         official_fill_poll_seconds=float(
             os.getenv("ADX_OFFICIAL_FILL_POLL_SECONDS", "1")
+        ),
+        agent_market_projection_poll_seconds=float(
+            os.getenv(
+                "ADX_AGENT_MARKET_PROJECTION_POLL_SECONDS",
+                "0.25",
+            )
         ),
     )
     await pawnhouse.initialize()

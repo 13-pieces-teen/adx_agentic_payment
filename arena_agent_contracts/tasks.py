@@ -24,6 +24,7 @@ from .actions import (
     DecideActionV1,
     GoodId,
     NonNegativeFixedDecimal,
+    OrderQuantity,
     PositiveFixedDecimal,
     PublicMessage,
 )
@@ -62,6 +63,13 @@ ShortText: TypeAlias = Annotated[
 NonNegativeInt: TypeAlias = Annotated[int, Field(ge=0)]
 PositiveInt: TypeAlias = Annotated[int, Field(gt=0)]
 AllowedDecideAction: TypeAlias = Literal["buy", "sell", "pass"]
+ArenaTaskKindV1: TypeAlias = Literal[
+    "arena.decide",
+    "arena.negotiate",
+    "arena.market.intent",
+    "arena.market.rfq",
+    "arena.market.select",
+]
 
 
 def _default_allowed_actions() -> list[AllowedDecideAction]:
@@ -274,6 +282,122 @@ class ArenaNegotiateInputV1(_StrictWireModel):
         return self
 
 
+class ArenaMarketIntentInputV1(ArenaDecideInputV1):
+    """Frozen participant view for one real-Agent market intent task."""
+
+    phase: Literal["market_intent"]
+    market_protocol: Literal["agent_a2a.v1"] = "agent_a2a.v1"
+    market_expires_at: UtcDateTime
+
+    @model_validator(mode="after")
+    def validate_market_lifetime(self) -> "ArenaMarketIntentInputV1":
+        if self.market_expires_at <= self.deadline_at:
+            raise ValueError(
+                "marketExpiresAt must outlive the intent task deadline"
+            )
+        return self
+
+
+class ArenaMarketDirectoryEntryV1(_StrictWireModel):
+    """One public, unranked seller intent visible to a buyer Agent."""
+
+    intent_id: Identifier
+    agent_id: Identifier
+    display_name: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=100),
+    ]
+    good: GoodId
+    quantity: OrderQuantity = 1
+    public_price: PositiveFixedDecimal
+    failed_negotiations: NonNegativeInt = 0
+    expires_at: UtcDateTime
+
+    @field_validator("display_name")
+    @classmethod
+    def reject_blank_display_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("displayName must contain visible text")
+        return value
+
+
+class ArenaMarketRfqInputV1(_StrictWireModel):
+    """Frozen public directory plus the buyer's private hard boundary."""
+
+    phase: Literal["market_rfq"]
+    market_protocol: Literal["agent_a2a.v1"] = "agent_a2a.v1"
+    game_id: Identifier
+    round_id: Identifier
+    round_index: PositiveInt
+    buyer_intent_id: Identifier
+    good: GoodId
+    quantity: OrderQuantity = 1
+    public_price: PositiveFixedDecimal
+    limit_price: PositiveFixedDecimal
+    cash: NonNegativeFixedDecimal
+    directory: list[ArenaMarketDirectoryEntryV1] = Field(default_factory=list)
+    max_outbound_rfq: Annotated[int, Field(ge=1, le=3)] = 3
+    events: list[ArenaPublicEventV1] = Field(default_factory=list)
+    deadline_at: UtcDateTime
+
+    @model_validator(mode="after")
+    def validate_directory(self) -> "ArenaMarketRfqInputV1":
+        intent_ids = [entry.intent_id for entry in self.directory]
+        if len(intent_ids) != len(set(intent_ids)):
+            raise ValueError("directory must not contain duplicate intent IDs")
+        if any(entry.good != self.good for entry in self.directory):
+            raise ValueError("directory entries must match the buyer good")
+        return self
+
+
+class ArenaInboundRfqV1(_StrictWireModel):
+    """One public buyer request delivered to the target seller Agent."""
+
+    request_id: Identifier
+    buyer_agent_id: Identifier
+    buyer_display_name: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=100),
+    ]
+    opening_price: PositiveFixedDecimal
+    message: PublicMessage
+    received_at: UtcDateTime
+
+    @field_validator("buyer_display_name", "message")
+    @classmethod
+    def reject_blank_public_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("public text must contain visible characters")
+        return value
+
+
+class ArenaMarketSelectInputV1(_StrictWireModel):
+    """Frozen inbound RFQs plus the seller's private hard boundary."""
+
+    phase: Literal["market_select"]
+    market_protocol: Literal["agent_a2a.v1"] = "agent_a2a.v1"
+    game_id: Identifier
+    round_id: Identifier
+    round_index: PositiveInt
+    seller_intent_id: Identifier
+    good: GoodId
+    quantity: OrderQuantity = 1
+    public_price: PositiveFixedDecimal
+    limit_price: PositiveFixedDecimal
+    inventory_available: NonNegativeInt
+    requests: list[ArenaInboundRfqV1] = Field(default_factory=list)
+    max_engagements: Literal[1] = 1
+    events: list[ArenaPublicEventV1] = Field(default_factory=list)
+    deadline_at: UtcDateTime
+
+    @model_validator(mode="after")
+    def validate_requests(self) -> "ArenaMarketSelectInputV1":
+        request_ids = [request.request_id for request in self.requests]
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("requests must not contain duplicate request IDs")
+        return self
+
+
 class ArenaAgentTaskV1(_StrictWireModel):
     """One immutable Arena-owned logical action.
 
@@ -282,7 +406,7 @@ class ArenaAgentTaskV1(_StrictWireModel):
     """
 
     task_id: Identifier
-    kind: Literal["arena.decide", "arena.negotiate"]
+    kind: ArenaTaskKindV1
     schema_version: Literal["arena.agent-task.v1"]
     game_id: Identifier
     round_id: Identifier
@@ -294,22 +418,46 @@ class ArenaAgentTaskV1(_StrictWireModel):
         str,
         StringConstraints(pattern=r"^sha256:[0-9a-f]{64}$"),
     ]
-    input: ArenaDecideInputV1 | ArenaNegotiateInputV1
+    input: (
+        ArenaDecideInputV1
+        | ArenaNegotiateInputV1
+        | ArenaMarketIntentInputV1
+        | ArenaMarketRfqInputV1
+        | ArenaMarketSelectInputV1
+    )
 
     @field_validator("input", mode="before")
     @classmethod
     def parse_input_for_kind(
         cls, value: object, info: ValidationInfo
-    ) -> ArenaDecideInputV1 | ArenaNegotiateInputV1:
+    ) -> (
+        ArenaDecideInputV1
+        | ArenaNegotiateInputV1
+        | ArenaMarketIntentInputV1
+        | ArenaMarketRfqInputV1
+        | ArenaMarketSelectInputV1
+    ):
         kind = info.data.get("kind")
         if kind == "arena.decide":
-            if isinstance(value, ArenaDecideInputV1):
+            if type(value) is ArenaDecideInputV1:
                 return value
             return ArenaDecideInputV1.model_validate(value)
         if kind == "arena.negotiate":
             if isinstance(value, ArenaNegotiateInputV1):
                 return value
             return ArenaNegotiateInputV1.model_validate(value)
+        if kind == "arena.market.intent":
+            if isinstance(value, ArenaMarketIntentInputV1):
+                return value
+            return ArenaMarketIntentInputV1.model_validate(value)
+        if kind == "arena.market.rfq":
+            if isinstance(value, ArenaMarketRfqInputV1):
+                return value
+            return ArenaMarketRfqInputV1.model_validate(value)
+        if kind == "arena.market.select":
+            if isinstance(value, ArenaMarketSelectInputV1):
+                return value
+            return ArenaMarketSelectInputV1.model_validate(value)
         raise ValueError("kind must be validated before input")
 
     @model_validator(mode="after")
@@ -322,14 +470,14 @@ class ArenaAgentTaskV1(_StrictWireModel):
             raise ValueError("input.deadlineAt must match task deadlineAt")
 
         if self.kind == "arena.decide":
-            if not isinstance(self.input, ArenaDecideInputV1):
+            if type(self.input) is not ArenaDecideInputV1:
                 raise ValueError("arena.decide requires ArenaDecideInputV1")
             if self.negotiation_id is not None:
                 raise ValueError("arena.decide must not include negotiationId")
             expected_key = (
                 f"{self.game_id}:{self.round_id}:{self.game_agent_id}:decide"
             )
-        else:
+        elif self.kind == "arena.negotiate":
             if not isinstance(self.input, ArenaNegotiateInputV1):
                 raise ValueError("arena.negotiate requires ArenaNegotiateInputV1")
             if self.negotiation_id is None:
@@ -342,6 +490,22 @@ class ArenaAgentTaskV1(_StrictWireModel):
                 f"{self.game_id}:{self.round_id}:{self.negotiation_id}:"
                 f"{self.input.turn_sequence}:{self.game_agent_id}:negotiate"
             )
+        else:
+            input_types = {
+                "arena.market.intent": ArenaMarketIntentInputV1,
+                "arena.market.rfq": ArenaMarketRfqInputV1,
+                "arena.market.select": ArenaMarketSelectInputV1,
+            }
+            expected_type = input_types[self.kind]
+            if not isinstance(self.input, expected_type):
+                raise ValueError(f"{self.kind} requires {expected_type.__name__}")
+            if self.negotiation_id is not None:
+                raise ValueError(f"{self.kind} must not include negotiationId")
+            suffix = self.kind.removeprefix("arena.market.")
+            expected_key = (
+                f"{self.game_id}:{self.round_id}:{self.game_agent_id}:"
+                f"market-{suffix}"
+            )
 
         if self.idempotency_key != expected_key:
             raise ValueError(
@@ -353,6 +517,11 @@ class ArenaAgentTaskV1(_StrictWireModel):
 __all__ = [
     "AGENT_TASK_SCHEMA_VERSION_V1",
     "ArenaAgentTaskV1",
+    "ArenaInboundRfqV1",
+    "ArenaMarketDirectoryEntryV1",
+    "ArenaMarketIntentInputV1",
+    "ArenaMarketRfqInputV1",
+    "ArenaMarketSelectInputV1",
     "ArenaCompletedActionV1",
     "ArenaCounterpartyQuoteV1",
     "ArenaDecideInputV1",
@@ -368,4 +537,5 @@ __all__ = [
     "Identifier",
     "PublicJsonValue",
     "UtcDateTime",
+    "ArenaTaskKindV1",
 ]

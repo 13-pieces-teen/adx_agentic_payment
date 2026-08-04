@@ -1,5 +1,15 @@
 """Arena 402 King's Pawnhouse clean-slate game domain."""
 
+from .a2a_market import (
+    AgentDrivenMarket,
+    AgentMarketDeal,
+    AgentMarketEngagement,
+    AgentMarketError,
+    AgentMarketIntent,
+    AgentNegotiationRequest,
+    MAX_OUTBOUND_RFQ,
+)
+from .a2a_projection_worker import AgentDrivenMarketProjectionWorker
 from .events import (
     EffectKind,
     EventEffect,
@@ -68,6 +78,13 @@ from .settlement import (
 from .settlement_worker import SettlementRecoveryWorker
 
 __all__ = [
+    "AgentDrivenMarket",
+    "AgentMarketDeal",
+    "AgentMarketEngagement",
+    "AgentMarketError",
+    "AgentMarketIntent",
+    "AgentNegotiationRequest",
+    "AgentDrivenMarketProjectionWorker",
     "DEMO_EVENT_IDS",
     "GOODS",
     "GOOD_IDS",
@@ -75,6 +92,7 @@ __all__ = [
     "INITIAL_NET_WORTH_ATOMIC",
     "INITIAL_PRICES",
     "MVP_EVENT_CATALOG",
+    "MAX_OUTBOUND_RFQ",
     "EffectKind",
     "EventEffect",
     "EventDeckError",

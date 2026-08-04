@@ -14,6 +14,13 @@ from arena_agent_contracts import (
     AGENT_TASK_SCHEMA_VERSION_V1,
     ArenaAgentTaskV1,
     ArenaCounterpartyQuoteV1,
+    ArenaDecideLimitsV1,
+    ArenaInboundRfqV1,
+    ArenaMarketDirectoryEntryV1,
+    ArenaMarketIntentInputV1,
+    ArenaMarketRfqInputV1,
+    ArenaMarketSelectInputV1,
+    ArenaReputationV1,
 )
 from arena_core.hashing import sha256_identifier
 from hosted_agent_runtime.capabilities import (
@@ -82,6 +89,88 @@ def _task(
         negotiation_id=participant.negotiation_id if negotiate else None,
         deadline_at=task_deadline,
         idempotency_key=idempotency_key,
+        input_hash=sha256_identifier(participant),
+        input=participant,
+    )
+
+
+def _market_task(kind: str) -> ArenaAgentTaskV1:
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=5)
+    if kind == "arena.market.intent":
+        participant = ArenaMarketIntentInputV1(
+            phase="market_intent",
+            game_id="game-1",
+            round_id="round-1",
+            round_index=1,
+            cash="100.000000",
+            holdings={"ruby": 1},
+            market={"ruby": "12.500000"},
+            reputation=ArenaReputationV1(failed_negotiations=0),
+            limits=ArenaDecideLimitsV1(
+                allowed_actions=["buy", "sell", "pass"],
+                allowed_goods=["ruby"],
+            ),
+            deadline_at=deadline,
+            market_expires_at=deadline + timedelta(minutes=2),
+        )
+    elif kind == "arena.market.rfq":
+        participant = ArenaMarketRfqInputV1(
+            phase="market_rfq",
+            game_id="game-1",
+            round_id="round-1",
+            round_index=1,
+            buyer_intent_id="buyer-intent-1",
+            good="ruby",
+            public_price="11.500000",
+            limit_price="12.000000",
+            cash="100.000000",
+            directory=[
+                ArenaMarketDirectoryEntryV1(
+                    intent_id="seller-intent-1",
+                    agent_id="seller-agent-1",
+                    display_name="Seller",
+                    good="ruby",
+                    public_price="11.750000",
+                    expires_at=deadline,
+                )
+            ],
+            deadline_at=deadline,
+        )
+    else:
+        participant = ArenaMarketSelectInputV1(
+            phase="market_select",
+            game_id="game-1",
+            round_id="round-1",
+            round_index=1,
+            seller_intent_id="seller-intent-1",
+            good="ruby",
+            public_price="11.750000",
+            limit_price="11.000000",
+            inventory_available=1,
+            requests=[
+                ArenaInboundRfqV1(
+                    request_id="request-1",
+                    buyer_agent_id="buyer-agent-1",
+                    buyer_display_name="Buyer",
+                    opening_price="11.000000",
+                    message="I choose to negotiate with you.",
+                    received_at=datetime.now(timezone.utc),
+                )
+            ],
+            deadline_at=deadline,
+        )
+    suffix = kind.removeprefix("arena.market.")
+    return ArenaAgentTaskV1(
+        task_id=f"task-market-{suffix}",
+        kind=kind,  # type: ignore[arg-type]
+        schema_version=AGENT_TASK_SCHEMA_VERSION_V1,
+        game_id=participant.game_id,
+        round_id=participant.round_id,
+        game_agent_id="game-agent-1",
+        deadline_at=deadline,
+        idempotency_key=(
+            f"game-1:round-1:game-agent-1:market-{suffix}"
+        ),
         input_hash=sha256_identifier(participant),
         input=participant,
     )
@@ -180,6 +269,46 @@ def test_driver_returns_each_strict_action(
         assert result.action.action == expected_action
         assert len(fake.requests) == 1
         assert len(recorder.records) == 1
+        assert recorder.records[0].status == "succeeded"
+
+    asyncio.run(scenario_run())
+
+
+@pytest.mark.parametrize(
+    ("kind", "provider_scenario", "expected_action"),
+    [
+        ("arena.market.intent", FakeProviderScenario.MARKET_BUY, "buy"),
+        (
+            "arena.market.rfq",
+            FakeProviderScenario.MARKET_RFQ,
+            "request_negotiations",
+        ),
+        (
+            "arena.market.select",
+            FakeProviderScenario.MARKET_ENGAGE,
+            "engage",
+        ),
+    ],
+)
+def test_driver_executes_agent_driven_market_tasks(
+    kind: str,
+    provider_scenario: FakeProviderScenario,
+    expected_action: str,
+) -> None:
+    """Fake Provider proves transport only; production evidence needs a real model."""
+
+    async def scenario_run() -> None:
+        task = _market_task(kind)
+        driver, fake, recorder, _, _ = await _build_driver(
+            [provider_scenario]
+        )
+
+        result = await driver.execute(task, task.deadline_at)
+
+        assert result.status == "succeeded"
+        assert result.action is not None
+        assert result.action.action == expected_action
+        assert fake.requests[0].task_kind == kind
         assert recorder.records[0].status == "succeeded"
 
     asyncio.run(scenario_run())
@@ -300,7 +429,7 @@ def test_limit_violating_negotiation_action_gets_one_bounded_correction() -> Non
     asyncio.run(scenario_run())
 
 
-def test_in_bound_quote_rejection_gets_one_semantic_correction() -> None:
+def test_in_bound_quote_rejection_preserves_agent_autonomy() -> None:
     async def scenario_run() -> None:
         task = _task(negotiate=True)
         task_input = task.input.model_copy(
@@ -337,19 +466,9 @@ def test_in_bound_quote_rejection_gets_one_semantic_correction() -> None:
 
         assert result.status == "succeeded"
         assert result.action is not None
-        assert result.action.action == "accept"
-        assert len(fake.requests) == 2
-        correction = json.loads(fake.requests[1].input_json)[
-            "boundedCorrection"
-        ]
-        assert correction == {
-            "attempt": 2,
-            "code": "negotiation_rule_violation",
-        }
-        assert [record.status for record in recorder.records] == [
-            "failed",
-            "succeeded",
-        ]
+        assert result.action.action == "reject"
+        assert len(fake.requests) == 1
+        assert [record.status for record in recorder.records] == ["succeeded"]
 
     asyncio.run(scenario_run())
 

@@ -1,17 +1,20 @@
-"""Real Claude Code + Codex game through Docker Arena and stateless MCP.
+"""Real local Runtime game through Docker Arena and stateless MCP.
 
 Prerequisites:
 
 * an isolated Compose stack using ``docker-compose.real-runtimes-e2e.yml``;
 * two one-time invites in ``ADX_REAL_RUNTIME_E2E_INVITES`` as a JSON array;
-* locally authenticated ``claude`` and ``codex`` CLIs;
+* locally authenticated CLIs selected by ``ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS``;
 * Go available to build the current Connector source.
 
-Arena, Gateway, PostgreSQL, and the Arena worker run in Docker. The two
+Arena, Gateway, PostgreSQL, and the Arena worker run in Docker. Two independent
 Connectors and their managed Runtime children run on the host so existing local
-CLI authentication never enters a container. Payment support is disabled and
-the game freezes ``authorizationMode=none``; an accepted negotiation must close
-as ``settlement_failed`` without moving inventory or writing to chain.
+CLI authentication never enters a container. The default is one Claude Code
+and one Codex Runtime; ``codex,codex`` runs a Codex-only game with separate
+users, devices, bindings, sessions, and state stores. Payment support is
+disabled and the game freezes ``authorizationMode=none``; an accepted
+negotiation must close as ``settlement_failed`` without moving inventory or
+writing to chain.
 """
 
 from __future__ import annotations
@@ -74,6 +77,19 @@ BUYER_RUNTIME = os.getenv(
     "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME",
     "claude-code",
 ).strip().lower()
+RUNTIME_KINDS = tuple(
+    value.strip().lower()
+    for value in os.getenv(
+        "ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS",
+        "claude-code,codex",
+    ).split(",")
+    if value.strip()
+)
+BUYER_SEAT = int(os.getenv("ADX_REAL_RUNTIME_E2E_BUYER_SEAT", "-1"))
+MARKET_PROTOCOL = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL",
+    "fcfs.v1",
+).strip()
 
 
 def _require_ok(response: httpx.Response) -> dict[str, Any]:
@@ -225,6 +241,7 @@ class RealConnector:
         self,
         *,
         kind: Literal["claude-code", "codex"],
+        label: str,
         user: UserSession,
         credential: dict[str, str],
         connector_executable: Path,
@@ -233,6 +250,7 @@ class RealConnector:
         run_id: str,
     ) -> None:
         self.kind = kind
+        self.label = label
         self.user = user
         self.credential = credential
         self.connector_executable = connector_executable
@@ -253,7 +271,7 @@ class RealConnector:
             environment["PATH"] = (
                 f"{self.codex_shim_root}{os.pathsep}" f"{environment.get('PATH', '')}"
             )
-        connector_state_root = self.temp_root / self.kind
+        connector_state_root = self.temp_root / self.label
         connector_state_root.mkdir(parents=True, exist_ok=True)
         arguments = [
             str(self.connector_executable),
@@ -309,7 +327,7 @@ class RealConnector:
         for _ in range(240):
             if self.process.poll() is not None:
                 raise RuntimeError(
-                    f"{self.kind} Connector exited before readiness:\n"
+                    f"{self.label} ({self.kind}) Connector exited before readiness:\n"
                     f"{self._failure_logs()}"
                 )
             response = await self.user.client.get(
@@ -336,9 +354,9 @@ class RealConnector:
                                 json={
                                     "runtime_id": runtime["runtime_id"],
                                     "display_name": (
-                                        "Real Claude Code"
+                                        f"Real Claude Code {self.label}"
                                         if self.kind == "claude-code"
-                                        else "Real Codex"
+                                        else f"Real Codex {self.label}"
                                     ),
                                     "working_directory": str(ROOT),
                                 },
@@ -347,13 +365,14 @@ class RealConnector:
                         registration = self.binding.get("arenaRegistration", {})
                         if registration.get("routeStatus") != "ready":
                             raise RuntimeError(
-                                f"{self.kind} Arena route is not ready: "
+                                f"{self.label} ({self.kind}) Arena route is not ready: "
                                 f"{registration!r}"
                             )
                         return self.binding
             await asyncio.sleep(0.25)
         raise RuntimeError(
-            f"{self.kind} Connector did not publish a locally ready Runtime:\n"
+            f"{self.label} ({self.kind}) Connector did not publish a locally "
+            "ready Runtime:\n"
             f"{self._failure_logs()}"
         )
 
@@ -387,12 +406,14 @@ async def _wait_for_completion(
             exit_code = connector.process.poll()
             if exit_code is not None:
                 raise RuntimeError(
-                    f"{connector.kind} Connector exited with {exit_code}:\n"
+                    f"{connector.label} ({connector.kind}) Connector exited "
+                    f"with {exit_code}:\n"
                     f"{connector._failure_logs()}"
                 )
         await asyncio.sleep(0.5)
     logs = "\n\n".join(
-        f"[{connector.kind}]\n{connector._failure_logs()}" for connector in connectors
+        f"[{connector.label}:{connector.kind}]\n{connector._failure_logs()}"
+        for connector in connectors
     )
     raise RuntimeError(
         f"game did not complete before timeout; last state={last_state!r}\n" f"{logs}"
@@ -404,7 +425,9 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
     try:
         game = await connection.fetchrow(
             """
-            SELECT phase, current_round, round_count, config_snapshot
+            SELECT
+                phase, current_round, round_count, market_protocol,
+                config_snapshot
             FROM arena402.games
             WHERE game_id = $1
             """,
@@ -479,6 +502,14 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
                  WHERE game_id = $1) AS negotiation_messages,
                 (SELECT count(*) FROM arena402.settlement_intents
                  WHERE game_id = $1) AS settlement_intents,
+                (SELECT count(*) FROM arena402.market_intents
+                 WHERE game_id = $1) AS market_intents,
+                (SELECT count(*) FROM arena402.market_negotiation_requests
+                 WHERE game_id = $1) AS market_requests,
+                (SELECT count(*) FROM arena402.market_engagements
+                 WHERE game_id = $1) AS market_engagements,
+                (SELECT count(*) FROM arena402.market_deals
+                 WHERE game_id = $1) AS market_deals,
                 (SELECT count(*) FROM arena402.rankings
                  WHERE game_id = $1) AS rankings
             """,
@@ -499,11 +530,18 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
         )
     if int(counts["rankings"]) != 2:
         raise RuntimeError(f"expected two rankings: {dict(counts)!r}")
-    decide_tasks = [row for row in task_values if row["kind"] == "arena.decide"]
-    expected_decide_tasks = 2 * ROUND_COUNT
-    if len(decide_tasks) != expected_decide_tasks:
+    opening_kind = (
+        "arena.market.intent"
+        if MARKET_PROTOCOL == "agent_a2a.v1"
+        else "arena.decide"
+    )
+    opening_tasks = [
+        row for row in task_values if row["kind"] == opening_kind
+    ]
+    expected_opening_tasks = 2 * ROUND_COUNT
+    if len(opening_tasks) != expected_opening_tasks:
         raise RuntimeError(
-            f"expected {expected_decide_tasks} real decide tasks: "
+            f"expected {expected_opening_tasks} real {opening_kind} tasks: "
             f"{task_values!r}"
         )
     for task in task_values:
@@ -536,6 +574,7 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
             "phase": game["phase"],
             "currentRound": int(game["current_round"]),
             "roundCount": int(game["round_count"]),
+            "marketProtocol": str(game["market_protocol"]),
             "authorizationMode": dict(config)
             .get("settlement", {})
             .get("authorizationMode"),
@@ -645,9 +684,37 @@ async def main() -> None:
         raise RuntimeError(
             "ADX_REAL_RUNTIME_E2E_ROUND_COUNT must be between 1 and 10"
         )
-    if BUYER_RUNTIME not in {"claude-code", "codex"}:
+    if len(RUNTIME_KINDS) != 2 or any(
+        value not in {"claude-code", "codex"} for value in RUNTIME_KINDS
+    ):
         raise RuntimeError(
-            "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME must be claude-code or codex"
+            "ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS must contain exactly two "
+            "comma-separated values chosen from claude-code and codex"
+        )
+    buyer_seat = BUYER_SEAT
+    if buyer_seat == -1:
+        matches = [
+            index
+            for index, runtime_kind in enumerate(RUNTIME_KINDS)
+            if runtime_kind == BUYER_RUNTIME
+        ]
+        if len(matches) == 1:
+            buyer_seat = matches[0]
+        elif len(set(RUNTIME_KINDS)) == 1:
+            buyer_seat = 0
+        else:
+            raise RuntimeError(
+                "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME must identify one Runtime "
+                "or ADX_REAL_RUNTIME_E2E_BUYER_SEAT must be 0 or 1"
+            )
+    if buyer_seat not in {0, 1}:
+        raise RuntimeError(
+            "ADX_REAL_RUNTIME_E2E_BUYER_SEAT must be -1, 0, or 1"
+        )
+    if MARKET_PROTOCOL not in {"fcfs.v1", "agent_a2a.v1"}:
+        raise RuntimeError(
+            "ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL must be fcfs.v1 or "
+            "agent_a2a.v1"
         )
 
     run_id = uuid.uuid4().hex[:10]
@@ -658,58 +725,67 @@ async def main() -> None:
         )
         _build_connector(connector_executable)
         codex_shim_root = temp_root / "codex-shim"
-        _create_codex_shim(codex_shim_root)
+        if "codex" in RUNTIME_KINDS:
+            _create_codex_shim(codex_shim_root)
 
-        claude_user, codex_user = await asyncio.gather(
-            _create_user(invites[0], "claude", run_id),
-            _create_user(invites[1], "codex", run_id),
+        users = tuple(
+            await asyncio.gather(
+                *(
+                    _create_user(
+                        invites[index],
+                        f"seat{index + 1}_{runtime_kind.replace('-', '_')}",
+                        run_id,
+                    )
+                    for index, runtime_kind in enumerate(RUNTIME_KINDS)
+                )
+            )
         )
-        claude_credential, codex_credential = await asyncio.gather(
-            _create_device_credential(
-                claude_user,
-                device_name="Real Claude Code E2E",
-            ),
-            _create_device_credential(
-                codex_user,
-                device_name="Real Codex E2E",
-            ),
+        credentials = tuple(
+            await asyncio.gather(
+                *(
+                    _create_device_credential(
+                        users[index],
+                        device_name=(
+                            f"Real {runtime_kind} E2E seat {index + 1}"
+                        ),
+                    )
+                    for index, runtime_kind in enumerate(RUNTIME_KINDS)
+                )
+            )
         )
-        claude = RealConnector(
-            kind="claude-code",
-            user=claude_user,
-            credential=claude_credential,
-            connector_executable=connector_executable,
-            temp_root=temp_root,
-            codex_shim_root=codex_shim_root,
-            run_id=run_id,
-        )
-        codex = RealConnector(
-            kind="codex",
-            user=codex_user,
-            credential=codex_credential,
-            connector_executable=connector_executable,
-            temp_root=temp_root,
-            codex_shim_root=codex_shim_root,
-            run_id=run_id,
+        connectors = tuple(
+            RealConnector(
+                kind=runtime_kind,
+                label=f"seat-{index + 1}",
+                user=users[index],
+                credential=credentials[index],
+                connector_executable=connector_executable,
+                temp_root=temp_root,
+                codex_shim_root=codex_shim_root,
+                run_id=run_id,
+            )
+            for index, runtime_kind in enumerate(RUNTIME_KINDS)
         )
         game_id = f"real-runtimes-{run_id}"
         try:
-            claude.start()
-            codex.start()
-            claude_binding, codex_binding = await asyncio.gather(
-                claude.wait_online_and_bind(),
-                codex.wait_online_and_bind(),
+            for connector in connectors:
+                connector.start()
+            bindings = tuple(
+                await asyncio.gather(
+                    *(connector.wait_online_and_bind() for connector in connectors)
+                )
             )
             created = _require_ok(
-                await claude_user.client.post(
+                await users[0].client.post(
                     "/api/v1/pawnhouse/games",
-                    headers=claude_user.mutation_headers,
+                    headers=users[0].mutation_headers,
                     json={
                         "gameId": game_id,
                         "eventSeed": EVENT_SEED,
                         "actionTimeoutMs": ACTION_TIMEOUT_MS,
                         "roundCount": ROUND_COUNT,
                         "eventMode": "seeded_shuffle",
+                        "marketProtocol": MARKET_PROTOCOL,
                         "maxParticipants": 2,
                         "portfolioMode": "manual",
                         "settlement": {"authorizationMode": "none"},
@@ -717,53 +793,40 @@ async def main() -> None:
                 )
             )
             join_responses = await asyncio.gather(
-                claude_user.client.post(
-                    f"/api/v1/pawnhouse/games/{game_id}/connector-participants",
-                    headers=claude_user.mutation_headers,
-                    json={
-                        "agentId": claude_binding["agent_id"],
-                        "portfolio": (
-                            {"cash": "20.000000", "holdings": {}}
-                            if SAFE_NO_TRADE
-                            or BUYER_RUNTIME == "claude-code"
-                            else {
-                                "cash": "0.000000",
-                                "holdings": {"grain": 10},
-                            }
-                        ),
-                    },
-                ),
-                codex_user.client.post(
-                    f"/api/v1/pawnhouse/games/{game_id}/connector-participants",
-                    headers=codex_user.mutation_headers,
-                    json={
-                        "agentId": codex_binding["agent_id"],
-                        "portfolio": (
-                            {"cash": "20.000000", "holdings": {}}
-                            if SAFE_NO_TRADE or BUYER_RUNTIME == "codex"
-                            else {
-                                "cash": "0.000000",
-                                "holdings": {"grain": 10},
-                            }
-                        ),
-                    },
-                ),
+                *(
+                    users[index].client.post(
+                        f"/api/v1/pawnhouse/games/{game_id}/connector-participants",
+                        headers=users[index].mutation_headers,
+                        json={
+                            "agentId": bindings[index]["agent_id"],
+                            "portfolio": (
+                                {"cash": "20.000000", "holdings": {}}
+                                if SAFE_NO_TRADE or index == buyer_seat
+                                else {
+                                    "cash": "0.000000",
+                                    "holdings": {"grain": 10},
+                                }
+                            ),
+                        },
+                    )
+                    for index in range(2)
+                )
             )
             for response in join_responses:
                 _require_ok(response)
             started = _require_ok(
-                await claude_user.client.post(
+                await users[0].client.post(
                     f"/api/v1/pawnhouse/games/{game_id}/start",
-                    headers=claude_user.mutation_headers,
+                    headers=users[0].mutation_headers,
                 )
             )
             final_state = await _wait_for_completion(
-                claude_user,
+                users[0],
                 game_id,
-                (claude, codex),
+                connectors,
             )
             evidence = (
-                await _public_evidence(claude_user, game_id)
+                await _public_evidence(users[0], game_id)
                 if PUBLIC_EVIDENCE_ONLY
                 else await _database_evidence(game_id)
             )
@@ -775,24 +838,28 @@ async def main() -> None:
                         "startedPhase": started["phase"],
                         "finalPhase": final_state["phase"],
                         "runtimes": {
-                            "claudeCode": {
-                                "version": claude.runtime["version"],
-                                "runtimeId": claude.runtime["runtime_id"],
-                                "isolation": claude.runtime["arena_isolation"],
-                            },
-                            "codex": {
-                                "version": codex.runtime["version"],
-                                "runtimeId": codex.runtime["runtime_id"],
-                                "isolation": codex.runtime["arena_isolation"],
-                                "serviceTierOverride": "fast",
-                            },
+                            connector.label: {
+                                "kind": connector.kind,
+                                "version": connector.runtime["version"],
+                                "runtimeId": connector.runtime["runtime_id"],
+                                "isolation": connector.runtime["arena_isolation"],
+                                **(
+                                    {"serviceTierOverride": "fast"}
+                                    if connector.kind == "codex"
+                                    else {}
+                                ),
+                            }
+                            for connector in connectors
                         },
                         "taskTransport": "mcp",
                         "eventSeed": EVENT_SEED,
                         "roundCount": ROUND_COUNT,
+                        "marketProtocol": MARKET_PROTOCOL,
                         "safeNoTrade": SAFE_NO_TRADE,
                         "expectedMatch": EXPECT_MATCH,
-                        "buyerRuntime": BUYER_RUNTIME,
+                        "buyerRuntime": RUNTIME_KINDS[buyer_seat],
+                        "buyerSeat": connectors[buyer_seat].label,
+                        "evidenceClass": "real_local_connector_agents",
                         "evidence": evidence,
                         "chainWrites": 0,
                     },
@@ -803,20 +870,17 @@ async def main() -> None:
         except Exception as exc:
             connector_logs = "\n\n".join(
                 (
-                    f"[{connector.kind}]\n"
+                    f"[{connector.label}:{connector.kind}]\n"
                     f"{connector._failure_logs()}"
                 )
-                for connector in (claude, codex)
+                for connector in connectors
             )
             raise RuntimeError(
                 f"{exc}\nConnector logs:\n{connector_logs}"
             ) from exc
         finally:
-            await asyncio.gather(claude.stop(), codex.stop())
-            await asyncio.gather(
-                claude_user.client.aclose(),
-                codex_user.client.aclose(),
-            )
+            await asyncio.gather(*(connector.stop() for connector in connectors))
+            await asyncio.gather(*(user.client.aclose() for user in users))
 
 
 if __name__ == "__main__":

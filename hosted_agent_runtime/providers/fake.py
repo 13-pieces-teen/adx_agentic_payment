@@ -25,6 +25,9 @@ class FakeProviderScenario(str, Enum):
     PROPOSE_AT_LIMIT = "propose_at_limit"
     ACCEPT = "accept"
     REJECT = "reject"
+    MARKET_BUY = "market_buy"
+    MARKET_RFQ = "market_rfq"
+    MARKET_ENGAGE = "market_engage"
     RATE_LIMITED = "rate_limited"
     PERMANENT_400 = "permanent_400"
     AUTHENTICATION_401 = "authentication_401"
@@ -185,6 +188,30 @@ class FakeProvider:
             return {
                 "action": "reject",
                 "message": "A deterministic public rejection.",
+            }
+        if scenario is FakeProviderScenario.MARKET_BUY:
+            return {
+                "action": "buy",
+                "good": "ruby",
+                "publicPrice": "11.500000",
+                "limitPrice": "12.000000",
+                "message": "Seeking one ruby lot.",
+            }
+        if scenario is FakeProviderScenario.MARKET_RFQ:
+            return {
+                "action": "request_negotiations",
+                "requests": [
+                    {
+                        "targetIntentId": "seller-intent-1",
+                        "openingPrice": "11.000000",
+                        "message": "I choose to negotiate with you.",
+                    }
+                ],
+            }
+        if scenario is FakeProviderScenario.MARKET_ENGAGE:
+            return {
+                "action": "engage",
+                "requestId": "request-1",
             }
         raise ProviderInvocationError("permanent_request")
 

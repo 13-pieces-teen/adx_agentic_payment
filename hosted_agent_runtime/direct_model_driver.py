@@ -14,17 +14,27 @@ from pydantic import TypeAdapter, ValidationError
 
 from arena_agent_contracts import (
     AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
-    AgentActionV1,
+    AgentDrivenMarketActionV1,
     AgentTaskResultV1,
     ArenaAgentTaskV1,
     ArenaDecideInputV1,
+    ArenaMarketIntentInputV1,
+    ArenaMarketRfqInputV1,
+    ArenaMarketSelectInputV1,
     ArenaNegotiateInputV1,
     DecideActionV1,
+    MarketIntentActionV1,
+    MarketRfqActionV1,
+    MarketSelectionActionV1,
     NegotiateActionV1,
+    RequestNegotiationsActionV1,
 )
 from arena_core.candidate_validation import (
     CandidateViolation,
     decide_candidate_violation,
+    market_intent_candidate_violation,
+    market_rfq_candidate_violation,
+    market_select_candidate_violation,
     negotiation_candidate_violation,
 )
 from arena_core.hashing import sha256_identifier
@@ -83,6 +93,15 @@ _DECIDE_ACTION_ADAPTER: TypeAdapter[DecideActionV1] = TypeAdapter(
 _NEGOTIATE_ACTION_ADAPTER: TypeAdapter[NegotiateActionV1] = TypeAdapter(
     NegotiateActionV1
 )
+_MARKET_INTENT_ACTION_ADAPTER: TypeAdapter[MarketIntentActionV1] = TypeAdapter(
+    MarketIntentActionV1
+)
+_MARKET_RFQ_ACTION_ADAPTER: TypeAdapter[MarketRfqActionV1] = (
+    TypeAdapter(MarketRfqActionV1)
+)
+_MARKET_SELECT_ACTION_ADAPTER: TypeAdapter[MarketSelectionActionV1] = (
+    TypeAdapter(MarketSelectionActionV1)
+)
 
 
 def _require_aware(value: datetime, *, label: str) -> datetime:
@@ -97,9 +116,24 @@ def _require_aware(value: datetime, *, label: str) -> datetime:
 
 def _candidate_violation(
     task: ArenaAgentTaskV1,
-    action: AgentActionV1,
+    action: AgentDrivenMarketActionV1,
 ) -> CandidateViolation | None:
     task_input = task.input
+    if isinstance(task_input, ArenaMarketIntentInputV1):
+        return market_intent_candidate_violation(
+            task_input,
+            cast(MarketIntentActionV1, action),
+        )
+    if isinstance(task_input, ArenaMarketRfqInputV1):
+        return market_rfq_candidate_violation(
+            task_input,
+            cast(MarketRfqActionV1, action),
+        )
+    if isinstance(task_input, ArenaMarketSelectInputV1):
+        return market_select_candidate_violation(
+            task_input,
+            cast(MarketSelectionActionV1, action),
+        )
     if isinstance(task_input, ArenaDecideInputV1):
         return decide_candidate_violation(
             task_input,
@@ -761,7 +795,12 @@ class DirectModelDriver:
                 if should_retry:
                     correction_code = (
                         "decision_constraint_violation"
-                        if task_snapshot.kind == "arena.decide"
+                        if task_snapshot.kind in {
+                            "arena.decide",
+                            "arena.market.intent",
+                            "arena.market.rfq",
+                            "arena.market.select",
+                        }
                         else (
                             "limit_price_violation"
                             if violation == "limit_price_violation"
@@ -922,14 +961,29 @@ class DirectModelDriver:
     def _parse_action(
         task: ArenaAgentTaskV1,
         response: ProviderResponse,
-    ) -> AgentActionV1:
+    ) -> AgentDrivenMarketActionV1:
         payload = dict(response.structured_output)
         if task.kind == "arena.decide":
             return _DECIDE_ACTION_ADAPTER.validate_python(
                 payload,
                 strict=True,
             )
-        return _NEGOTIATE_ACTION_ADAPTER.validate_python(
+        if task.kind == "arena.negotiate":
+            return _NEGOTIATE_ACTION_ADAPTER.validate_python(
+                payload,
+                strict=True,
+            )
+        if task.kind == "arena.market.intent":
+            return _MARKET_INTENT_ACTION_ADAPTER.validate_python(
+                payload,
+                strict=True,
+            )
+        if task.kind == "arena.market.rfq":
+            return _MARKET_RFQ_ACTION_ADAPTER.validate_python(
+                payload,
+                strict=True,
+            )
+        return _MARKET_SELECT_ACTION_ADAPTER.validate_python(
             payload,
             strict=True,
         )

@@ -12,13 +12,20 @@ from typing import Literal, TypeAlias
 from arena_agent_contracts import (
     AcceptAction,
     ArenaDecideInputV1,
+    ArenaMarketIntentInputV1,
+    ArenaMarketRfqInputV1,
+    ArenaMarketSelectInputV1,
     ArenaNegotiateInputV1,
     BuyAction,
     DecideActionV1,
+    EngageRequestActionV1,
+    MarketIntentActionV1,
+    MarketRfqActionV1,
+    MarketSelectionActionV1,
     NegotiateActionV1,
     PassAction,
     ProposeAction,
-    RejectAction,
+    RequestNegotiationsActionV1,
     SellAction,
 )
 
@@ -28,19 +35,37 @@ DecideCandidateViolation: TypeAlias = Literal[
     "good_not_allowed",
     "insufficient_inventory",
     "insufficient_cash",
+    "public_price_not_allowed",
+]
+MarketIntentCandidateViolation: TypeAlias = Literal[
+    "action_not_allowed",
+    "good_not_allowed",
+    "insufficient_inventory",
+    "insufficient_cash",
+    "market_price_required",
+    "market_price_boundary_violation",
+]
+MarketRfqCandidateViolation: TypeAlias = Literal[
+    "rfq_budget_exceeded",
+    "rfq_target_not_visible",
+    "limit_price_violation",
+]
+MarketSelectCandidateViolation: TypeAlias = Literal[
+    "request_not_visible",
+    "insufficient_inventory",
 ]
 NegotiationCandidateViolation: TypeAlias = Literal[
     "buyer_opening_proposal_required",
     "counterparty_proposal_required",
     "final_turn_must_close",
     "limit_price_violation",
-    "in_bound_quote_must_accept",
-    "final_out_of_bound_quote_must_reject",
-    "out_of_bound_quote_must_counter",
-    "counter_must_equal_limit",
 ]
 CandidateViolation: TypeAlias = (
-    DecideCandidateViolation | NegotiationCandidateViolation
+    DecideCandidateViolation
+    | NegotiationCandidateViolation
+    | MarketIntentCandidateViolation
+    | MarketRfqCandidateViolation
+    | MarketSelectCandidateViolation
 )
 
 
@@ -57,6 +82,8 @@ def decide_candidate_violation(
         return None
     if not isinstance(action, (BuyAction, SellAction)):
         raise TypeError("action must be a decide action")
+    if action.public_price is not None or action.message is not None:
+        return "public_price_not_allowed"
     if limits.allowed_goods and action.good not in limits.allowed_goods:
         return "good_not_allowed"
     if (
@@ -73,22 +100,78 @@ def decide_candidate_violation(
     return None
 
 
-def _quote_is_within_boundary(task_input: ArenaNegotiateInputV1) -> bool:
-    quote = task_input.latest_counterparty_quote
-    if quote is None:
-        raise ValueError("counterparty quote is required")
-    if task_input.limit_price is None:
-        return True
-    if task_input.role == "buyer":
-        return quote.price <= task_input.limit_price
-    return quote.price >= task_input.limit_price
+def market_intent_candidate_violation(
+    task_input: ArenaMarketIntentInputV1,
+    action: MarketIntentActionV1,
+) -> MarketIntentCandidateViolation | None:
+    """Validate a real Agent's public listing and private hard boundary."""
+
+    limits = task_input.limits
+    if action.action not in limits.allowed_actions:
+        return "action_not_allowed"
+    if isinstance(action, PassAction):
+        return None
+    if not isinstance(action, (BuyAction, SellAction)):
+        raise TypeError("action must be a market intent action")
+    if limits.allowed_goods and action.good not in limits.allowed_goods:
+        return "good_not_allowed"
+    if action.public_price is None or action.limit_price is None:
+        return "market_price_required"
+    if isinstance(action, BuyAction):
+        if action.public_price > action.limit_price:
+            return "market_price_boundary_violation"
+        if action.limit_price * action.quantity > task_input.cash:
+            return "insufficient_cash"
+    else:
+        if action.public_price < action.limit_price:
+            return "market_price_boundary_violation"
+        if task_input.holdings.get(action.good, 0) < action.quantity:
+            return "insufficient_inventory"
+    return None
+
+
+def market_rfq_candidate_violation(
+    task_input: ArenaMarketRfqInputV1,
+    action: MarketRfqActionV1,
+) -> MarketRfqCandidateViolation | None:
+    """Validate targets only; Arena never ranks or selects one for the buyer."""
+
+    if isinstance(action, PassAction):
+        return None
+    if not isinstance(action, RequestNegotiationsActionV1):
+        raise TypeError("action must be a market RFQ action")
+    if len(action.requests) > task_input.max_outbound_rfq:
+        return "rfq_budget_exceeded"
+    visible = {entry.intent_id for entry in task_input.directory}
+    for request in action.requests:
+        if request.target_intent_id not in visible:
+            return "rfq_target_not_visible"
+        if request.opening_price > task_input.limit_price:
+            return "limit_price_violation"
+    return None
+
+
+def market_select_candidate_violation(
+    task_input: ArenaMarketSelectInputV1,
+    action: MarketSelectionActionV1,
+) -> MarketSelectCandidateViolation | None:
+    """Validate seller ownership without choosing which RFQ to engage."""
+
+    if isinstance(action, EngageRequestActionV1):
+        if action.request_id not in {
+            request.request_id for request in task_input.requests
+        }:
+            return "request_not_visible"
+        if task_input.inventory_available < task_input.quantity:
+            return "insufficient_inventory"
+    return None
 
 
 def negotiation_candidate_violation(
     task_input: ArenaNegotiateInputV1,
     action: NegotiateActionV1,
 ) -> NegotiationCandidateViolation | None:
-    """Validate hard boundary and deterministic convergence semantics."""
+    """Validate protocol shape and private bounds without choosing strategy."""
 
     if task_input.turn_sequence == 1 and not isinstance(
         action, ProposeAction
@@ -123,31 +206,19 @@ def negotiation_candidate_violation(
         ):
             return "limit_price_violation"
 
-    quote = task_input.latest_counterparty_quote
-    if quote is None:
-        return None
-
-    if _quote_is_within_boundary(task_input):
-        if not isinstance(action, AcceptAction):
-            return "in_bound_quote_must_accept"
-        return None
-
-    if task_input.remaining_turns <= 1:
-        if not isinstance(action, RejectAction):
-            return "final_out_of_bound_quote_must_reject"
-        return None
-
-    if not isinstance(action, ProposeAction):
-        return "out_of_bound_quote_must_counter"
-    if limit_price is not None and action.price != limit_price:
-        return "counter_must_equal_limit"
     return None
 
 
 __all__ = [
     "CandidateViolation",
     "DecideCandidateViolation",
+    "MarketIntentCandidateViolation",
+    "MarketRfqCandidateViolation",
+    "MarketSelectCandidateViolation",
     "NegotiationCandidateViolation",
     "decide_candidate_violation",
+    "market_intent_candidate_violation",
+    "market_rfq_candidate_violation",
+    "market_select_candidate_violation",
     "negotiation_candidate_violation",
 ]
