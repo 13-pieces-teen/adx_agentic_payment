@@ -55,9 +55,16 @@ class _Pool:
 
 
 class _ProjectionConnection:
-    def __init__(self, authoritative_row, *, request_row=None):
+    def __init__(
+        self,
+        authoritative_row,
+        *,
+        request_row=None,
+        participant_busy=False,
+    ):
         self.authoritative_row = authoritative_row
         self.request_row = request_row
+        self.participant_busy = participant_busy
         self.calls: list[tuple[str, str, tuple[object, ...]]] = []
 
     def transaction(self):
@@ -94,6 +101,17 @@ class _ProjectionConnection:
                 "good_id": "grain",
                 "status": "open",
             }
+        if "FROM arena402.market_rfq_sessions" in normalized:
+            return {
+                "buyer_intent_id": "buyer-intent-1",
+                "frozen_directory": [
+                    {"intent_id": "seller-intent-1"},
+                    {"intent_id": "seller-intent-2"},
+                ],
+                "attempt_count": 0,
+                "max_attempts": 3,
+                "status": "active",
+            }
         if "INSERT INTO arena402.market_negotiation_requests" in normalized:
             return {"request_id": parameters[0]}
         if (
@@ -118,6 +136,15 @@ class _ProjectionConnection:
         ):
             return {"request_id": parameters[0]}
         raise AssertionError(f"unexpected fetchrow SQL: {normalized}")
+
+    async def fetchval(self, sql, *parameters):
+        normalized = " ".join(sql.split())
+        self.calls.append(("fetchval", normalized, parameters))
+        if "FROM arena402.market_negotiation_requests" in normalized:
+            return False
+        if "FROM arena402.participant_round_slots" in normalized:
+            return self.participant_busy
+        raise AssertionError(f"unexpected fetchval SQL: {normalized}")
 
     async def execute(self, sql, *parameters):
         normalized = " ".join(sql.split())
@@ -278,18 +305,17 @@ def test_intent_projection_persists_private_limit_but_never_emits_it() -> None:
     asyncio.run(scenario())
 
 
-def test_one_rfq_result_projects_multiple_agent_selected_targets() -> None:
+def test_one_rfq_result_projects_one_durable_attempt() -> None:
     async def scenario() -> None:
         result_id = "runtime:" + ("2" * 64)
         action = {
             "action": "request_negotiations",
             "requests": [
                 {
-                    "targetIntentId": f"seller-intent-{index}",
+                    "targetIntentId": "seller-intent-1",
                     "openingPrice": "1.700000",
-                    "message": f"请求 {index}",
+                    "message": "请求协商",
                 }
-                for index in (1, 2)
             ],
         }
         connection = _ProjectionConnection(
@@ -305,16 +331,22 @@ def test_one_rfq_result_projects_multiple_agent_selected_targets() -> None:
         )
 
         assert receipt["requestIds"] == [
-            "request:task:arena.market.rfq:1",
-            "request:task:arena.market.rfq:2",
+            "request:task:arena.market.rfq:1"
         ]
         request_inserts = [
             call
             for call in connection.calls
             if "INSERT INTO arena402.market_negotiation_requests" in call[1]
         ]
-        assert len(request_inserts) == 2
+        assert len(request_inserts) == 1
         assert {call[2][8] for call in request_inserts} == {result_id}
+        assert request_inserts[0][2][11] == 1
+        session_update = next(
+            call
+            for call in connection.calls
+            if "UPDATE arena402.market_rfq_sessions" in call[1]
+        )
+        assert session_update[2] == ("buyer-intent-1", 1)
 
     asyncio.run(scenario())
 
@@ -373,6 +405,53 @@ def test_seller_engage_projection_reserves_both_participant_slots() -> None:
     asyncio.run(scenario())
 
 
+def test_busy_selection_closes_request_without_creating_engagement() -> None:
+    async def scenario() -> None:
+        result_id = "runtime:" + ("5" * 64)
+        request_row = {
+            "request_id": "request-1",
+            "status": "pending",
+            "buyer_intent_id": "buyer-intent-1",
+            "seller_intent_id": "seller-intent-1",
+            "buyer_participant_id": "buyer-game-agent",
+            "seller_participant_id": "seller-game-agent",
+            "good_id": "grain",
+            "opening_price_atomic": 1_800_000,
+        }
+        connection = _ProjectionConnection(
+            _row(
+                "arena.market.select",
+                result_id,
+                _select_input(),
+                {"action": "engage", "requestId": "request-1"},
+            ),
+            request_row=request_row,
+            participant_busy=True,
+        )
+        repository = PostgresPawnhouseRepository(
+            "",
+            pool=_Pool(connection),
+        )
+
+        receipt = await repository.project_agent_market_application(
+            _application("arena.market.select", result_id)
+        )
+
+        assert receipt["status"] == "counterparty_busy"
+        assert not any(
+            "INSERT INTO arena402.market_engagements" in call[1]
+            for call in connection.calls
+        )
+        busy_update = next(
+            call
+            for call in connection.calls
+            if "SET status = 'counterparty_busy'" in call[1]
+        )
+        assert busy_update[2][0] == "request-1"
+
+    asyncio.run(scenario())
+
+
 def test_projection_worker_retries_only_unreceipted_applied_results() -> None:
     class _Repository:
         def __init__(self):
@@ -401,6 +480,37 @@ def test_projection_worker_retries_only_unreceipted_applied_results() -> None:
 
         assert repository.projected == [repository.application.result_id]
         assert results[0]["projected"] is True
+
+    asyncio.run(scenario())
+
+
+def test_selection_timeout_expires_pending_requests_for_fallback() -> None:
+    async def scenario() -> None:
+        result_id = "runtime:" + ("6" * 64)
+        authoritative = _row(
+            "arena.market.select",
+            result_id,
+            _select_input(),
+            None,
+        )
+        authoritative["application_outcome"] = "market_timeout"
+        connection = _ProjectionConnection(authoritative)
+        repository = PostgresPawnhouseRepository(
+            "",
+            pool=_Pool(connection),
+        )
+
+        receipt = await repository.project_agent_market_application(
+            _application("arena.market.select", result_id)
+        )
+
+        assert receipt["outcome"] == "market_timeout"
+        expired = next(
+            call
+            for call in connection.calls
+            if "SET status = 'expired'" in call[1]
+        )
+        assert expired[2][0] == ["request-1"]
 
     asyncio.run(scenario())
 

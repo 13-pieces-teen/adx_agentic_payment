@@ -23,6 +23,12 @@ from .money import format_gold
 
 
 MAX_OUTBOUND_RFQ = 3
+MAX_NEGOTIATION_ACTIONS = 3
+NEGOTIATE_STAGE_ACTION_SLOTS = (
+    MAX_OUTBOUND_RFQ * MAX_NEGOTIATION_ACTIONS
+    + (MAX_OUTBOUND_RFQ - 1)
+)
+MARKET_AFTER_DECIDE_ACTION_SLOTS = 1 + NEGOTIATE_STAGE_ACTION_SLOTS
 
 MarketSide = Literal["buy", "sell"]
 RequestStatus = Literal[
@@ -298,10 +304,12 @@ class AgentDrivenMarket:
         self,
         requests: tuple[AgentNegotiationRequest, ...],
     ) -> tuple[AgentNegotiationRequest, ...]:
-        """Atomically apply one Agent Result containing a bounded RFQ batch."""
+        """Apply one durable RFQ attempt from one Agent Result."""
 
-        if not requests or len(requests) > self._max_outbound_rfq:
-            raise AgentMarketError("RFQ batch exceeds the outbound budget")
+        if len(requests) != 1:
+            raise AgentMarketError(
+                "one RFQ Task must target exactly one seller"
+            )
         result_ids = {request.source_result_id for request in requests}
         buyer_intent_ids = {request.buyer_intent_id for request in requests}
         request_ids = [request.request_id for request in requests]
@@ -329,6 +337,12 @@ class AgentDrivenMarket:
             return existing
 
         buyer = self._require_intent(requests[0].buyer_intent_id)
+        if any(
+            record.request.buyer_intent_id == buyer.intent_id
+            and record.status in {"pending", "engaged"}
+            for record in self._requests.values()
+        ):
+            raise AgentMarketError("buyer has an unresolved RFQ")
         targets = set(
             self._request_targets_by_buyer.get(
                 buyer.intent_id,
@@ -546,6 +560,17 @@ class AgentDrivenMarket:
 
         buyer = self._require_intent(engagement.buyer_intent_id)
         seller = self._require_intent(engagement.seller_intent_id)
+        request = self._require_request_record(engagement.request_id).request
+        binding_opening = (
+            latest_proposal_result_id == request.source_result_id
+        )
+        if binding_opening and (
+            latest_proposal_actor_id != buyer.participant_id
+            or unit_price_atomic != request.opening_price_atomic
+        ):
+            raise AgentMarketError(
+                "binding RFQ proposal must preserve its buyer and opening price"
+            )
         if (
             unit_price_atomic <= 0
             or unit_price_atomic > buyer.limit_price_atomic
@@ -553,18 +578,23 @@ class AgentDrivenMarket:
         ):
             raise AgentMarketError("accepted price violates a private hard limit")
 
-        self._claim_results(
-            (
-                latest_proposal_result_id,
-                "proposal",
-                engagement_id,
-            ),
+        claims = [
             (
                 acceptance_result_id,
                 "acceptance",
                 engagement_id,
-            ),
-        )
+            )
+        ]
+        if not binding_opening:
+            claims.insert(
+                0,
+                (
+                    latest_proposal_result_id,
+                    "proposal",
+                    engagement_id,
+                ),
+            )
+        self._claim_results(*claims)
         deal = AgentMarketDeal(
             deal_id=deal_id,
             engagement_id=engagement_id,
@@ -679,6 +709,9 @@ __all__ = [
     "AgentNegotiationRequest",
     "EngagementStatus",
     "MAX_OUTBOUND_RFQ",
+    "MARKET_AFTER_DECIDE_ACTION_SLOTS",
+    "MAX_NEGOTIATION_ACTIONS",
+    "NEGOTIATE_STAGE_ACTION_SLOTS",
     "MarketSide",
     "RequestStatus",
 ]

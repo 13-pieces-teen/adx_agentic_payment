@@ -30,6 +30,7 @@ from arena_core.hashing import sha256_identifier, sha256_text_identifier
 from arena_core.models import AppliedArenaAction
 from db_pool_config import api_pool_max_size
 
+from .a2a_market import NEGOTIATE_STAGE_ACTION_SLOTS
 from .events import (
     EffectKind,
     EventEffect,
@@ -2737,7 +2738,9 @@ class PostgresPawnhouseRepository:
                     SET phase = $3,
                         phase_deadline_at = (
                             clock_timestamp()
-                            + $4 * interval '1 millisecond'
+                            + (
+                                $4::bigint * $6::bigint
+                            ) * interval '1 millisecond'
                         )
                     WHERE game_id = $1
                       AND round_id = $2
@@ -2749,6 +2752,11 @@ class PostgresPawnhouseRepository:
                     next_phase,
                     int(row["action_timeout_ms"]),
                     expected_phase,
+                    (
+                        NEGOTIATE_STAGE_ACTION_SLOTS
+                        if next_phase == "negotiate"
+                        else 1
+                    ),
                 )
                 if deadline is None:
                     raise PawnhouseRepositoryError(
@@ -2883,6 +2891,73 @@ class PostgresPawnhouseRepository:
                         "expires_at": seller["expires_at"],
                     }
                 )
+            session = await pool.fetchrow(
+                """
+                INSERT INTO arena402.market_rfq_sessions (
+                    buyer_intent_id,
+                    game_id,
+                    round_id,
+                    buyer_participant_id,
+                    frozen_directory,
+                    deadline_at
+                )
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+                ON CONFLICT (buyer_intent_id) DO UPDATE
+                SET buyer_intent_id = EXCLUDED.buyer_intent_id
+                RETURNING
+                    frozen_directory,
+                    attempt_count,
+                    max_attempts,
+                    status,
+                    deadline_at
+                """,
+                buyer["intent_id"],
+                game_id,
+                round_id,
+                buyer["game_participant_id"],
+                json.dumps(
+                    directory,
+                    default=lambda value: value.isoformat(),
+                ),
+                buyer["expires_at"],
+            )
+            if (
+                session is None
+                or str(session["status"]) != "active"
+                or int(session["attempt_count"])
+                >= int(session["max_attempts"])
+            ):
+                continue
+            prior_rows = await pool.fetch(
+                """
+                SELECT
+                    attempt_sequence,
+                    seller_intent_id,
+                    status
+                FROM arena402.market_negotiation_requests
+                WHERE buyer_intent_id = $1
+                ORDER BY attempt_sequence
+                """,
+                buyer["intent_id"],
+            )
+            if any(
+                str(prior["status"]) in {"pending", "engaged"}
+                for prior in prior_rows
+            ):
+                continue
+            frozen = session["frozen_directory"]
+            if isinstance(frozen, str):
+                frozen = json.loads(frozen)
+            attempted_targets = {
+                str(prior["seller_intent_id"]) for prior in prior_rows
+            }
+            directory = [
+                dict(entry)
+                for entry in list(frozen)
+                if str(entry["intent_id"]) not in attempted_targets
+            ]
+            if not directory:
+                continue
             config = buyer["config_snapshot"]
             contexts.append(
                 {
@@ -2904,6 +2979,216 @@ class PostgresPawnhouseRepository:
                     ),
                     "cash_atomic": int(buyer["cash_atomic"]),
                     "directory": directory,
+                    "attempt_sequence": (
+                        int(session["attempt_count"]) + 1
+                    ),
+                    "remaining_rfq_attempts": (
+                        int(session["max_attempts"])
+                        - int(session["attempt_count"])
+                    ),
+                    "prior_attempts": [
+                        {
+                            "attempt_sequence": int(
+                                prior["attempt_sequence"]
+                            ),
+                            "target_intent_id": str(
+                                prior["seller_intent_id"]
+                            ),
+                            "status": (
+                                "timed_out"
+                                if str(prior["status"]) == "expired"
+                                else str(prior["status"])
+                            ),
+                        }
+                        for prior in prior_rows
+                    ],
+                    "events": [],
+                    "config_snapshot": (
+                        json.loads(config)
+                        if isinstance(config, str)
+                        else dict(config)
+                    ),
+                }
+            )
+        return contexts
+
+    async def agent_market_fallback_rfq_contexts(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> list[dict[str, object]]:
+        """Resume only buyer-chosen RFQs from the original frozen directory."""
+
+        pool = self._require_pool()
+        round_row = await pool.fetchrow(
+            """
+            SELECT
+                round.round_index,
+                round.phase_deadline_at,
+                game.action_timeout_ms
+            FROM arena402.rounds AS round
+            JOIN arena402.games AS game
+              ON game.game_id = round.game_id
+            WHERE round.game_id = $1
+              AND round.round_id = $2
+              AND round.phase = 'negotiate'
+              AND round.phase_deadline_at > clock_timestamp()
+              AND game.market_protocol = 'agent_a2a.v1'
+            """,
+            game_id,
+            round_id,
+        )
+        if round_row is None:
+            return []
+        buyers = await pool.fetch(
+            """
+            SELECT
+                session.*,
+                intent.good_id,
+                intent.quantity,
+                intent.public_price_atomic,
+                intent.limit_price_atomic,
+                balance.cash_atomic,
+                game_agent.config_snapshot
+            FROM arena402.market_rfq_sessions AS session
+            JOIN arena402.market_intents AS intent
+              ON intent.intent_id = session.buyer_intent_id
+            JOIN arena402.balances AS balance
+              ON balance.game_participant_id =
+                 session.buyer_participant_id
+            JOIN public.game_agents AS game_agent
+              ON game_agent.game_agent_id =
+                 session.buyer_participant_id
+            WHERE session.game_id = $1
+              AND session.round_id = $2
+              AND session.status = 'active'
+              AND session.attempt_count BETWEEN 1
+                                            AND session.max_attempts - 1
+              AND session.deadline_at > clock_timestamp()
+              AND intent.status = 'open'
+              AND intent.expires_at > clock_timestamp()
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM arena402.market_negotiation_requests AS request
+                  WHERE request.buyer_intent_id =
+                        session.buyer_intent_id
+                    AND request.status IN ('pending', 'engaged')
+              )
+            ORDER BY session.buyer_intent_id
+            """,
+            game_id,
+            round_id,
+        )
+        live_seller_ids = {
+            str(row["intent_id"])
+            for row in await pool.fetch(
+                """
+                SELECT intent_id
+                FROM arena402.market_intents
+                WHERE game_id = $1
+                  AND round_id = $2
+                  AND side = 'sell'
+                  AND status = 'open'
+                  AND expires_at > clock_timestamp()
+                """,
+                game_id,
+                round_id,
+            )
+        }
+        contexts: list[dict[str, object]] = []
+        for buyer in buyers:
+            prior_rows = await pool.fetch(
+                """
+                SELECT
+                    attempt_sequence,
+                    seller_intent_id,
+                    status
+                FROM arena402.market_negotiation_requests
+                WHERE buyer_intent_id = $1
+                ORDER BY attempt_sequence
+                """,
+                buyer["buyer_intent_id"],
+            )
+            if len(prior_rows) != int(buyer["attempt_count"]):
+                raise PawnhouseRepositoryError(
+                    "agent_market_rfq_attempt_state_invalid"
+                )
+            attempted_targets = {
+                str(prior["seller_intent_id"]) for prior in prior_rows
+            }
+            frozen = buyer["frozen_directory"]
+            if isinstance(frozen, str):
+                frozen = json.loads(frozen)
+            directory = [
+                dict(entry)
+                for entry in list(frozen)
+                if str(entry["intent_id"]) not in attempted_targets
+                and str(entry["intent_id"]) in live_seller_ids
+            ]
+            if not directory:
+                await pool.execute(
+                    """
+                    UPDATE arena402.market_rfq_sessions
+                    SET status = 'completed',
+                        updated_at = clock_timestamp()
+                    WHERE buyer_intent_id = $1
+                      AND status = 'active'
+                    """,
+                    buyer["buyer_intent_id"],
+                )
+                continue
+            config = buyer["config_snapshot"]
+            contexts.append(
+                {
+                    "game_id": game_id,
+                    "round_id": round_id,
+                    "round_index": int(round_row["round_index"]),
+                    "deadline_at": min(
+                        round_row["phase_deadline_at"],
+                        buyer["deadline_at"],
+                        datetime.now(timezone.utc)
+                        + timedelta(
+                            milliseconds=int(
+                                round_row["action_timeout_ms"]
+                            )
+                        ),
+                    ),
+                    "participant_id": str(
+                        buyer["buyer_participant_id"]
+                    ),
+                    "buyer_intent_id": str(buyer["buyer_intent_id"]),
+                    "good": str(buyer["good_id"]),
+                    "quantity": int(buyer["quantity"]),
+                    "public_price_atomic": int(
+                        buyer["public_price_atomic"]
+                    ),
+                    "limit_price_atomic": int(
+                        buyer["limit_price_atomic"]
+                    ),
+                    "cash_atomic": int(buyer["cash_atomic"]),
+                    "directory": directory,
+                    "attempt_sequence": int(buyer["attempt_count"]) + 1,
+                    "remaining_rfq_attempts": (
+                        int(buyer["max_attempts"])
+                        - int(buyer["attempt_count"])
+                    ),
+                    "prior_attempts": [
+                        {
+                            "attempt_sequence": int(
+                                prior["attempt_sequence"]
+                            ),
+                            "target_intent_id": str(
+                                prior["seller_intent_id"]
+                            ),
+                            "status": (
+                                "timed_out"
+                                if str(prior["status"]) == "expired"
+                                else str(prior["status"])
+                            ),
+                        }
+                        for prior in prior_rows
+                    ],
                     "events": [],
                     "config_snapshot": (
                         json.loads(config)
@@ -2926,7 +3211,10 @@ class PostgresPawnhouseRepository:
         async with pool.acquire() as connection:
             round_row = await connection.fetchrow(
                 """
-                SELECT round.round_index, round.phase_deadline_at
+                SELECT
+                    round.round_index,
+                    round.phase_deadline_at,
+                    game.action_timeout_ms
                 FROM arena402.rounds AS round
                 JOIN arena402.games AS game
                   ON game.game_id = round.game_id
@@ -3006,7 +3294,15 @@ class PostgresPawnhouseRepository:
                         "game_id": game_id,
                         "round_id": round_id,
                         "round_index": int(round_row["round_index"]),
-                        "deadline_at": round_row["phase_deadline_at"],
+                        "deadline_at": min(
+                            round_row["phase_deadline_at"],
+                            datetime.now(timezone.utc)
+                            + timedelta(
+                                milliseconds=int(
+                                    round_row["action_timeout_ms"]
+                                )
+                            ),
+                        ),
                         "participant_id": str(
                             seller["game_participant_id"]
                         ),
@@ -3131,7 +3427,11 @@ class PostgresPawnhouseRepository:
                         seller.source_result_id AS seller_result_id,
                         seller.limit_price_atomic
                             AS seller_limit_price_atomic,
-                        request.opening_price_atomic
+                        request.opening_price_atomic,
+                        request.source_result_id
+                            AS rfq_result_id,
+                        request.public_message
+                            AS rfq_public_message
                     FROM arena402.market_engagements AS engagement
                     JOIN arena402.market_intents AS buyer
                       ON buyer.intent_id = engagement.buyer_intent_id
@@ -3268,11 +3568,19 @@ class PostgresPawnhouseRepository:
                             buyer_participant_id,
                             seller_participant_id,
                             max_turns,
+                            turn_count,
+                            next_role,
+                            latest_proposal_price_atomic,
+                            latest_proposal_role,
                             action_deadline_at
                         )
                         SELECT
                             $1, $2, $3, $4, $5, $6,
                             game.max_negotiation_turns,
+                            1,
+                            'seller',
+                            $7,
+                            'buyer',
                             clock_timestamp()
                             + game.action_timeout_ms
                               * interval '1 millisecond'
@@ -3287,6 +3595,61 @@ class PostgresPawnhouseRepository:
                         round_id,
                         row["buyer_participant_id"],
                         row["seller_participant_id"],
+                        row["opening_price_atomic"],
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO arena402.negotiation_messages (
+                            negotiation_message_id,
+                            negotiation_id,
+                            game_id,
+                            round_id,
+                            source_result_id,
+                            turn_sequence,
+                            actor_role,
+                            action,
+                            price_atomic,
+                            public_message,
+                            result_received_at
+                        )
+                        VALUES (
+                            $1, $2, $3, $4, $5, 1, 'buyer',
+                            'propose', $6, $7, $8
+                        )
+                        ON CONFLICT (source_result_id) DO NOTHING
+                        """,
+                        f"msg:{row['negotiation_id']}:1",
+                        row["negotiation_id"],
+                        game_id,
+                        round_id,
+                        row["rfq_result_id"],
+                        row["opening_price_atomic"],
+                        row["rfq_public_message"],
+                        row["created_at"],
+                    )
+                    await self._event(
+                        connection,
+                        game_id=game_id,
+                        round_id=round_id,
+                        event_type="negotiation.message",
+                        source_key=(
+                            f"{row['rfq_result_id']}:"
+                            f"{row['negotiation_id']}:binding-opening"
+                        ),
+                        public_payload={
+                            "negotiationId": str(
+                                row["negotiation_id"]
+                            ),
+                            "turn": 1,
+                            "role": "buyer",
+                            "action": "propose",
+                            "priceAtomic": str(
+                                row["opening_price_atomic"]
+                            ),
+                            "message": str(
+                                row["rfq_public_message"]
+                            ),
+                        },
                     )
                     await self._event(
                         connection,
@@ -3302,6 +3665,12 @@ class PostgresPawnhouseRepository:
                             "negotiationId": str(row["negotiation_id"]),
                             "requestId": str(row["request_id"]),
                             "good": str(row["good_id"]),
+                            "bindingOpeningPriceAtomic": str(
+                                row["opening_price_atomic"]
+                            ),
+                            "bindingOpeningResultId": str(
+                                row["rfq_result_id"]
+                            ),
                         },
                     )
                     negotiation_ids.append(str(row["negotiation_id"]))
@@ -3415,6 +3784,47 @@ class PostgresPawnhouseRepository:
                     )
                 outcome = str(row["application_outcome"])
                 if outcome != "candidate":
+                    input_snapshot = row["input_snapshot"]
+                    if isinstance(input_snapshot, str):
+                        input_snapshot = json.loads(input_snapshot)
+                    if (
+                        outcome == "market_timeout"
+                        and isinstance(input_snapshot, Mapping)
+                    ):
+                        if application.kind == "arena.market.rfq":
+                            task_input = (
+                                ArenaMarketRfqInputV1.model_validate(
+                                    input_snapshot
+                                )
+                            )
+                            await connection.execute(
+                                """
+                                UPDATE arena402.market_rfq_sessions
+                                SET status = 'expired',
+                                    updated_at = clock_timestamp()
+                                WHERE buyer_intent_id = $1
+                                  AND status = 'active'
+                                """,
+                                task_input.buyer_intent_id,
+                            )
+                        elif application.kind == "arena.market.select":
+                            task_input = (
+                                ArenaMarketSelectInputV1.model_validate(
+                                    input_snapshot
+                                )
+                            )
+                            await connection.execute(
+                                """
+                                UPDATE arena402.market_negotiation_requests
+                                SET status = 'expired'
+                                WHERE request_id = ANY($1::text[])
+                                  AND status = 'pending'
+                                """,
+                                [
+                                    request.request_id
+                                    for request in task_input.requests
+                                ],
+                            )
                     projection = {
                         "taskId": str(row["task_id"]),
                         "resultId": str(row["result_id"]),
@@ -3703,25 +4113,32 @@ class PostgresPawnhouseRepository:
         action: MarketRfqActionV1,
     ) -> dict[str, object]:
         if isinstance(action, PassAction):
+            await connection.execute(
+                """
+                UPDATE arena402.market_rfq_sessions
+                SET status = 'stopped',
+                    updated_at = clock_timestamp()
+                WHERE buyer_intent_id = $1
+                  AND game_id = $2
+                  AND round_id = $3
+                  AND status = 'active'
+                """,
+                task_input.buyer_intent_id,
+                row["game_id"],
+                row["round_id"],
+            )
             return {
                 "taskId": str(row["task_id"]),
                 "resultId": str(row["result_id"]),
                 "kind": str(row["task_kind"]),
                 "outcome": "candidate",
-                "projected": False,
+                "projected": True,
                 "action": "pass",
             }
         if not isinstance(action, RequestNegotiationsActionV1):
             raise PawnhouseRepositoryError(
                 "agent_market_rfq_action_invalid"
             )
-        batch_id = f"rfq-batch:{row['task_id']}"
-        await self._claim_market_result_locked(
-            connection,
-            row=row,
-            action_kind="rfq",
-            action_id=batch_id,
-        )
         buyer = await connection.fetchrow(
             """
             SELECT intent_id, game_participant_id, good_id, status
@@ -3747,6 +4164,67 @@ class PostgresPawnhouseRepository:
                 "agent_market_buyer_intent_invalid"
             )
 
+        session = await connection.fetchrow(
+            """
+            SELECT *
+            FROM arena402.market_rfq_sessions
+            WHERE buyer_intent_id = $1
+              AND game_id = $2
+              AND round_id = $3
+            FOR UPDATE
+            """,
+            task_input.buyer_intent_id,
+            row["game_id"],
+            row["round_id"],
+        )
+        if (
+            session is None
+            or str(session["status"]) != "active"
+            or int(session["attempt_count"])
+            >= int(session["max_attempts"])
+        ):
+            raise PawnhouseRepositoryError(
+                "agent_market_rfq_budget_exhausted"
+            )
+        attempt_sequence = int(session["attempt_count"]) + 1
+        if task_input.attempt_sequence != attempt_sequence:
+            raise PawnhouseRepositoryError(
+                "agent_market_rfq_attempt_sequence_invalid"
+            )
+        unresolved = await connection.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM arena402.market_negotiation_requests
+                WHERE buyer_intent_id = $1
+                  AND status IN ('pending', 'engaged')
+            )
+            """,
+            task_input.buyer_intent_id,
+        )
+        if unresolved:
+            raise PawnhouseRepositoryError(
+                "agent_market_buyer_has_unresolved_rfq"
+            )
+        frozen = session["frozen_directory"]
+        if isinstance(frozen, str):
+            frozen = json.loads(frozen)
+        frozen_targets = {
+            str(entry["intent_id"]) for entry in list(frozen)
+        }
+        candidate = action.requests[0]
+        if candidate.target_intent_id not in frozen_targets:
+            raise PawnhouseRepositoryError(
+                "agent_market_rfq_target_not_frozen"
+            )
+
+        action_id = f"rfq:{row['task_id']}:{attempt_sequence}"
+        await self._claim_market_result_locked(
+            connection,
+            row=row,
+            action_kind="rfq",
+            action_id=action_id,
+        )
         request_ids: list[str] = []
         for sequence, candidate in enumerate(action.requests, start=1):
             seller = await connection.fetchrow(
@@ -3789,11 +4267,12 @@ class PostgresPawnhouseRepository:
                     source_action_kind,
                     opening_price_atomic,
                     public_message,
+                    attempt_sequence,
                     created_at
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8,
-                    $9, 'rfq', $10, $11, $12
+                    $9, 'rfq', $10, $11, $12, $13
                 )
                 ON CONFLICT (request_id) DO UPDATE
                 SET request_id = EXCLUDED.request_id
@@ -3818,6 +4297,7 @@ class PostgresPawnhouseRepository:
                 row["result_id"],
                 gold(str(candidate.opening_price)),
                 candidate.message,
+                attempt_sequence,
                 row["authoritative_entered_at"],
             )
             if inserted is None:
@@ -3826,6 +4306,17 @@ class PostgresPawnhouseRepository:
                 )
             request_ids.append(request_id)
 
+        await connection.execute(
+            """
+            UPDATE arena402.market_rfq_sessions
+            SET attempt_count = $2,
+                updated_at = clock_timestamp()
+            WHERE buyer_intent_id = $1
+              AND attempt_count = $2 - 1
+            """,
+            task_input.buyer_intent_id,
+            attempt_sequence,
+        )
         await self._event(
             connection,
             game_id=str(row["game_id"]),
@@ -3836,6 +4327,10 @@ class PostgresPawnhouseRepository:
                 "buyerIntentId": task_input.buyer_intent_id,
                 "requestIds": request_ids,
                 "count": len(request_ids),
+                "attemptSequence": attempt_sequence,
+                "remainingAttempts": (
+                    int(session["max_attempts"]) - attempt_sequence
+                ),
             },
         )
         return {
@@ -4008,6 +4503,49 @@ class PostgresPawnhouseRepository:
             action_kind="engage",
             action_id=engagement_id,
         )
+        participant_busy = await connection.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM arena402.participant_round_slots
+                WHERE round_id = $1
+                  AND game_participant_id = ANY($2::text[])
+                  AND status IN ('reserved', 'consumed')
+            )
+            """,
+            row["round_id"],
+            participants,
+        )
+        if participant_busy:
+            await connection.execute(
+                """
+                UPDATE arena402.market_negotiation_requests
+                SET status = 'counterparty_busy'
+                WHERE request_id = $1
+                  AND status = 'pending'
+                """,
+                action.request_id,
+            )
+            await self._event(
+                connection,
+                game_id=str(row["game_id"]),
+                round_id=str(row["round_id"]),
+                event_type="market.rfq_busy",
+                source_key=str(row["result_id"]),
+                public_payload={
+                    "requestId": action.request_id,
+                    "status": "counterparty_busy",
+                },
+            )
+            return {
+                "taskId": str(row["task_id"]),
+                "resultId": str(row["result_id"]),
+                "kind": str(row["task_kind"]),
+                "outcome": "candidate",
+                "projected": True,
+                "requestId": action.request_id,
+                "status": "counterparty_busy",
+            }
         await connection.execute(
             """
             INSERT INTO arena402.market_engagements (
@@ -4814,11 +5352,14 @@ class PostgresPawnhouseRepository:
             SELECT
                 engagement.*,
                 negotiation.status AS negotiation_status,
-                negotiation.accepted_price_atomic
+                negotiation.accepted_price_atomic,
+                request.source_result_id AS rfq_result_id
             FROM arena402.market_engagements AS engagement
             JOIN arena402.negotiations AS negotiation
               ON negotiation.negotiation_id =
                  engagement.negotiation_id
+            JOIN arena402.market_negotiation_requests AS request
+              ON request.request_id = engagement.request_id
             WHERE engagement.negotiation_id = $1
             FOR UPDATE OF engagement
             """,
@@ -4868,19 +5409,25 @@ class PostgresPawnhouseRepository:
             acceptance_action_id = (
                 f"acceptance:{row['engagement_id']}"
             )
-            await self._claim_market_negotiation_result_locked(
-                connection,
-                result_id=str(proposal["source_result_id"]),
-                game_id=str(row["game_id"]),
-                round_id=str(row["round_id"]),
-                participant_id=(
-                    str(row["buyer_participant_id"])
-                    if str(proposal["actor_role"]) == "buyer"
-                    else str(row["seller_participant_id"])
-                ),
-                action_kind="proposal",
-                action_id=proposal_action_id,
+            proposal_is_binding_rfq = (
+                str(proposal["source_result_id"])
+                == str(row["rfq_result_id"])
+                and int(proposal["turn_sequence"]) == 1
             )
+            if not proposal_is_binding_rfq:
+                await self._claim_market_negotiation_result_locked(
+                    connection,
+                    result_id=str(proposal["source_result_id"]),
+                    game_id=str(row["game_id"]),
+                    round_id=str(row["round_id"]),
+                    participant_id=(
+                        str(row["buyer_participant_id"])
+                        if str(proposal["actor_role"]) == "buyer"
+                        else str(row["seller_participant_id"])
+                    ),
+                    action_kind="proposal",
+                    action_id=proposal_action_id,
+                )
             await self._claim_market_negotiation_result_locked(
                 connection,
                 result_id=str(acceptance["source_result_id"]),
@@ -4910,13 +5457,14 @@ class PostgresPawnhouseRepository:
                     unit_price_atomic,
                     latest_proposal_result_id,
                     latest_proposal_action_kind,
+                    latest_proposal_request_id,
                     acceptance_result_id,
                     acceptance_action_kind,
                     accepted_by_participant_id
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, 1, $9,
-                    $10, 'proposal', $11, 'acceptance', $12
+                    $10, $11, $12, $13, 'acceptance', $14
                 )
                 ON CONFLICT (engagement_id) DO NOTHING
                 """,
@@ -4930,6 +5478,16 @@ class PostgresPawnhouseRepository:
                 row["good_id"],
                 row["accepted_price_atomic"],
                 proposal["source_result_id"],
+                (
+                    "rfq"
+                    if proposal_is_binding_rfq
+                    else "proposal"
+                ),
+                (
+                    row["request_id"]
+                    if proposal_is_binding_rfq
+                    else None
+                ),
                 acceptance["source_result_id"],
                 (
                     row["buyer_participant_id"]
@@ -4959,6 +5517,16 @@ class PostgresPawnhouseRepository:
                   AND status = 'reserved'
                 """,
                 row["engagement_id"],
+            )
+            await connection.execute(
+                """
+                UPDATE arena402.market_rfq_sessions
+                SET status = 'completed',
+                    updated_at = clock_timestamp()
+                WHERE buyer_intent_id = $1
+                  AND status = 'active'
+                """,
+                row["buyer_intent_id"],
             )
             await self._event(
                 connection,
@@ -5038,6 +5606,31 @@ class PostgresPawnhouseRepository:
               AND status = 'reserved'
             """,
             row["engagement_id"],
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.market_negotiation_requests
+            SET status = $2
+            WHERE request_id = $1
+              AND status = 'engaged'
+            """,
+            row["request_id"],
+            (
+                "expired"
+                if engagement_status == "timed_out"
+                else "rejected"
+            ),
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.market_intents
+            SET status = 'open'
+            WHERE intent_id IN ($1, $2)
+              AND status = 'reserved'
+              AND expires_at > clock_timestamp()
+            """,
+            row["buyer_intent_id"],
+            row["seller_intent_id"],
         )
 
     @staticmethod

@@ -108,6 +108,20 @@ def test_decide_view_only_advertises_actions_backed_by_frozen_assets():
     assert empty.limits.allowed_goods == []
 
 
+def test_agent_market_intent_survives_the_full_sequential_protocol_budget():
+    context = _decide_context(
+        cash_atomic=20_000_000,
+        holdings={"grain": 1, "iron": 0, "warhorse": 0, "gems": 0},
+    )
+    context["action_timeout_ms"] = 5_000
+
+    view = PawnhouseAgentRuntimeCoordinator._market_intent_view(context)
+
+    assert view.market_expires_at - view.deadline_at == timedelta(
+        seconds=60
+    )
+
+
 class _AgentMarketCore:
     def __init__(self) -> None:
         self.applied: list[str] = []
@@ -275,6 +289,9 @@ class _AgentMarketPawnhouse:
     async def active_hosted_negotiation_ids(self, **_):
         return []
 
+    async def agent_market_fallback_rfq_contexts(self, **_):
+        return []
+
 
 def test_agent_market_coordinator_runs_all_agent_authored_stages() -> None:
     async def scenario():
@@ -307,4 +324,59 @@ def test_agent_market_coordinator_runs_all_agent_authored_stages() -> None:
         "result:task:arena.market.intent",
         "result:task:arena.market.rfq",
         "result:task:arena.market.select",
+    ]
+
+
+def test_agent_market_coordinator_dispatches_agent_selected_fallback() -> None:
+    class _FallbackPawnhouse(_AgentMarketPawnhouse):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fallback_calls = 0
+
+        async def agent_market_fallback_rfq_contexts(self, **_):
+            self.fallback_calls += 1
+            if self.fallback_calls > 1:
+                return []
+            context = (await self.agent_market_rfq_contexts())[0]
+            context.update(
+                {
+                    "attempt_sequence": 2,
+                    "remaining_rfq_attempts": 2,
+                    "prior_attempts": [
+                        {
+                            "attempt_sequence": 1,
+                            "target_intent_id": "seller-intent-old",
+                            "status": "rejected",
+                        }
+                    ],
+                }
+            )
+            return [context]
+
+    async def scenario():
+        core = _AgentMarketCore()
+        pawnhouse = _FallbackPawnhouse()
+        coordinator = PawnhouseAgentRuntimeCoordinator(
+            pawnhouse=pawnhouse,
+            arena_core=core,
+        )
+        factory = _AgentMarketFactory()
+        coordinator._factory = factory
+        await coordinator._process(
+            run_id="run-1",
+            game_id="game-1",
+            round_id="round-1",
+            lease_epoch=1,
+            market_protocol="agent_a2a.v1",
+        )
+        return pawnhouse, factory
+
+    pawnhouse, factory = asyncio.run(scenario())
+    assert pawnhouse.fallback_calls == 2
+    assert factory.kinds == [
+        "arena.market.intent",
+        "arena.market.rfq",
+        "arena.market.select",
+        "arena.market.rfq",
+        "arena.market.select",
     ]

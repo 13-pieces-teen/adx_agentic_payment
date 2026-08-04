@@ -30,6 +30,7 @@ from .tasks import Identifier, NonNegativeInt, UtcDateTime
 
 ARENA_MARKET_PROTOCOL_VERSION_V1: Final = "arena.market.v1"
 MAX_OUTBOUND_RFQ_V1: Final = 3
+MAX_RFQ_PER_ACTION_V1: Final = 1
 
 
 def _to_camel(field_name: str) -> str:
@@ -115,7 +116,7 @@ class RequestNegotiationsActionV1(_StrictMarketWireModel):
     action: Literal["request_negotiations"]
     requests: Annotated[
         list[NegotiationRequestCandidateV1],
-        Field(min_length=1, max_length=MAX_OUTBOUND_RFQ_V1),
+        Field(min_length=1, max_length=MAX_RFQ_PER_ACTION_V1),
     ]
 
     @field_validator("requests")
@@ -177,6 +178,7 @@ __all__ = [
     "AgentDrivenMarketActionV1",
     "EngageRequestActionV1",
     "MAX_OUTBOUND_RFQ_V1",
+    "MAX_RFQ_PER_ACTION_V1",
     "MarketDirectoryEntryV1",
     "MarketDirectoryV1",
     "MarketIntentActionV1",

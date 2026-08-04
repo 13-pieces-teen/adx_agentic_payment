@@ -90,7 +90,7 @@ func decodeArenaTask(raw json.RawMessage, now time.Time) (arenaTaskEnvelope, str
 			"Return exactly one JSON action object allowed by the task kind, with no markdown or additional text.",
 			"For arena.decide buy/sell, use limitPrice (never price) when setting a price.",
 			"For arena.market.intent buy/sell, provide good, quantity 1, publicPrice, limitPrice, and an optional public message; pass has only action.",
-			"For arena.market.rfq, choose only targetIntentId values present in input.directory and return request_negotiations with 1 to 3 requests, or pass.",
+			"For arena.market.rfq, choose exactly one targetIntentId present in input.directory and return request_negotiations with exactly one request, or pass; openingPrice is your binding negotiation turn 1.",
 			"For arena.market.select, choose only a requestId present in input.requests and return engage, or return reject_all.",
 			"For arena.negotiate, use the exact keys action, price, and message (never type or quote), use propose (never offer), and keep the public message at 100 Unicode characters or fewer.",
 			"For arena.negotiate: choose propose, accept, or reject; the buyer's first turn must propose inside its limitPrice; accept only a latest counterparty quote inside your limitPrice; you may reject any quote or counter inside your limitPrice while remainingTurns > 1; the final turn must accept or reject.",
@@ -472,9 +472,9 @@ func validateArenaAction(taskKind string, raw []byte) (json.RawMessage, error) {
 	}
 	if discriminator.Action == "request_negotiations" {
 		requests, ok := fields["requests"].([]any)
-		if !ok || len(requests) < 1 || len(requests) > 3 {
+		if !ok || len(requests) != 1 {
 			return nil, errors.New(
-				"Arena RFQ action must contain 1 to 3 requests",
+				"Arena RFQ action must contain exactly one request",
 			)
 		}
 		seenTargets := map[string]struct{}{}
@@ -627,7 +627,7 @@ func arenaActionOutputSchema(taskKind string) ([]byte, error) {
 					"requests": map[string]any{
 						"type":     "array",
 						"minItems": 1,
-						"maxItems": 3,
+						"maxItems": 1,
 						"items": map[string]any{
 							"type":                 "object",
 							"additionalProperties": false,
@@ -810,7 +810,7 @@ func arenaActionCodexOutputSchema(taskKind string) ([]byte, error) {
 			"requests": map[string]any{
 				"type":     []string{"array", "null"},
 				"minItems": 1,
-				"maxItems": 3,
+				"maxItems": 1,
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,

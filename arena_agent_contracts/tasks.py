@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
@@ -30,6 +31,13 @@ from .actions import (
 )
 
 AGENT_TASK_SCHEMA_VERSION_V1: Final = "arena.agent-task.v1"
+
+
+def market_select_request_set_token(request_ids: list[str]) -> str:
+    """Derive a bounded task-key suffix without exposing request contents."""
+
+    canonical = "\x00".join(sorted(request_ids)).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _to_camel(field_name: str) -> str:
@@ -321,6 +329,20 @@ class ArenaMarketDirectoryEntryV1(_StrictWireModel):
         return value
 
 
+class ArenaPriorRfqAttemptV1(_StrictWireModel):
+    """One terminal RFQ attempt from the same frozen buyer directory."""
+
+    attempt_sequence: Annotated[int, Field(ge=1, le=3)]
+    target_intent_id: Identifier
+    status: Literal[
+        "rejected",
+        "counterparty_busy",
+        "expired",
+        "cancelled",
+        "timed_out",
+    ]
+
+
 class ArenaMarketRfqInputV1(_StrictWireModel):
     """Frozen public directory plus the buyer's private hard boundary."""
 
@@ -337,6 +359,11 @@ class ArenaMarketRfqInputV1(_StrictWireModel):
     cash: NonNegativeFixedDecimal
     directory: list[ArenaMarketDirectoryEntryV1] = Field(default_factory=list)
     max_outbound_rfq: Annotated[int, Field(ge=1, le=3)] = 3
+    attempt_sequence: Annotated[int, Field(ge=1, le=3)] = 1
+    remaining_rfq_attempts: Annotated[int, Field(ge=1, le=3)] = 3
+    prior_attempts: list[ArenaPriorRfqAttemptV1] = Field(
+        default_factory=list
+    )
     events: list[ArenaPublicEventV1] = Field(default_factory=list)
     deadline_at: UtcDateTime
 
@@ -347,6 +374,26 @@ class ArenaMarketRfqInputV1(_StrictWireModel):
             raise ValueError("directory must not contain duplicate intent IDs")
         if any(entry.good != self.good for entry in self.directory):
             raise ValueError("directory entries must match the buyer good")
+        if self.remaining_rfq_attempts != 4 - self.attempt_sequence:
+            raise ValueError(
+                "remainingRfqAttempts must include the current bounded attempt"
+            )
+        if len(self.prior_attempts) != self.attempt_sequence - 1:
+            raise ValueError(
+                "priorAttempts must cover every earlier RFQ attempt"
+            )
+        sequences = [
+            attempt.attempt_sequence for attempt in self.prior_attempts
+        ]
+        if sequences != list(range(1, self.attempt_sequence)):
+            raise ValueError("priorAttempts must be ordered and contiguous")
+        attempted_targets = {
+            attempt.target_intent_id for attempt in self.prior_attempts
+        }
+        if attempted_targets.intersection(intent_ids):
+            raise ValueError(
+                "directory must contain only unattempted frozen targets"
+            )
         return self
 
 
@@ -502,10 +549,36 @@ class ArenaAgentTaskV1(_StrictWireModel):
             if self.negotiation_id is not None:
                 raise ValueError(f"{self.kind} must not include negotiationId")
             suffix = self.kind.removeprefix("arena.market.")
-            expected_key = (
+            base_key = (
                 f"{self.game_id}:{self.round_id}:{self.game_agent_id}:"
                 f"market-{suffix}"
             )
+            if self.kind == "arena.market.rfq":
+                assert isinstance(self.input, ArenaMarketRfqInputV1)
+                expected_key = (
+                    f"{base_key}:{self.input.attempt_sequence}"
+                )
+                if (
+                    self.input.attempt_sequence == 1
+                    and self.idempotency_key == base_key
+                ):
+                    expected_key = base_key
+            else:
+                expected_key = base_key
+                if self.kind == "arena.market.select":
+                    assert isinstance(
+                        self.input,
+                        ArenaMarketSelectInputV1,
+                    )
+                    request_set_token = market_select_request_set_token(
+                        [
+                            request.request_id
+                            for request in self.input.requests
+                        ]
+                    )
+                    derived_key = f"{base_key}:{request_set_token}"
+                    if self.idempotency_key != base_key:
+                        expected_key = derived_key
 
         if self.idempotency_key != expected_key:
             raise ValueError(
@@ -520,6 +593,7 @@ __all__ = [
     "ArenaInboundRfqV1",
     "ArenaMarketDirectoryEntryV1",
     "ArenaMarketIntentInputV1",
+    "ArenaPriorRfqAttemptV1",
     "ArenaMarketRfqInputV1",
     "ArenaMarketSelectInputV1",
     "ArenaCompletedActionV1",
@@ -538,4 +612,5 @@ __all__ = [
     "PublicJsonValue",
     "UtcDateTime",
     "ArenaTaskKindV1",
+    "market_select_request_set_token",
 ]

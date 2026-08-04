@@ -625,7 +625,7 @@ create game
       Deadline Finalizer；旧 `arena.decide/negotiate` 仍委托冻结的
       `fcfs.v1` apply policy。
 - [x] Phase A Market projection：生产 Worker 会重扫尚无 receipt 的 applied
-      market Result，并原子、幂等地投影 Intent、单 Result 多目标 RFQ 和带双方
+      market Result，并原子、幂等地投影 Intent、单目标顺序 RFQ 和带双方
       Participant round-slot 的 Engagement；公开事件不含私有限价。
 - [x] Phase A Round integration：`057` 以 Game 冻结
       `market_protocol=agent_a2a.v1`，编排 intent → RFQ → select →
@@ -660,10 +660,17 @@ create game
       `authorizationMode=none`，所以谈判安全终结为 `settlement_failed`，且为
       0 SettlementIntent、0 inventory commit、0 现金/持仓变更、0 chain write。
       payment-enabled Injective testnet A2A 仍待显式人工确认后验收。
-- [ ] Phase C protocol completion：将 RFQ `openingPrice` 作为 Engage 后不可变的
-      Turn 1 proposal；每个 RFQ Task 只联系一个对手，每轮最多三次尝试和两次
-      Agent-selected fallback，同一时间最多一个 Engagement。实现前需增加 RFQ
-      request 级 proposal provenance，并确保 settlement failure 不触发 fallback。
+- [x] Phase C protocol implementation：迁移 `060` 和 Runtime/Coordinator 已将
+      RFQ `openingPrice` 作为 Engage 后不可变的 Turn 1 proposal；每个 RFQ
+      Task 只联系一个对手，冻结目录、尝试序号、最多三次尝试和两次
+      Agent-selected fallback 均持久化，同一买方只能有一个 pending/engaged
+      RFQ。busy、reject、selection/negotiation timeout 会释放下一次选择；
+      accepted Deal 和 settlement failure 会关闭 RFQ session，不能 fallback。
+      Fake scripted 局 `full-hosted-1785853139-cd4e22d1` 已验证 request/result
+      级 binding proposal Deal、卖方直接 accept、0 SettlementIntent 和 0 链写入。
+- [ ] Phase C protocol acceptance：补真实多卖方 fallback E2E，以及 Hosted +
+      Codex mixed reconnect、lease expiry、deadline default、durable replay 和
+      projection recovery；完成真实 P95/P99 负载校准前不切换 Current Game。
 - [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
       fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；
       `agent_a2a.v1` 永久保持 `quantity=1`。

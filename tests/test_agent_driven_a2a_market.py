@@ -101,43 +101,30 @@ def test_market_wire_actions_are_strict_versioned_agent_choices() -> None:
         )
 
 
-def test_rfq_action_is_bounded_and_deduplicates_targets() -> None:
+def test_rfq_action_is_sequential_and_requires_exactly_one_target() -> None:
     action = RequestNegotiationsActionV1.model_validate(
         {
             "action": "request_negotiations",
             "requests": [
                 {
-                    "targetIntentId": f"sell_{index}",
+                    "targetIntentId": "sell_1",
                     "openingPrice": "1.700000",
-                    "message": f"报价 {index}",
+                    "message": "报价一",
                 }
-                for index in range(3)
             ],
         }
     )
-    assert len(action.requests) == 3
+    assert len(action.requests) == 1
 
     for requests in (
         [],
         [
             {
-                "targetIntentId": f"sell_{index}",
+                "targetIntentId": f"sell_{index + 1}",
                 "openingPrice": "1.700000",
-                "message": f"报价 {index}",
+                "message": f"报价 {index + 1}",
             }
-            for index in range(4)
-        ],
-        [
-            {
-                "targetIntentId": "sell_1",
-                "openingPrice": "1.700000",
-                "message": "报价一",
-            },
-            {
-                "targetIntentId": "sell_1",
-                "openingPrice": "1.800000",
-                "message": "报价二",
-            },
+            for index in range(2)
         ],
     ):
         with pytest.raises(ValidationError):
@@ -255,7 +242,7 @@ def test_buyer_authors_rfq_and_seller_agent_authors_engagement() -> None:
     )
 
 
-def test_one_agent_result_can_atomically_author_a_bounded_rfq_batch() -> None:
+def test_buyer_uses_three_durable_sequential_rfq_attempts() -> None:
     market = AgentDrivenMarket()
     buyer = market.publish_intent(_intent("buyer", "buyer", "buy"))
     sellers = tuple(
@@ -268,26 +255,37 @@ def test_one_agent_result_can_atomically_author_a_bounded_rfq_batch() -> None:
                 limit_price="1.6",
             )
         )
-        for index in range(3)
+        for index in range(4)
     )
     requests = tuple(
-        AgentNegotiationRequest(
-            request_id=f"request_{index}",
-            source_result_id="result:rfq-batch",
-            buyer_intent_id=buyer.intent_id,
-            seller_intent_id=seller.intent_id,
-            opening_price_atomic=gold("1.7"),
-            public_message=f"协商请求 {index}",
-            created_at=NOW,
+        _request(
+            f"request_{index}",
+            buyer.intent_id,
+            seller.intent_id,
         )
         for index, seller in enumerate(sellers)
     )
 
-    assert market.submit_requests(requests) == requests
-    assert market.submit_requests(requests) == requests
-    assert market.inbound_requests(
-        seller_participant_id="seller_2"
-    ) == (requests[2],)
+    assert market.submit_request(requests[0]) == requests[0]
+    with pytest.raises(AgentMarketError, match="unresolved RFQ"):
+        market.submit_request(requests[1])
+
+    for index, request in enumerate(requests[:3]):
+        if index > 0:
+            assert market.submit_request(request) == request
+        engagement = market.engage_request(
+            actor_participant_id=f"seller_{index}",
+            request_id=request.request_id,
+            selection_result_id=f"result:select-{index}",
+        )
+        market.close_engagement(
+            engagement_id=engagement.engagement_id,
+            status="rejected",
+            source_result_id=f"result:reject-{index}",
+        )
+
+    with pytest.raises(AgentMarketError, match="exhausted"):
+        market.submit_request(requests[3])
 
 
 def test_one_seller_cannot_engage_two_buyers_in_the_same_round() -> None:
@@ -348,9 +346,6 @@ def test_rejection_requires_an_agent_result_and_releases_fallback_slots() -> Non
     request_a = market.submit_request(
         _request("request_a", buyer.intent_id, seller_a.intent_id)
     )
-    request_b = market.submit_request(
-        _request("request_b", buyer.intent_id, seller_b.intent_id)
-    )
     engagement_a = market.engage_request(
         actor_participant_id="seller_a",
         request_id=request_a.request_id,
@@ -368,6 +363,9 @@ def test_rejection_requires_an_agent_result_and_releases_fallback_slots() -> Non
         engagement_id=engagement_a.engagement_id,
         status="rejected",
         source_result_id="result:seller-reject",
+    )
+    request_b = market.submit_request(
+        _request("request_b", buyer.intent_id, seller_b.intent_id)
     )
     engagement_b = market.engage_request(
         actor_participant_id="seller_b",
@@ -437,6 +435,46 @@ def test_deal_requires_opposite_agent_proposal_and_acceptance_results() -> None:
         )
         == deal
     )
+
+
+def test_seller_can_accept_the_binding_rfq_opening_proposal() -> None:
+    market = AgentDrivenMarket()
+    buyer = market.publish_intent(_intent("buyer", "buyer", "buy"))
+    seller = market.publish_intent(
+        _intent(
+            "seller",
+            "seller",
+            "sell",
+            public_price="1.9",
+            limit_price="1.6",
+        )
+    )
+    request = market.submit_request(
+        _request(
+            "request_1",
+            buyer.intent_id,
+            seller.intent_id,
+            opening_price="1.8",
+        )
+    )
+    engagement = market.engage_request(
+        actor_participant_id="seller",
+        request_id=request.request_id,
+        selection_result_id="result:seller-engage",
+    )
+
+    deal = market.freeze_deal(
+        engagement_id=engagement.engagement_id,
+        latest_proposal_result_id=request.source_result_id,
+        latest_proposal_actor_id="buyer",
+        acceptance_result_id="result:seller-accept",
+        accepted_by_participant_id="seller",
+        unit_price_atomic=request.opening_price_atomic,
+    )
+
+    assert deal.request_id == request.request_id
+    assert deal.latest_proposal_result_id == request.source_result_id
+    assert deal.unit_price_atomic == request.opening_price_atomic
 
 
 def test_protocol_oracle_has_no_central_pairing_operation() -> None:

@@ -16,6 +16,7 @@ from arena_agent_contracts import (
     ArenaMarketSelectInputV1,
     ArenaNegotiateInputV1,
     ArenaTaskKindV1,
+    market_select_request_set_token,
 )
 
 from .hashing import sha256_identifier
@@ -134,6 +135,21 @@ class ArenaTaskFactory:
         config_snapshot: dict[str, Any],
     ) -> ArenaTaskRecord:
         suffix = kind.removeprefix("arena.market.")
+        task_suffix = suffix
+        if kind == "arena.market.rfq":
+            assert isinstance(participant_view, ArenaMarketRfqInputV1)
+            task_suffix = (
+                f"{suffix}:{participant_view.attempt_sequence}"
+            )
+        elif kind == "arena.market.select":
+            assert isinstance(participant_view, ArenaMarketSelectInputV1)
+            request_set_token = market_select_request_set_token(
+                [
+                    request.request_id
+                    for request in participant_view.requests
+                ]
+            )
+            task_suffix = f"{suffix}:{request_set_token}"
         return await self._create(
             kind=kind,
             game_agent_id=game_agent_id,
@@ -142,7 +158,7 @@ class ArenaTaskFactory:
             negotiation_id=None,
             idempotency_key=(
                 f"{participant_view.game_id}:{participant_view.round_id}:"
-                f"{game_agent_id}:market-{suffix}"
+                f"{game_agent_id}:market-{task_suffix}"
             ),
         )
 

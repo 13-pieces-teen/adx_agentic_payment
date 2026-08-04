@@ -29,6 +29,7 @@ from arena_core.application_policy import derive_application
 from arena_core.postgres_repository import PostgresArenaCoreRepository
 from arena_core.task_factory import ArenaTaskFactory
 
+from .a2a_market import MARKET_AFTER_DECIDE_ACTION_SLOTS
 from .goods import GOOD_IDS
 from .postgres import PawnhouseRepositoryError, PostgresPawnhouseRepository
 
@@ -458,6 +459,33 @@ class PawnhouseAgentRuntimeCoordinator:
                         for negotiation_id in negotiation_ids
                     )
                 )
+                fallback_contexts = (
+                    await self._pawnhouse.agent_market_fallback_rfq_contexts(
+                        game_id=game_id,
+                        round_id=round_id,
+                    )
+                )
+                if fallback_contexts:
+                    fallback_tasks = [
+                        await self._factory.create_market_rfq_task(
+                            game_agent_id=str(
+                                context["participant_id"]
+                            ),
+                            participant_view=self._market_rfq_view(
+                                context
+                            ),
+                            config_snapshot=dict(
+                                context["config_snapshot"]
+                            ),
+                        )
+                        for context in fallback_contexts
+                    ]
+                    await self._wait_apply_and_project_market_tasks(
+                        fallback_tasks,
+                        run_id=run_id,
+                        lease_epoch=lease_epoch,
+                    )
+                    continue
                 return
             raise PawnhouseRepositoryError(
                 "agent_market_round_phase_invalid"
@@ -702,7 +730,10 @@ class PawnhouseAgentRuntimeCoordinator:
         payload["market_expires_at"] = (
             context["deadline_at"]
             + timedelta(
-                milliseconds=2 * int(context["action_timeout_ms"])
+                milliseconds=(
+                    MARKET_AFTER_DECIDE_ACTION_SLOTS
+                    * int(context["action_timeout_ms"])
+                )
             )
         )
         return ArenaMarketIntentInputV1.model_validate(payload)
@@ -742,6 +773,13 @@ class PawnhouseAgentRuntimeCoordinator:
                 for entry in list(context["directory"])
             ],
             max_outbound_rfq=3,
+            attempt_sequence=int(
+                context.get("attempt_sequence", 1)
+            ),
+            remaining_rfq_attempts=int(
+                context.get("remaining_rfq_attempts", 3)
+            ),
+            prior_attempts=list(context.get("prior_attempts", [])),
             events=_public_events(list(context["events"])),
             deadline_at=context["deadline_at"],
         )
@@ -750,6 +788,7 @@ class PawnhouseAgentRuntimeCoordinator:
     def _market_select_view(
         context: dict[str, object],
     ) -> ArenaMarketSelectInputV1:
+        requests = list(context["requests"])
         return ArenaMarketSelectInputV1(
             phase="market_select",
             market_protocol="agent_a2a.v1",
@@ -781,7 +820,7 @@ class PawnhouseAgentRuntimeCoordinator:
                     message=str(request["message"]),
                     received_at=request["received_at"],
                 )
-                for request in list(context["requests"])
+                for request in requests
             ],
             max_engagements=1,
             events=_public_events(list(context["events"])),

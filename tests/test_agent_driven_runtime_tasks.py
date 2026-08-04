@@ -152,9 +152,51 @@ def test_factory_creates_idempotent_market_phase_tasks() -> None:
         assert intent.task.kind == "arena.market.intent"
         assert intent.task.idempotency_key.endswith(":market-intent")
         assert rfq.task.kind == "arena.market.rfq"
-        assert rfq.task.idempotency_key.endswith(":market-rfq")
+        assert rfq.task.idempotency_key.endswith(":market-rfq:1")
         assert select.task.kind == "arena.market.select"
-        assert select.task.idempotency_key.endswith(":market-select")
+        assert ":market-select:" in select.task.idempotency_key
+
+    asyncio.run(scenario())
+
+
+def test_each_sequential_rfq_attempt_has_a_distinct_durable_task_key() -> None:
+    async def scenario() -> None:
+        repository = MemoryArenaCoreRepository()
+        factory = ArenaTaskFactory(repository, clock=lambda: NOW)
+        first_view = _rfq_input()
+        second_payload = first_view.model_dump(
+            mode="python",
+            by_alias=True,
+        )
+        second_payload.update(
+            {
+                "attemptSequence": 2,
+                "remainingRfqAttempts": 2,
+                "priorAttempts": [
+                    {
+                        "attemptSequence": 1,
+                        "targetIntentId": "seller-intent-old",
+                        "status": "rejected",
+                    }
+                ],
+            }
+        )
+        second_view = ArenaMarketRfqInputV1.model_validate(second_payload)
+
+        first = await factory.create_market_rfq_task(
+            game_agent_id="buyer-game-agent",
+            participant_view=first_view,
+            config_snapshot={"provider": "fake"},
+        )
+        second = await factory.create_market_rfq_task(
+            game_agent_id="buyer-game-agent",
+            participant_view=second_view,
+            config_snapshot={"provider": "fake"},
+        )
+
+        assert first.task.idempotency_key.endswith(":market-rfq:1")
+        assert second.task.idempotency_key.endswith(":market-rfq:2")
+        assert first.task.task_id != second.task.task_id
 
     asyncio.run(scenario())
 

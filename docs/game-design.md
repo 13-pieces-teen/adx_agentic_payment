@@ -185,7 +185,10 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 > 状态机验证边界和真实 Agent 验收顺序见
 > [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)。
 > 本地 opt-in 双 Codex payment-disabled E2E 已形成带独立 proposal/acceptance
-> Result provenance 的 Deal；mixed-Runtime、支付和 Current Game 切换仍未验收。
+> Result provenance 的 Deal。迁移 `060` 已进一步把 RFQ `openingPrice` 固定为
+> Turn 1、限制每个 RFQ Task 只选一个对手，并持久化最多三次顺序尝试；本地 Fake
+> scripted E2E 已验证卖方直接接受该绑定开价。真实多对手 fallback、
+> mixed-Runtime、支付和 Current Game 切换仍未验收。
 > 旧 Game 保持创建时冻结的协议版本，不能原地改义。
 
 每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为

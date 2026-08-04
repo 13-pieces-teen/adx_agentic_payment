@@ -45,9 +45,15 @@ Connector 已在 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage →
 0 资产变更和 0 链写入；mixed-Runtime A2A 与 payment-enabled A2A 仍未验收，
 Current Game 尚不切换。
 
-已冻结的下一阶段要求是：RFQ `openingPrice` 直接成为 Engage 后不可更改的第一条
-proposal；每个 RFQ Task 顺序选择一个对手，每轮最多三次尝试和两次
-Agent-selected fallback；同局所有 Runtime 的 `action_timeout_ms` 使用目标负载下
+迁移 `060_arena_binding_rfq_and_sequential_fallback.sql` 已实现下一段协议：
+RFQ `openingPrice` 在 Engage 后直接物化为不可更改的 Turn 1 proposal；每个
+RFQ Task 只能选择一个对手，冻结目录、尝试序号和最多三次总预算持久化，且
+busy、reject、selection/negotiation timeout 才能释放到下一次 Agent-selected
+fallback。同一买方不能同时存在两个未终结 RFQ，accepted Deal 或 settlement
+failure 都不会触发 fallback。本地 `full-hosted-1785853139-cd4e22d1` Fake
+scripted E2E 已验证 RFQ Result/请求与 Deal 最新 proposal 的精确绑定、卖方直接
+accept、0 SettlementIntent 和 0 链写入；真实多对手 fallback 与 mixed-Runtime
+恢复证据仍待补。同局所有 Runtime 的 `action_timeout_ms` 使用目标负载下
 端到端 P99 最大值 × `1.25` 并向上取整到 5 秒。真实验收优先 Hosted + Codex
 mixed/recovery，不等待 Claude Code 外部连接；payment-enabled testnet 仍需显式
 人工确认。`agent_a2a.v1` 永久固定数量 1，未来无 partial fill 的有界数量使用新

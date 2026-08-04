@@ -186,6 +186,12 @@ AGENT_NEGOTIATION_AUTONOMY_SQL_PATH = (
     / "migrations"
     / "059_arena_agent_negotiation_autonomy.sql"
 )
+BINDING_RFQ_FALLBACK_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "060_arena_binding_rfq_and_sequential_fallback.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1046,4 +1052,32 @@ def test_agent_negotiation_policy_validates_bounds_without_choosing_strategy(
     assert (
         AGENT_NEGOTIATION_AUTONOMY_SQL_PATH
         in migrate_module.migration_files("arena")
+    )
+
+
+def test_binding_rfq_and_sequential_fallback_are_durable(
+    monkeypatch,
+):
+    sql = BINDING_RFQ_FALLBACK_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN attempt_sequence INTEGER" in sql
+    assert "ALTER COLUMN attempt_sequence SET NOT NULL" in sql
+    assert "attempt_sequence BETWEEN 1 AND 3" in sql
+    assert "market_requests_one_active_buyer_rfq_uidx" in sql
+    assert "status IN ('pending', 'engaged')" in sql
+    assert "latest_proposal_request_id TEXT" in sql
+    assert "latest_proposal_action_kind IN ('rfq', 'proposal')" in sql
+    assert "latest_proposal_request_id = request_id" in sql
+    assert "CREATE TABLE arena402.market_rfq_sessions" in sql
+    assert "frozen_directory JSONB NOT NULL" in sql
+    assert "market_engagements_terminal_status_check" in sql
+    assert "'timed_out'" in sql
+    assert "TO adx_arena_core" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert BINDING_RFQ_FALLBACK_SQL_PATH in migrate_module.migration_files(
+        "arena"
     )

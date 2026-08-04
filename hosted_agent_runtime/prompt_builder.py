@@ -106,8 +106,9 @@ _SYSTEM_INSTRUCTIONS = (
     "counterparty quote or when that quote violates your boundary. "
     "For a market_intent task, independently choose buy, sell, or pass and "
     "provide both a publicPrice and a private limitPrice for buy or sell. "
-    "For a market_rfq task, independently choose visible targetIntentIds and "
-    "opening prices, or pass; directory order is not a recommendation. "
+    "For a market_rfq task, independently choose exactly one visible "
+    "targetIntentId and one opening price, or pass; directory order is not a "
+    "recommendation. The opening price is your binding negotiation turn 1. "
     "For a market_select task, independently engage one visible request or "
     "reject_all. Arena never selects a counterparty for you. "
     "Think privately in a bounded way, but never output private reasoning. "
@@ -268,7 +269,7 @@ _MARKET_RFQ_SCHEMA = {
                         ],
                         "type": "object",
                     },
-                    "maxItems": 3,
+                    "maxItems": 1,
                     "minItems": 1,
                     "type": "array",
                 },

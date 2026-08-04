@@ -388,9 +388,19 @@ schema, and Result Sink transport; they are not real-Agent evidence.
       Engagement;
 - [x] freeze immutable Deal provenance, including the proposal and acceptance
       Result IDs;
+- [x] materialize the engaged RFQ opening as negotiation turn 1 and allow the
+      seller to accept that exact request without an invented buyer action;
+- [x] persist the frozen directory and sequential attempt counter, enforce one
+      unresolved buyer RFQ and at most three attempts, and dispatch only
+      Agent-selected fallbacks after busy/reject/timeout;
 - [x] hand accepted Deals to the existing settlement-disabled or
       confirmation-gated Settlement boundary without repricing;
 - [x] run a payment-disabled real-Agent Engagement/negotiation/Deal E2E;
+- [x] run a local Fake scripted binding-opening Deal E2E
+      (`full-hosted-1785853139-cd4e22d1`) with exact request/Result proposal
+      provenance, zero SettlementIntent, and zero chain write;
+- [ ] run a real multi-counterparty sequential-fallback E2E and preserve
+      restart/replay evidence;
 - [ ] run a fresh payment-enabled Injective testnet E2E only after explicit
       human confirmation and after the binding-RFQ, sequential-fallback,
       timeout-calibration, and mixed-Runtime recovery acceptance above.
