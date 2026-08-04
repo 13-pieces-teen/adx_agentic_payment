@@ -17,7 +17,7 @@
 ## 一句话规则
 
 > 你的 AI 是个倒爷。每回合决定买、卖或观望；进入市场后按先到先得配对，
-> 最多砍价 2–3 轮；N 回合后按最终结算价清算，净资产最高者获胜。
+> 最多执行 3 个合并的协商行动；N 回合后按最终结算价清算，净资产最高者获胜。
 
 从产品叙事看，王城典当行既是一场游戏，也是一套受控的 Agent 能力比较场：同一
 规则下，模型、策略、速度、风险判断和谈判质量会共同形成可回放的差异。结算层则
@@ -207,7 +207,7 @@ next buyer     <-> next compatible seller
 ### 5. Negotiate
 
 - 买方先报价；
-- `MAX_TURN` 默认为 3，可压测后调整为 2；
+- `MAX_TURN` 冻结为 3，表示一段协商最多三个合并的 Agent 行动；
 - 每个轮到行动的角色收到一条 `arena.negotiate` AgentTask；
 - 每条结果只能使用 `action="propose" | "accept" | "reject"`；
 - `propose` 包含定点价格和不超过 100 字、经 PublicOutputPolicy 处理的公开话术；
@@ -473,12 +473,11 @@ Runtime Result 使用 `arena.agent-result.v1`，且 dispatch ACK 与 Result 分�
 
 按优先级可降级：
 
-1. `MAX_TURN` 从 3 降为 1；
-2. 实时入池改为固定时间窗后的批量 FCFS；
-3. 逐笔链上提交改为一笔包含多笔点对点 transfer 的批量交易；每笔 accepted
+1. 实时入池改为固定时间窗后的批量 FCFS；
+2. 逐笔链上提交改为一笔包含多笔点对点 transfer 的批量交易；每笔 accepted
    trade 仍须独立映射到该批量交易中的具体 transfer 事件；
-4. LLM Agent 不足时加入明确标注的规则 Agent；
-5. 演示场景可只激活一种货物，但正式 MVP schema 始终保留四种货物。
+3. LLM Agent 不足时加入明确标注的规则 Agent；
+4. 演示场景可只激活一种货物，但正式 MVP schema 始终保留四种货物。
 
 不可降级红线：被接受的交易不能只更新数据库。默认 MVP 是一笔 accepted
 trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易仍须可独立映射到
@@ -489,10 +488,10 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 | 参数 | 候选值 |
 |------|--------|
 | 总回合数 `N` | Current Game 默认 8；支持 1–10，环境变量可调为 6 |
-| `MAX_TURN` | 2 或 3 |
+| `MAX_TURN` | 冻结为 3 个合并的 Agent 行动 |
 | 单回合时长 | 由当前生产拓扑下 10/12/25/50/100 Agent wave 实测冻结 |
 | `action_timeout_ms` | Provider/Model/thinking 与 10/12/25/50/100 Agent 负载的真实 P95/P99 + buffer |
-| 货物种类 | 2–3 |
+| 货物种类 | 正式 MVP schema 保留 4 种；演示可只激活 1 种 |
 | 单局目标时长 | Current Game 按 8 回合计算；固定 Demo 仍为 5 回合 |
 
 参数调整不得改变本文的核心边界：公平开局、FCFS、有限轮协商、外生价值锚、

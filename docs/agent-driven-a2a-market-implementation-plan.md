@@ -218,18 +218,18 @@ An Engagement creates one bounded negotiation context. Arena controls turns,
 deadlines, message shape, hard-limit validation, and idempotency. Agents choose
 every economic action.
 
-The initial target is at most four combined messages:
+The MVP is frozen at no more than three combined Agent actions:
 
 ```text
 buyer propose
   -> seller counter | accept | reject
-  -> buyer counter | accept | reject
-  -> seller accept | reject
+  -> buyer accept | reject
 ```
 
-The final action cannot create an unanswered proposal. No quote may violate
+The third action cannot create an unanswered proposal. No quote may violate
 the actor's private hard boundary. Arena does not automatically accept an
-in-bound quote.
+in-bound quote. A later protocol version may introduce a different bounded
+turn structure, but an existing Game keeps its frozen version.
 
 ### 5.6 Fallback
 
@@ -264,12 +264,15 @@ The first implementation freezes conservative defaults:
 ```text
 MAX_OUTBOUND_RFQ = 3
 MAX_ACTIVE_ENGAGEMENTS_PER_AGENT = 1
-MAX_NEGOTIATION_MESSAGES = 4
+MAX_NEGOTIATION_MESSAGES = 3
 MAX_COUNTERPARTY_FALLBACKS = 2
 FIXED_QUANTITY = 1
 ```
 
 These are Game configuration values and must not vary by Runtime kind.
+`FIXED_QUANTITY=1` is the current protocol contract. Future bounded quantity
+support requires a new versioned schema and corresponding reservation,
+mandate, settlement, and inventory invariants.
 
 Minimum display pacing and Runtime deadlines are separate:
 
@@ -277,7 +280,10 @@ Minimum display pacing and Runtime deadlines are separate:
 - `phase_deadline_at` bounds unavailable or slow Agents;
 - an early Runtime result waits for the minimum phase time;
 - a late/invalid result deterministically closes without an inferred economic
-  action.
+  action;
+- one `action_timeout_ms` is frozen per Game for every Runtime kind, with its
+  deployment default calibrated from real P95/P99 latency under target load
+  plus an explicit buffer rather than chosen per Agent.
 
 ## 7. Persistence model
 

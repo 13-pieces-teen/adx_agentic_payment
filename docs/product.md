@@ -55,8 +55,8 @@ PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控
    `action="buy" | "sell" | "pass"`。
 3. Result Sink 在持久化前过滤公开文字并记录数据库 `result_received_at`；
    Arena 校验后在限价区间有交集的同货物订单中按该时间进行 FCFS 配对。
-4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多协商
-   2–3 轮。
+4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多执行
+   3 个合并的协商行动，最终行动只能接受或拒绝。
 5. `accept` 后冻结价格、双方、货物和结算参数。
 6. 在目标 Hosted 路径中，Settlement 校验用户 Join 时一次确认的该局受限
    PaymentMandate，再由隔离的 guest signer 自动签名并提交 testnet 交易；单笔
@@ -219,18 +219,25 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - 通用 LangGraph/Agent Studio、任意工具、任意 MCP 或自定义 Provider Endpoint；
 - 比赛中途 Runtime 切换或 Hosted/Local 自动故障转移。
 
-## 待冻结参数
+## 已冻结与待实测参数
 
 - [x] Current Game 默认使用 8 回合；开发实现继续支持 1–10，部署方可通过
       `ADX_CURRENT_GAME_ROUND_COUNT=6` 运行较短实验；
-- [ ] `MAX_TURN`：2 还是 3？
-- [ ] 经真实 P95/P99 与负载测试校准后的统一 `action_timeout_ms`？
+- [x] `MAX_TURN=3`，表示一段协商最多三个合并的 Agent 行动；最终行动只能
+      `accept` 或 `reject`，不能留下无人回应的新报价；
+- [x] 同一 Game 的所有 Runtime 使用统一 `action_timeout_ms`，其校准规则冻结为
+      真实 Provider/Model/thinking 与目标负载的 P95/P99 加缓冲；具体数值仍须
+      完成负载测试后写入部署配置；
 - [ ] MVP 货物和初始现金/持仓？
-- [ ] `pawnhouse-standard-v1` 十张事件牌组内容与最终结算价算法是否作为正式
-      比赛版本冻结？确定性 seed 洗牌和赛程承诺已实现；
-- [ ] 单笔交易数量固定为 1，还是允许有界数量？
-- [ ] 逐笔链上结算无法满足现场吞吐时，采用哪种能保留逐笔 transfer
-      证据的批量交易方案？
+- [x] `pawnhouse-standard-v1` 十张事件牌组与当前终场估值算法作为当前 MVP
+      默认版本暂时冻结；后续可以通过新的版本化配置扩展，但不得原地改变已创建
+      Game 的冻结赛程或估值语义；
+- [x] 当前协议单笔交易数量固定为 `1`；未来版本允许有界数量，但必须增加新的
+      版本化 schema、资产预留、PaymentMandate 金额和结算校验，不能静默放宽
+      当前协议；
+- [x] 当真实吞吐证据表明逐笔链上提交不足时，允许显式启用批量结算；每个 Deal
+      仍须独立映射到批量交易中的具体 transfer、确认状态和幂等库存提交，不允许
+      使用无法还原逐笔成交的纯聚合净额；
 - [x] 上线签名模式冻结为 `sandbox_guest + single_eip3009`，用户 Join 时一次确认
       Game-scoped PaymentMandate，此后不逐笔确认；
 - [x] PaymentMandate 的 `reserve / consume / release` 与 revoke 已实现；
