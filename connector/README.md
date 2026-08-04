@@ -97,6 +97,19 @@ Pairing, three negotiation messages, zero Deals, zero SettlementIntents, zero
 inventory commits, and zero chain writes. This proves real dual-Agent
 negotiation and autonomous non-convergence, not a completed trade.
 
+The post-fix payment-disabled run `real-runtimes-e8c3b2d723` used the same
+independent dual-Codex topology. The buyer published a grain ceiling of
+`2.950000`, issued an RFQ, and proposed `2.550000`; the seller engaged,
+countered at its `2.900000` floor, and the buyer independently accepted.
+Arena froze one Deal with distinct seller proposal and buyer acceptance Result
+IDs. Because the Game used `authorizationMode=none`, it correctly ended as
+`settlement_failed` with zero SettlementIntents, inventory commits, balance or
+holding mutations, and chain writes. This validates a real Local Agent Deal,
+not payment settlement. The preceding probes also exposed and fixed a bounded
+Codex adapter mismatch: an `accept` may fill the output schema's nullable
+`price` and `message` fields; the Connector now discards only those fields and
+uses Arena's frozen latest quote, as the Claude adapter already does.
+
 Run the Codex-only Agent-driven A2A E2E from PowerShell after confirming the
 local Codex CLI is authenticated. It uses the isolated project
 `arena402-codex-a2a-e2e`, loopback ports `18001`/`55434`, two payment-disabled
@@ -109,8 +122,11 @@ $env:ADX_REAL_RUNTIME_E2E_INVITES = ConvertTo-Json -Compress -InputObject @((Con
 $env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS = "codex,codex"
 $env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT = "0"
 $env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL = "agent_a2a.v1"
+$env:ADX_REAL_RUNTIME_E2E_ROUND_COUNT = "1"
+$env:ADX_REAL_RUNTIME_E2E_EVENT_SEED = "codex-natural-28"
+$env:ADX_REAL_RUNTIME_E2E_EXPECT_DEAL = "true"
 python tests/real_runtimes_docker_e2e.py
-Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES, Env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS, Env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT, Env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL
+Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES, Env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS, Env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT, Env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL, Env:ADX_REAL_RUNTIME_E2E_ROUND_COUNT, Env:ADX_REAL_RUNTIME_E2E_EVENT_SEED, Env:ADX_REAL_RUNTIME_E2E_EXPECT_DEAL
 docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
 ```
 

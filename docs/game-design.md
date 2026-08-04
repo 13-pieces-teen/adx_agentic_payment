@@ -184,6 +184,8 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 > 对手 Agent 选择是否 engage；Arena 不再替 Agent 创建业务 Pairing。目标协议、
 > 状态机验证边界和真实 Agent 验收顺序见
 > [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)。
+> 本地 opt-in 双 Codex payment-disabled E2E 已形成带独立 proposal/acceptance
+> Result provenance 的 Deal；mixed-Runtime、支付和 Current Game 切换仍未验收。
 > 旧 Game 保持创建时冻结的协议版本，不能原地改义。
 
 每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为

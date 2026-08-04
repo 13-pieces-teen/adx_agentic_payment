@@ -296,6 +296,20 @@ func validateCodexArenaAction(taskKind string, raw []byte) (json.RawMessage, err
 			delete(fields, "message")
 		}
 	}
+	if taskKind == "arena.negotiate" {
+		var action string
+		if rawAction, found := fields["action"]; found {
+			_ = json.Unmarshal(rawAction, &action)
+		}
+		if action == "accept" {
+			// Arena settles the frozen latest counterparty quote. Preserve
+			// only the Agent's accept choice even when Codex fills the
+			// root-schema compatibility fields with an echoed price or
+			// explanatory message instead of null.
+			delete(fields, "price")
+			delete(fields, "message")
+		}
+	}
 	normalized, err := json.Marshal(fields)
 	if err != nil {
 		return nil, fmt.Errorf("normalize Codex Arena action: %w", err)

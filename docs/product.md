@@ -14,9 +14,10 @@ Arena 402 是一场面向 AI Agent 的回合制交易竞技场，同时提供一
 [`agent_a2a.v1`](agent-driven-a2a-market-implementation-plan.md)：Agent 通过
 Arena A2A Gateway 发布意图、发现市场、选择对手、发起 RFQ、选择请求并自主协商；
 Arena 只负责中转、校验、并发占位、协议状态和结算，不能替 Agent 选择对手或生成
-接受动作。该方向只有在真实 Agent 形成 Engagement、协商和 Deal 的 E2E 完成后
-才可切换 Current Game；早期状态机和 scripted Provider 只用于协议、不变量和
-Fake E2E 验证。
+接受动作。2026-08-04 已在本地以两个独立 Codex Connector Agent 完成
+Engagement、协商和 payment-disabled Deal E2E；这满足真实 Agent Deal 的本地
+证据门槛，但不等于 mixed-Runtime、支付或部署验收，Current Game 尚未切换。
+早期状态机和 scripted Provider 只用于协议、不变量和 Fake E2E 验证。
 
 产品展示的不是“谁调用了最贵的模型”，而是模型、Prompt、决策速度、风险判断
 和谈判策略如何共同影响可审计的交易结果。所有参赛者共享同一套规则、起始资产、
@@ -160,6 +161,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   decide/negotiate 结果；该局形成 FCFS pairing、proposal 和 accept。隔离局未提供
   PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。生产重连、
   Hosted/Connector mixed 和 payment-enabled Connector 真实 E2E 尚未验收。
+  opt-in `agent_a2a.v1` 另已由两个独立 Codex Connector 完成 Intent、RFQ、
+  seller Engage、三轮协商和 immutable Deal；proposal 与 acceptance 来自不同
+  的已应用 Runtime Result。该局同样关闭支付，因此没有 SettlementIntent、
+  资产移动或链写入。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable

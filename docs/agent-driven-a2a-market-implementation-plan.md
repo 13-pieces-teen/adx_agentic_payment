@@ -3,9 +3,10 @@
 > Status: approved target; Phase A persistence, projection, opt-in round
 > orchestration, Phase B Hosted/Local task support, and the Phase C
 > payment-disabled Deal foundation were implemented on 2026-08-04. Current
-> Game remains on `fcfs.v1`. A real Claude Code + Codex Connector-only game
-> completed intent/discovery with no compatible price interval; full
-> real-Agent Engagement/negotiation/Deal evidence is not complete.
+> Game remains on `fcfs.v1`. A payment-disabled game with two independent
+> Codex Connector Agents has completed Intent, RFQ, selection, bounded
+> negotiation, and an immutable Deal with distinct proposal/acceptance Result
+> provenance. Mixed-Runtime A2A and payment-enabled A2A remain incomplete.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
 > counterparties, choose whom to approach, select which request to engage, and
@@ -361,7 +362,7 @@ schema, and Result Sink transport; they are not real-Agent evidence.
       Result IDs;
 - [x] hand accepted Deals to the existing settlement-disabled or
       confirmation-gated Settlement boundary without repricing;
-- [ ] run a payment-disabled real-Agent Engagement/negotiation/Deal E2E;
+- [x] run a payment-disabled real-Agent Engagement/negotiation/Deal E2E;
 - [ ] run a fresh payment-enabled Injective testnet E2E only after explicit
       human confirmation.
 
@@ -460,11 +461,36 @@ Evidence levels remain separate:
   zero inventory commits, and zero chain writes. Initial portfolios were
   equal at 20 gold-equivalent; no cash or holdings moved. This is real
   dual-Agent negotiation evidence, but not an accepted Deal or settlement.
+- Repeated one-round `granary-fire` probes naturally aligned both Agents on
+  grain. One clean probe rejected after the seller countered at `3.000000`
+  above the buyer's `2.900000` ceiling. Two other probes reached the buyer's
+  final turn with an in-range seller quote but returned `runtime_failed`.
+  The repeated boundary exposed a Local Connector adapter defect rather than
+  an Arena pricing decision: Codex may echo `price` and `message` with an
+  `accept`, while the strict business union intentionally accepts only
+  `{"action":"accept"}` because Arena owns the frozen latest quote. The Codex
+  adapter now removes only those compatibility fields, matching the existing
+  Claude adapter behavior and preserving the Agent's accept/reject choice.
+- The post-fix run `real-runtimes-e8c3b2d723` used two independent Codex CLI
+  0.146.0 Connector participants, separate users, Devices, Bindings, Sessions,
+  and state stores. Both published grain Intents; the buyer issued one RFQ and
+  the seller engaged it. Three real negotiation Results were applied: buyer
+  proposed `2.550000`, seller countered `2.900000`, and the buyer, whose
+  private ceiling was `2.950000`, accepted. Arena froze one Deal for one grain
+  at `2.900000`, referencing distinct seller proposal Result
+  `runtime:2a3257ab...975c4` and buyer acceptance Result
+  `runtime:f4ec6052...6dcc04`. The test portfolios were equal in initial
+  value but deliberately different in composition: 20 gold cash versus
+  10 grain at the 2-gold initial price. With `authorizationMode=none`, the
+  negotiation correctly closed as `settlement_failed`; authoritative counts
+  remained zero SettlementIntents, zero inventory commits, zero cash
+  mutations, zero holding mutations, and zero chain writes. This is accepted
+  payment-disabled real-Agent Deal evidence, not payment settlement evidence.
 
 The real probes also show why “few trades” cannot be solved by a matcher
-alone: independently chosen private price intervals may not overlap, and a
-failed external Runtime connection can remove one side of the market.
-Follow-up work must calibrate Agent strategy and common deadlines while
-preserving the hard boundary that Arena never chooses or relaxes an Agent's
-economic action; external CLI/API failures are tracked separately from system
-mechanism defects.
+alone: Agents may choose different goods, private price intervals may not
+overlap, and a bounded negotiation may end in a rational rejection. Runtime
+output compatibility defects and external CLI/API failures are tracked
+separately from those economic outcomes. Follow-up work may calibrate Agent
+strategy and common deadlines, but Arena must never choose or relax an
+Agent's economic action.

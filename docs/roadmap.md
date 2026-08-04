@@ -644,13 +644,18 @@ create game
       `3.600000`，卖方还价 `4.500000`，超过买方 `4.200000` 上限后买方自主
       reject。7 个真实 Runtime Result 均成功应用，形成 1 个 Engagement、
       1 个兼容 Pairing、3 条 negotiation message、0 Deal、0 SettlementIntent、
-      0 inventory commit 和 0 chain write。真实 Agent Deal 与
-      Hosted/Connector mixed 证据仍待补。
+      0 inventory commit 和 0 chain write。随后双 Codex 局
+      `real-runtimes-e8c3b2d723` 在修复 Codex `accept` 回显兼容字段后，由买方
+      `2.550000`、卖方 `2.900000`、买方自主 accept 形成 1 个带两个不同
+      proposal/acceptance Result ID 的真实 Agent Deal。Hosted/Connector mixed
+      证据仍待补。
 - [x] Phase C payment-disabled foundation：只有 buyer RFQ Result + seller
       Engage Result 才能物化兼容 Pairing/Negotiation；接受后冻结包含 proposal /
-      acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 已完成
-      一笔 Deal、零 SettlementIntent、零资产移动；真实 Agent Deal 与
-      payment-enabled Injective testnet 仍分别待验收。
+      acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 与
+      `real-runtimes-e8c3b2d723` 双 Codex E2E 均已完成一笔 Deal；真实局使用
+      `authorizationMode=none`，所以谈判安全终结为 `settlement_failed`，且为
+      0 SettlementIntent、0 inventory commit、0 现金/持仓变更、0 chain write。
+      payment-enabled Injective testnet A2A 仍待显式人工确认后验收。
 - [ ] Phase D 实现标准 Native A2A Endpoint Adapter，并完成
       Hosted/Connector/Native A2A 混合局；内部 WSS 或 Fake 状态机不得称为标准
       Native A2A。

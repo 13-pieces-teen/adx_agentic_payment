@@ -571,6 +571,19 @@ func TestAgentDrivenMarketTaskKindsUseStrictLocalRuntimeActions(t *testing.T) {
 		`{"action":"engage","requestId":"request:task-rfq:1"}` {
 		t.Fatalf("Codex engage changed the business choice: %s", engage)
 	}
+	accept, err := validateCodexArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"action":"accept","price":"2.800000",`+
+				`"message":"Accepted at the latest quote."}`,
+		),
+	)
+	if err != nil {
+		t.Fatalf("Codex accept compatibility fields were not normalized: %v", err)
+	}
+	if string(accept) != `{"action":"accept"}` {
+		t.Fatalf("Codex accept changed the business choice: %s", accept)
+	}
 }
 
 func newTestSupervisor(t *testing.T) *Supervisor {
