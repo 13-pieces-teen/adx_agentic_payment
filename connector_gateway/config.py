@@ -54,7 +54,7 @@ class ConnectorGatewayConfig:
     session_ttl_seconds: int = 7 * 24 * 60 * 60
     cookie_secure: bool = True
     bootstrap_invite_hash: str | None = None
-    public_registration_enabled: bool = False
+    public_registration_enabled: bool = True
     auth_rate_limit_attempts: int = 10
     pairing_rate_limit_attempts: int = 60
     rate_limit_window_seconds: int = 60
@@ -83,7 +83,7 @@ class ConnectorGatewayConfig:
         cookie_secure = cookie_secure_raw.strip().lower() in {"1", "true", "yes"}
         public_registration_enabled = _boolean(
             "ADX_PUBLIC_REGISTRATION_ENABLED",
-            False,
+            True,
         )
 
         if not database_url:

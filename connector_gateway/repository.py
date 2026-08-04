@@ -58,7 +58,7 @@ class ConnectorRepository(Protocol):
         subject: str,
         preferred_username: str,
         created_at: datetime,
-    ) -> dict[str, Any]: ...
+    ) -> tuple[dict[str, Any], bool]: ...
 
     async def create_session(
         self,
@@ -202,12 +202,12 @@ class MemoryConnectorRepository:
         subject: str,
         preferred_username: str,
         created_at: datetime,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], bool]:
         async with self._lock:
             identity_key = (provider, subject)
             existing_id = self.oauth_users.get(identity_key)
             if existing_id:
-                return copy.deepcopy(self.users[existing_id])
+                return copy.deepcopy(self.users[existing_id]), False
 
             username = preferred_username
             if username in self.users_by_name:
@@ -229,7 +229,7 @@ class MemoryConnectorRepository:
             self.users[user_id] = user
             self.users_by_name[username] = user_id
             self.oauth_users[identity_key] = user_id
-            return copy.deepcopy(user)
+            return copy.deepcopy(user), True
 
     async def create_session(
         self,

@@ -363,8 +363,10 @@ create game
       兼容性和完整生产验收仍须单独通过。
 - [x] 后端已实现用户名/密码平台注册登录，以及可选 GitHub OAuth
       authorization-code + PKCE；两者使用现有 Session/CSRF Cookie，业务所有权
-      统一使用内部 `user_id`。公共注册由
-      `ADX_PUBLIC_REGISTRATION_ENABLED` 显式启用，默认 fail closed。
+      统一使用内部 `user_id`。平台注册已默认开放，无需邀请码；
+      `ADX_PUBLIC_REGISTRATION_ENABLED=false` 仅保留为运营侧紧急关闭开关。
+      新建密码账号和首次 GitHub OAuth 账号进入纪念币领取页，已有账号按原目标
+      进入平台。
 - [x] 外部前端已完成 Next.js 仓库升级和当前 Arena API 迁移；Vercel→腾讯云
       OAuth 跳转、Cookie/CORS 公网基础联调已通过。
 - [ ] 公开 Game Event SSE 与前端轮询降级代码已完成本地回归，尚待腾讯云和

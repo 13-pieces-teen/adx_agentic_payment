@@ -229,7 +229,7 @@ class PostgresConnectorRepository:
         subject: str,
         preferred_username: str,
         created_at: datetime,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], bool]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
@@ -246,7 +246,7 @@ class PostgresConnectorRepository:
                     subject,
                 )
                 if existing is not None:
-                    return dict(existing)
+                    return dict(existing), False
 
                 user_id = f"user_{uuid.uuid4().hex[:20]}"
                 candidates = (
@@ -273,7 +273,7 @@ class PostgresConnectorRepository:
                         created_at,
                     )
                     if created is not None:
-                        return dict(created)
+                        return dict(created), True
                     existing = await connection.fetchrow(
                         """
                         SELECT user_id, username, password_hash, temporary,
@@ -286,7 +286,7 @@ class PostgresConnectorRepository:
                         subject,
                     )
                     if existing is not None:
-                        return dict(existing)
+                        return dict(existing), False
                 raise DuplicateIdentityError
 
     async def create_session(
