@@ -226,18 +226,20 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - [x] `MAX_TURN=3`，表示一段协商最多三个合并的 Agent 行动；最终行动只能
       `accept` 或 `reject`，不能留下无人回应的新报价；
 - [x] 同一 Game 的所有 Runtime 使用统一 `action_timeout_ms`，其校准规则冻结为
-      真实 Provider/Model/thinking 与目标负载的 P95/P99 加缓冲；具体数值仍须
-      完成负载测试后写入部署配置；
-- [ ] MVP 货物和初始现金/持仓？
+      目标负载下所有支持的 Runtime/Task 端到端 P99 最大值乘以 `1.25`，再向上
+      取整到 5 秒；具体数值仍须完成真实负载测试后写入部署配置；
+- [x] MVP 冻结 grain、iron、warhorse、gems 四种货物及其当前初始价；每名
+      Agent 以严格等值 20 金、可自由配置的现金和持仓开局，Join 后锁定；
 - [x] `pawnhouse-standard-v1` 十张事件牌组与当前终场估值算法作为当前 MVP
       默认版本暂时冻结；后续可以通过新的版本化配置扩展，但不得原地改变已创建
       Game 的冻结赛程或估值语义；
 - [x] 当前协议单笔交易数量固定为 `1`；未来版本允许有界数量，但必须增加新的
       版本化 schema、资产预留、PaymentMandate 金额和结算校验，不能静默放宽
-      当前协议；
+      当前协议；首个有界数量版本使用正整数、精确全量成交，不支持 partial fill；
 - [x] 当真实吞吐证据表明逐笔链上提交不足时，允许显式启用批量结算；每个 Deal
       仍须独立映射到批量交易中的具体 transfer、确认状态和幂等库存提交，不允许
-      使用无法还原逐笔成交的纯聚合净额；
+      使用无法还原逐笔成交的纯聚合净额；优先扩展并行逐笔提交和 Facilitator
+      shard，只有链上吞吐仍不足时才实现单交易多 transfer 的链上 batch；
 - [x] 上线签名模式冻结为 `sandbox_guest + single_eip3009`，用户 Join 时一次确认
       Game-scoped PaymentMandate，此后不逐笔确认；
 - [x] PaymentMandate 的 `reserve / consume / release` 与 revoke 已实现；
@@ -245,3 +247,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
       策略仍待验证；
 - [x] Official filler 的平台钱包已接入受限 PaymentMandate；停用 Official
       Agent 不得获得新 Mandate，Runtime 不接触钱包密钥或任意签名能力；
+
+`agent_a2a.v1` 的交易顺序进一步冻结为：每个 RFQ Task 只选择一个对手，
+`openingPrice` 是不可在 Engage 后反悔的第一个权威 proposal；每个买方每轮最多
+三次 RFQ 尝试，其中最多两次是从原冻结目录自主选择的 fallback，且同一时间最多
+一个 Engagement。Settlement failure 不触发 fallback。真实 Runtime 验收优先完成
+Hosted + Codex mixed 与恢复矩阵；Claude Code 待其外部连接健康后补证据，不阻塞
+前者。

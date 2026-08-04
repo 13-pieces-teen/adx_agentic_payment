@@ -572,8 +572,10 @@ create game
       不能用于证明 100 Agent 容量。按 10/12/25/50/100 Agent 记录 P50/P95/P99、
       queue age、timeout、retry、Token、每轮 wall time 和资源占用。
 - [ ] 依据 4 × 25 Hosted task slot 的真实 Provider wave 证据冻结统一
-      `action_timeout_ms`；生产单局默认开赛阈值 10、硬上限 100，同一时间一局
-      active Game。
+      `action_timeout_ms`；公式冻结为所有支持 Runtime/Task/目标负载端到端 P99
+      最大值乘以 `1.25`、向上取整到 5 秒。生产单局默认开赛阈值 10、硬上限
+      100，同一时间一局 active Game。每个支持的 Runtime/Task 组合至少保留
+      100 个真实端到端样本，并验证合法 Task 的 deadline timeout 不超过 1%。
 - [ ] 100 Agent 场景继续采用 `result_received_at` FCFS，并披露 Provider
       限流和 Worker wave 带来的平台排队偏差；未通过 launch-skew 验收前不把该
       部署称为 Tournament 公平性验证。
@@ -648,7 +650,9 @@ create game
       `real-runtimes-e8c3b2d723` 在修复 Codex `accept` 回显兼容字段后，由买方
       `2.550000`、卖方 `2.900000`、买方自主 accept 形成 1 个带两个不同
       proposal/acceptance Result ID 的真实 Agent Deal。Hosted/Connector mixed
-      证据仍待补。
+      证据仍待补；下一验收组合冻结为 Hosted + Codex，并覆盖 reconnect、
+      lease expiry、deadline default、durable Result replay 和 projection
+      recovery。Claude Code 待其外部 API/证书路径健康后补跑，不阻塞该阶段。
 - [x] Phase C payment-disabled foundation：只有 buyer RFQ Result + seller
       Engage Result 才能物化兼容 Pairing/Negotiation；接受后冻结包含 proposal /
       acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 与
@@ -656,6 +660,13 @@ create game
       `authorizationMode=none`，所以谈判安全终结为 `settlement_failed`，且为
       0 SettlementIntent、0 inventory commit、0 现金/持仓变更、0 chain write。
       payment-enabled Injective testnet A2A 仍待显式人工确认后验收。
+- [ ] Phase C protocol completion：将 RFQ `openingPrice` 作为 Engage 后不可变的
+      Turn 1 proposal；每个 RFQ Task 只联系一个对手，每轮最多三次尝试和两次
+      Agent-selected fallback，同一时间最多一个 Engagement。实现前需增加 RFQ
+      request 级 proposal provenance，并确保 settlement failure 不触发 fallback。
+- [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
+      fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；
+      `agent_a2a.v1` 永久保持 `quantity=1`。
 - [ ] Phase D 实现标准 Native A2A Endpoint Adapter，并完成
       Hosted/Connector/Native A2A 混合局；内部 WSS 或 Fake 状态机不得称为标准
       Native A2A。

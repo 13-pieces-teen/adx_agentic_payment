@@ -227,8 +227,9 @@ Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，�
 
 `action_timeout_ms` 是 Game 配置，并在开局时冻结。同一 Game 的 Hosted、Local、
 rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
-Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不在
-Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
+Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的端到端 P99
+最大值乘以 `1.25`、再向上取整到 5 秒，不在 Adapter 中写死。只有错误可重试且
+剩余时间充足时才执行一次重试，不自动切换
 Provider、Model 或 Runtime。结构合法但违反自身 `limitPrice`、确定性协商规则，
 或冻结的 allowed action、余额、库存约束的 Hosted 候选动作，可在同一
 AgentTask、同一冻结输入和 deadline 内触发唯一一次带安全错误码的修正 Attempt；
@@ -416,6 +417,11 @@ Codex Structured Outputs 使用 root object + required nullable 占位，Connect
 只移除该 Adapter 约定的 `null` 字段后再执行同一严格 wire 校验；数据库对新写入
 的成功 buy/sell 结果也保留同一固定数量约束。
 
+未来有界数量只进入新的版本化协议，例如 `agent_a2a.v2`：数量必须是受 Game 上限
+约束的正整数，首版只支持精确全量成交，不支持 partial fill；协商冻结单位价格和
+数量，Settlement 以二者的定点乘积校验 PaymentMandate、链上金额和库存提交。
+`agent_a2a.v1` 及其历史 Game 永久保持 `quantity=1`。
+
 ### Negotiate
 
 输入包含角色、货物、固定数量、自己的预算/库存边界、公开协商历史、对手公开身份、
@@ -474,14 +480,16 @@ Runtime Result 使用 `arena.agent-result.v1`，且 dispatch ACK 与 Result 分�
 按优先级可降级：
 
 1. 实时入池改为固定时间窗后的批量 FCFS；
-2. 逐笔链上提交改为一笔包含多笔点对点 transfer 的批量交易；每笔 accepted
+2. 在并行逐笔提交和 Facilitator shard 仍不足时，将逐笔链上提交改为一笔包含
+   多笔点对点 transfer 的批量交易；每笔 accepted
    trade 仍须独立映射到该批量交易中的具体 transfer 事件；
 3. LLM Agent 不足时加入明确标注的规则 Agent；
 4. 演示场景可只激活一种货物，但正式 MVP schema 始终保留四种货物。
 
 不可降级红线：被接受的交易不能只更新数据库。默认 MVP 是一笔 accepted
 trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易仍须可独立映射到
-真实链上转账证据。纯聚合净额且无法还原逐笔交易的方案不满足当前 MVP。
+真实链上转账证据、确认状态和幂等库存提交。纯聚合净额且无法还原逐笔交易的
+方案不满足当前 MVP。
 
 ## 待压测参数
 
@@ -490,7 +498,7 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 | 总回合数 `N` | Current Game 默认 8；支持 1–10，环境变量可调为 6 |
 | `MAX_TURN` | 冻结为 3 个合并的 Agent 行动 |
 | 单回合时长 | 由当前生产拓扑下 10/12/25/50/100 Agent wave 实测冻结 |
-| `action_timeout_ms` | Provider/Model/thinking 与 10/12/25/50/100 Agent 负载的真实 P95/P99 + buffer |
+| `action_timeout_ms` | 目标负载下所有支持 Runtime/Task 的端到端 P99 最大值 × 1.25，向上取整到 5 秒 |
 | 货物种类 | 正式 MVP schema 保留 4 种；演示可只激活 1 种 |
 | 单局目标时长 | Current Game 按 8 回合计算；固定 Demo 仍为 5 回合 |
 

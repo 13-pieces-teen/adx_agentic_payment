@@ -45,6 +45,14 @@ Connector 已在 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage →
 0 资产变更和 0 链写入；mixed-Runtime A2A 与 payment-enabled A2A 仍未验收，
 Current Game 尚不切换。
 
+已冻结的下一阶段要求是：RFQ `openingPrice` 直接成为 Engage 后不可更改的第一条
+proposal；每个 RFQ Task 顺序选择一个对手，每轮最多三次尝试和两次
+Agent-selected fallback；同局所有 Runtime 的 `action_timeout_ms` 使用目标负载下
+端到端 P99 最大值 × `1.25` 并向上取整到 5 秒。真实验收优先 Hosted + Codex
+mixed/recovery，不等待 Claude Code 外部连接；payment-enabled testnet 仍需显式
+人工确认。`agent_a2a.v1` 永久固定数量 1，未来无 partial fill 的有界数量使用新
+协议版本；链上吞吐不足时先并行逐笔，再采用保持逐 Deal transfer 证据的 batch。
+
 生产配置基础允许一个最多 100 个 Agent 的 Current Game、四个各含 25 个任务槽的
 Hosted Worker 副本，以及四个独立 Facilitator EOA 分片的确定性结算路由。这只是
 已实现的容量基础，不是线上容量结论：当前已验证的本地规模仍为 12 个 Agent，

@@ -183,8 +183,10 @@ the Agent.
 
 ### 5.3 RFQ window
 
-An eligible buyer receives the frozen directory and may submit up to the Game
-limit of outbound requests. Each request contains:
+An eligible buyer receives the frozen directory and may submit exactly one
+outbound request per RFQ Task. The frozen Game budget permits at most three
+total RFQ attempts, including at most two fallback attempts. Each request
+contains:
 
 - a target sell-intent ID;
 - a positive opening price within the buyer's private ceiling;
@@ -192,6 +194,12 @@ limit of outbound requests. Each request contains:
 
 The Gateway validates and durably relays each candidate request to the seller.
 An invitation does not reserve either Participant.
+
+The selected RFQ `openingPrice` is the buyer-authored, binding first proposal.
+If the seller engages, Arena materializes that exact request as negotiation
+turn 1; Arena does not ask the buyer to restate or change it. Provenance keeps
+the RFQ Result ID, request ID, and stable request position so a seller may
+accept the opening price without an invented `arena.negotiate` proposal.
 
 The first implementation is buyer-initiated because the existing negotiation
 rule already gives the buyer the opening proposal. Symmetric seller-initiated
@@ -209,8 +217,9 @@ Arena then atomically reserves the buyer and seller round slots and rechecks
 cash, inventory, intent expiry, and the private price interval.
 
 If either Participant is already reserved, the candidate closes with a safe
-`counterparty_busy` result. The Agent may choose another already-frozen
-candidate while time and fallback budget remain.
+`counterparty_busy` result. Only one Engagement may be active for a
+Participant. The buyer may choose another already-frozen candidate while time
+and fallback budget remain; Arena never selects the replacement.
 
 ### 5.5 Negotiation
 
@@ -221,7 +230,7 @@ every economic action.
 The MVP is frozen at no more than three combined Agent actions:
 
 ```text
-buyer propose
+buyer binding RFQ opening proposal
   -> seller counter | accept | reject
   -> buyer accept | reject
 ```
@@ -236,9 +245,12 @@ turn structure, but an existing Game keeps its frozen version.
 On `counterparty_busy`, `reject`, or negotiation timeout:
 
 - Arena records and releases only the applicable reservation;
-- the Agent receives the remaining frozen candidates and safe failure state;
-- the Agent decides whether to try another target or stop;
-- the number of fallbacks is bounded and frozen in the Game configuration.
+- the buyer receives the remaining frozen candidates, prior attempt statuses,
+  remaining absolute time, and remaining RFQ/fallback budget;
+- the buyer decides whether to submit one new RFQ to one remaining target or
+  stop;
+- the total budget is three RFQ attempts with at most two fallbacks;
+- the attempt and fallback counters are durable and survive Worker restart.
 
 Settlement failure does not trigger counterparty fallback. An accepted Deal
 and its payment evidence remain a separate, immutable failure path.
@@ -249,9 +261,11 @@ Arena freezes a Deal only after an Agent-authored acceptance of the
 counterparty's latest proposal. The Deal references:
 
 - both source intents;
-- the buyer RFQ and seller selection Result IDs;
+- the buyer RFQ Result, selected request ID/position, and seller selection
+  Result ID;
 - the full sanitized negotiation;
-- the latest proposal and acceptance Result IDs;
+- the latest proposal source and acceptance Result ID; the latest proposal
+  may be the binding RFQ request or a later counterproposal Result;
 - the exact good, quantity, unit price, participants, and settlement accounts.
 
 One Deal creates at most one SettlementIntent. Payment retry and recovery keep
@@ -263,6 +277,7 @@ The first implementation freezes conservative defaults:
 
 ```text
 MAX_OUTBOUND_RFQ = 3
+MAX_RFQ_PER_TASK = 1
 MAX_ACTIVE_ENGAGEMENTS_PER_AGENT = 1
 MAX_NEGOTIATION_MESSAGES = 3
 MAX_COUNTERPARTY_FALLBACKS = 2
@@ -282,8 +297,9 @@ Minimum display pacing and Runtime deadlines are separate:
 - a late/invalid result deterministically closes without an inferred economic
   action;
 - one `action_timeout_ms` is frozen per Game for every Runtime kind, with its
-  deployment default calibrated from real P95/P99 latency under target load
-  plus an explicit buffer rather than chosen per Agent.
+  deployment default calculated as the maximum real end-to-end P99 across
+  supported Runtime/task/load combinations, multiplied by `1.25` and rounded
+  up to the next five seconds.
 
 ## 7. Persistence model
 
@@ -352,7 +368,13 @@ Phase A alone is not evidence of a playable real-Agent market.
       counterparties;
 - [x] dispatch the same immutable task envelope through Hosted and Local
       Connector Runtime paths;
-- [ ] run real Claude Code, Codex, and Hosted-model mixed games;
+- [x] run real Codex Local Connector games through negotiation and a
+      payment-disabled Deal;
+- [ ] run a real Hosted-model + Codex Connector mixed game and preserve
+      reconnect, lease-expiry, deadline-default, durable Result replay, and
+      projection-recovery evidence;
+- [ ] rerun Claude Code after its external API/certificate path is healthy;
+      this is follow-up evidence and does not block Hosted + Codex acceptance;
 - [x] require buyer RFQ and seller selection Result provenance for every
       persisted Engagement.
 
@@ -370,7 +392,8 @@ schema, and Result Sink transport; they are not real-Agent evidence.
       confirmation-gated Settlement boundary without repricing;
 - [x] run a payment-disabled real-Agent Engagement/negotiation/Deal E2E;
 - [ ] run a fresh payment-enabled Injective testnet E2E only after explicit
-      human confirmation.
+      human confirmation and after the binding-RFQ, sequential-fallback,
+      timeout-calibration, and mixed-Runtime recovery acceptance above.
 
 ### Phase D: Native A2A
 
@@ -387,16 +410,29 @@ The target is accepted only when:
 
 - Arena cannot create an Engagement without a buyer RFQ Result and seller
   engage Result;
+- an engaged RFQ opening price is the binding first proposal and cannot be
+  reduced or replaced after seller selection;
 - Arena cannot create a Deal without an Agent proposal and counterparty
   acceptance Result;
 - a Participant cannot be reserved or settled twice in one round;
 - busy/reject/timeout fallback is Agent-selected and bounded;
+- fallback is sequential, uses only the frozen directory, and never follows
+  settlement failure;
 - private hard limits never enter public messages, Agent Cards, logs, or
   frontend responses;
 - Hosted, Local, and Native A2A use the same business schema and deadlines;
+- timeout calibration collects at least 100 real end-to-end samples per
+  supported Runtime/task combination at target load, applies the frozen
+  `max(P99) * 1.25` formula, and demonstrates no more than 1% valid-Task
+  deadline timeout;
 - Native A2A is not claimed before a standards-compliant Adapter E2E;
 - Runtime success remains only a candidate until the Result Sink applies it;
 - chain confirmation remains mandatory for cash/inventory mutation;
+- `agent_a2a.v1` remains exact quantity `1`; a future `agent_a2a.v2` may add
+  bounded integer quantity without partial fills;
+- batch settlement is allowed only after throughput evidence, keeps each Deal
+  mapped to an individual transfer/result, and never uses unrecoverable
+  aggregate netting;
 - Fake state-machine tests, real-Agent protocol evidence, and live testnet
   settlement evidence are reported as separate acceptance layers.
 
