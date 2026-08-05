@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -14,25 +15,23 @@ from arena_agent_contracts import AgentTaskResultV1, ArenaAgentTaskV1
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
 from arena_core.public_output_policy import PublicOutputPolicy
 
-from .direct_model_driver import (
-    AttemptCompletion,
-    AttemptCreated,
-    AttemptRecorder,
-    DirectModelConfig,
-    DirectModelDriver,
-    DirectModelInfrastructureError,
-)
+from .attempts import AttemptCompletion, AttemptCreated, AttemptRecorder
+from .context import HostedArenaAgentContext
+from .memory import HostedGameMemory
+from .model_factory import PydanticModelFactory
 from .production_providers import ProductionProviderBundle
 from .providers import (
     ProviderInvocationError,
     ProviderRequest,
     ProviderUsage,
 )
+from .runtime import HostedArenaAgentRuntime
 from .secret_store import (
     SecretReader,
     SecretReference,
     SecretStoreError,
 )
+from .strategy import StrategyArchetype
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -302,6 +301,52 @@ class PostgresHostedWorkerRepository:
         )
         return str(row["disposition"])
 
+    async def load_runtime_context(
+        self,
+        worker_id: str,
+        task_id: str,
+    ) -> dict[str, Any]:
+        value = await self._require_pool().fetchval(
+            "SELECT load_hosted_agent_runtime_context($1, $2)",
+            task_id,
+            worker_id,
+        )
+        return _json_object(value)
+
+    async def stage_memory_patch(
+        self,
+        worker_id: str,
+        task_id: str,
+        *,
+        runtime_result_id_digest: str,
+        expected_memory_version: int,
+        decision_summary: Mapping[str, object],
+        memory_patch: Mapping[str, object],
+    ) -> bool:
+        return bool(
+            await self._require_pool().fetchval(
+                """
+                SELECT stage_hosted_agent_memory_patch(
+                    $1, $2, $3, $4, $5::jsonb, $6::jsonb
+                )
+                """,
+                task_id,
+                worker_id,
+                runtime_result_id_digest,
+                expected_memory_version,
+                dict(decision_summary),
+                dict(memory_patch),
+            )
+        )
+
+    async def project_memory_patches(self, *, limit: int = 100) -> int:
+        return int(
+            await self._require_pool().fetchval(
+                "SELECT project_hosted_agent_memory_patches($1)",
+                limit,
+            )
+        )
+
     async def start_attempt(
         self,
         worker_id: str,
@@ -362,6 +407,40 @@ class PostgresHostedWorkerRepository:
             )
         )
 
+    async def finish_pydantic_attempt(
+        self,
+        worker_id: str,
+        completion: AttemptCompletion,
+        *,
+        request_count: int,
+        tool_call_count: int,
+    ) -> bool:
+        usage = completion.usage
+        return bool(
+            await self._require_pool().fetchval(
+                """
+                SELECT complete_pydantic_agent_task_attempt(
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14
+                )
+                """,
+                completion.attempt_id,
+                worker_id,
+                completion.status,
+                completion.latency_ms,
+                completion.actual_model,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cached_input_tokens,
+                usage.reasoning_tokens,
+                usage.complete,
+                completion.provider_request_id,
+                completion.error_code,
+                request_count,
+                tool_call_count,
+            )
+        )
+
 
 class PostgresAttemptRecorder(AttemptRecorder):
     def __init__(
@@ -411,6 +490,7 @@ class DurableHostedWorker:
         worker_id: str | None = None,
         lease_seconds: int = 600,
         task_concurrency: int = 5,
+        model_factory: PydanticModelFactory | None = None,
     ) -> None:
         if task_concurrency < 1 or task_concurrency > 32:
             raise ValueError("task_concurrency must be between 1 and 32")
@@ -420,6 +500,7 @@ class DurableHostedWorker:
         self._worker_id = worker_id or f"hosted-worker-{uuid.uuid4().hex[:16]}"
         self._lease_seconds = lease_seconds
         self._task_concurrency = task_concurrency
+        self._model_factory = model_factory
         self._stopping = asyncio.Event()
         self._public_policy = PublicOutputPolicy()
 
@@ -453,6 +534,7 @@ class DurableHostedWorker:
                     extra={"validation_job_id": job.validation_job_id},
                 )
             processed += 1
+        processed += await self._repository.project_memory_patches(limit=100)
         return processed
 
     async def _execute_task_safely(self, task: ClaimedTask) -> None:
@@ -611,7 +693,6 @@ class DurableHostedWorker:
         )
 
     async def _execute_task(self, claimed: ClaimedTask) -> None:
-        config = claimed.runtime_config
         if claimed.recovery_disposition != "execute":
             digest = sha256_text_identifier(
                 f"hosted-recovery:{claimed.task.task_id}"
@@ -634,98 +715,308 @@ class DurableHostedWorker:
                 ),
             )
             return
-        adapter = self._providers.adapters.get(claimed.provider)
-        if adapter is None:
-            digest = sha256_text_identifier(
-                f"hosted-adapter-failed:{claimed.task.task_id}"
-            ).split(":", 1)[1][:40]
-            result = AgentTaskResultV1(
-                result_id=f"hosted-failed-{digest}",
-                task_id=claimed.task.task_id,
-                schema_version="arena.agent-result.v1",
+
+        if self._model_factory is None:
+            await self._submit_runtime_failure(
+                claimed,
                 status="failed",
-            )
-            await self._repository.submit_result(
-                self._worker_id,
-                result,
-                message_replaced=False,
-                policy_version=None,
                 error_class="adapter_mismatch",
             )
             return
+        await self._execute_pydantic_task(claimed)
 
-        driver = DirectModelDriver(
-            registry=self._providers.registry,
-            provider=adapter,
-            secret_reader=self._secret_reader,
-            config=DirectModelConfig(
-                provider_id=claimed.provider,
-                model_id=str(
-                    _config_value(config, "model_id", "modelId", "model")
-                ),
-                credential_ref=SecretReference(claimed.secret_ref),
-                thinking_enabled=bool(
-                    _config_value(
-                        config,
-                        "thinking_enabled",
-                        "thinkingEnabled",
-                    )
-                ),
-                strategy_instructions=str(
-                    _config_value(
-                        config,
-                        "strategy_instructions",
-                        "strategyInstructions",
-                    )
-                ),
-                requested_max_output_tokens=arena_action_output_token_budget(
-                    configured_tokens=int(
-                        _config_value(
-                            config,
-                            "max_output_tokens",
-                            "maxOutputTokens",
-                        )
-                    ),
-                    thinking_enabled=bool(
-                        _config_value(
-                            config,
-                            "thinking_enabled",
-                            "thinkingEnabled",
-                        )
-                    ),
-                ),
+    async def _execute_pydantic_task(self, claimed: ClaimedTask) -> None:
+        if self._model_factory is None:
+            raise RuntimeError("PydanticAI model factory is unavailable")
+
+        context_payload = await self._repository.load_runtime_context(
+            self._worker_id,
+            claimed.task.task_id,
+        )
+        memory_state = _json_object(
+            context_payload.get("memoryState", {})
+        )
+        context = HostedArenaAgentContext(
+            task=claimed.task,
+            agent_id=str(context_payload["agentId"]),
+            strategy_revision_id=str(
+                context_payload["strategyRevisionId"]
             ),
-            attempt_recorder=PostgresAttemptRecorder(
-                self._repository,
-                self._worker_id,
+            strategy_revision_no=int(
+                context_payload["strategyRevisionNo"]
+            ),
+            strategy_archetype=StrategyArchetype(
+                str(context_payload["strategyArchetype"])
+            ),
+            strategy_catalog_version=str(
+                context_payload["strategyCatalogVersion"]
+            ),
+            strategy_instructions=str(
+                context_payload["strategyInstructions"]
+            ),
+            game_memory=HostedGameMemory(
+                memory_version=int(context_payload["memoryVersion"]),
+                state=memory_state,
             ),
         )
+        config = claimed.runtime_config
+        model_id = str(
+            _config_value(config, "model_id", "modelId", "model")
+        )
+        thinking_enabled = bool(
+            _config_value(
+                config,
+                "thinking_enabled",
+                "thinkingEnabled",
+            )
+        )
+        remaining_ms = max(
+            0,
+            int(
+                (
+                    min(claimed.deadline_at, claimed.task.deadline_at)
+                    - datetime.now(timezone.utc)
+                ).total_seconds()
+                * 1000
+            ),
+        )
+        if remaining_ms <= 0:
+            await self._submit_runtime_failure(
+                claimed,
+                status="timed_out",
+                error_class="deadline_exceeded",
+            )
+            return
+
+        secret = None
+        built_model = None
         try:
-            result = await driver.execute(
-                claimed.task,
-                claimed.deadline_at,
-                first_attempt_number=(
-                    claimed.first_attempt_number
-                    if claimed.first_attempt_number is not None
-                    else claimed.attempt_count + 1
+            secret = await asyncio.wait_for(
+                self._secret_reader.resolve_for_worker(
+                    SecretReference(claimed.secret_ref)
+                ),
+                timeout=remaining_ms / 1000,
+            )
+            api_key = secret.reveal_for_worker()
+            built_model = self._model_factory.build(
+                provider_id=claimed.provider,
+                model_id=model_id,
+                api_key=api_key,
+                thinking_enabled=thinking_enabled,
+                remaining_timeout_ms=remaining_ms,
+                requested_max_output_tokens=(
+                    arena_action_output_token_budget(
+                        configured_tokens=int(
+                            _config_value(
+                                config,
+                                "max_output_tokens",
+                                "maxOutputTokens",
+                            )
+                        ),
+                        thinking_enabled=thinking_enabled,
+                    )
                 ),
             )
-        except DirectModelInfrastructureError:
+            api_key = ""
+        except TimeoutError:
+            await self._submit_runtime_failure(
+                claimed,
+                status="timed_out",
+                error_class="deadline_exceeded",
+            )
             return
+        except SecretStoreError:
+            await self._submit_runtime_failure(
+                claimed,
+                status="failed",
+                error_class="provider_unavailable",
+            )
+            return
+        except (ValueError, KeyError):
+            await self._submit_runtime_failure(
+                claimed,
+                status="failed",
+                error_class="adapter_mismatch",
+            )
+            return
+        finally:
+            if secret is not None:
+                secret.close()
+
+        attempt_number = (
+            claimed.first_attempt_number
+            if claimed.first_attempt_number is not None
+            else claimed.attempt_count + 1
+        )
+        attempt_id = self._pydantic_attempt_id(
+            claimed.task,
+            attempt_number,
+        )
+        recorder = PostgresAttemptRecorder(
+            self._repository,
+            self._worker_id,
+        )
+        try:
+            await recorder.create(
+                AttemptCreated(
+                    attempt_id=attempt_id,
+                    task_id=claimed.task.task_id,
+                    attempt_number=attempt_number,
+                    provider_id=built_model.resolved.provider_id,
+                    model_id=built_model.resolved.model_id,
+                    thinking_enabled=(
+                        built_model.resolved.thinking_enabled
+                    ),
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            await recorder.mark_request_sent(
+                attempt_id,
+                request_sent_at=datetime.now(timezone.utc),
+            )
+            execution = await HostedArenaAgentRuntime(
+                model=built_model.model,
+                context=context,
+                model_settings=built_model.settings,
+                actual_model=built_model.resolved.model_id,
+            ).execute_with_metadata(
+                claimed.task,
+                claimed.deadline_at,
+            )
+            attempt_status = (
+                "succeeded"
+                if execution.result.status == "succeeded"
+                else (
+                    "unknown"
+                    if execution.error_code == "request_outcome_unknown"
+                    else "failed"
+                )
+            )
+            attempt_error = execution.error_code
+            if attempt_status != "succeeded" and attempt_error is None:
+                attempt_error = (
+                    "deadline_exceeded"
+                    if execution.result.status == "timed_out"
+                    else "permanent_request"
+                )
+            completion = AttemptCompletion(
+                attempt_id=attempt_id,
+                status=attempt_status,
+                finished_at=datetime.now(timezone.utc),
+                latency_ms=execution.latency_ms,
+                usage=execution.usage,
+                actual_model=execution.actual_model,
+                error_code=attempt_error,
+            )
+            if not await self._repository.finish_pydantic_attempt(
+                self._worker_id,
+                completion,
+                request_count=execution.request_count,
+                tool_call_count=execution.tool_call_count,
+            ):
+                raise RuntimeError(
+                    "PostgreSQL Pydantic attempt completion failed"
+                )
+        finally:
+            try:
+                await built_model.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _LOGGER.error(
+                    "hosted_model_close_failed_%s",
+                    type(exc).__name__,
+                    extra={"task_id": claimed.task.task_id},
+                )
 
         result, replaced, policy_version = self._sanitize_result(
             claimed,
-            result,
+            execution.result,
         )
+        if execution.agent_output is not None:
+            try:
+                await self._repository.stage_memory_patch(
+                    self._worker_id,
+                    claimed.task.task_id,
+                    runtime_result_id_digest=sha256_text_identifier(
+                        result.result_id
+                    ),
+                    expected_memory_version=(
+                        context.game_memory.memory_version
+                    ),
+                    decision_summary=(
+                        execution.agent_output.decision_summary.model_dump(
+                            mode="json"
+                        )
+                    ),
+                    memory_patch=(
+                        execution.agent_output.memory_patch.model_dump(
+                            mode="json"
+                        )
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Learning is subordinate to the authoritative action. A
+                # projection outage must not turn a valid candidate into an
+                # unknown business outcome.
+                _LOGGER.error(
+                    "hosted_memory_patch_stage_failed_%s",
+                    type(exc).__name__,
+                    extra={"task_id": claimed.task.task_id},
+                )
         await self._repository.submit_result(
             self._worker_id,
             result,
             message_replaced=replaced,
             policy_version=policy_version,
             error_class=(
-                None if result.status == "succeeded" else "runtime_failed"
+                None
+                if result.status == "succeeded"
+                else (
+                    execution.error_code
+                    or "runtime_failed"
+                )
             ),
         )
+
+    async def _submit_runtime_failure(
+        self,
+        claimed: ClaimedTask,
+        *,
+        status: str,
+        error_class: str,
+    ) -> None:
+        digest = sha256_text_identifier(
+            f"pydantic-hosted-failed:{claimed.task.task_id}:{status}"
+        ).split(":", 1)[1][:40]
+        result = AgentTaskResultV1(
+            result_id=f"pydantic-hosted-failed-{digest}",
+            task_id=claimed.task.task_id,
+            schema_version="arena.agent-result.v1",
+            status=status,
+        )
+        await self._repository.submit_result(
+            self._worker_id,
+            result,
+            message_replaced=False,
+            policy_version=None,
+            error_class=error_class,
+        )
+
+    @staticmethod
+    def _pydantic_attempt_id(
+        task: ArenaAgentTaskV1,
+        attempt_number: int,
+    ) -> str:
+        digest = hashlib.sha256(
+            (
+                "arena402:pydantic-hosted-attempt:v1\0"
+                f"{task.task_id}\0{task.input_hash}"
+            ).encode("utf-8")
+        ).hexdigest()
+        return f"pydantic-hosted-attempt-{digest[:32]}-{attempt_number}"
 
     def _sanitize_result(
         self,

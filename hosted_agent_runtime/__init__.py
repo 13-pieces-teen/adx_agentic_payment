@@ -1,11 +1,17 @@
-"""Hosted Arena Agent runtime foundations.
+"""Hosted Arena Agent runtime.
 
-This package exposes the safe capability/Secret Store ports and the
-network-free Phase 3 execution foundation. Production composition includes the
-single-host encrypted PostgreSQL vault, optional Tencent SSM, real HTTPS
-Provider adapters, and the durable Hosted Worker.
+The production decision path uses a bounded PydanticAI Agent while preserving
+the durable Arena AgentTask/Result, Secret Store, Attempt, and Result Sink
+boundaries.
 """
 
+from .attempts import (
+    AttemptCompletion,
+    AttemptCreated,
+    AttemptRecord,
+    AttemptRecorder,
+    MemoryAttemptRecorder,
+)
 from .capabilities import (
     CAPABILITY_SCHEMA_VERSION_V1,
     DEFAULT_REGISTRY_VERSION_V1,
@@ -17,21 +23,14 @@ from .capabilities import (
     ThinkingEffortPolicy,
     ThinkingMode,
 )
-from .direct_model_driver import (
-    AttemptCompletion,
-    AttemptCreated,
-    AttemptRecord,
-    AttemptRecorder,
-    DirectModelConfig,
-    DirectModelDriver,
-    DirectModelInfrastructureError,
-    MemoryAttemptRecorder,
+from .context import HostedArenaAgentContext
+from .memory import (
+    GameMemoryPatch,
+    HostedAgentRunOutput,
+    HostedGameMemory,
+    SafeDecisionSummary,
 )
-from .prompt_builder import (
-    BuiltPrompt,
-    PromptBuildError,
-    PromptBuilder,
-)
+from .model_factory import BuiltPydanticModel, PydanticModelFactory
 from .providers import (
     FakeProvider,
     FakeProviderScenario,
@@ -64,6 +63,24 @@ from .secret_store import (
     build_secret_store_ports,
     tencent_sdk_is_importable,
 )
+from .runtime import (
+    HostedAgentExecution,
+    HostedAgentRuntimeLimits,
+    HostedArenaAgentRuntime,
+)
+from .runtime_contract import (
+    AGENT_ACTION_SCHEMA_VERSION_V1,
+    HOSTED_AGENT_INSTRUCTION_VERSION_V1,
+    MAX_STRATEGY_BYTES,
+)
+from .strategy import (
+    STRATEGY_CATALOG_VERSION_V1,
+    StrategyArchetype,
+    StrategyPreset,
+    official_strategy_archetype,
+    render_strategy_revision,
+    strategy_preset,
+)
 
 __all__ = [
     "CAPABILITY_SCHEMA_VERSION_V1",
@@ -72,21 +89,27 @@ __all__ = [
     "AttemptCreated",
     "AttemptRecord",
     "AttemptRecorder",
-    "BuiltPrompt",
+    "AGENT_ACTION_SCHEMA_VERSION_V1",
+    "BuiltPydanticModel",
     "CapabilityError",
     "CapabilityRegistry",
     "DeploymentEnvironment",
-    "DirectModelConfig",
-    "DirectModelDriver",
-    "DirectModelInfrastructureError",
     "FakeProvider",
     "FakeProviderScenario",
     "FakeProviderStep",
+    "GameMemoryPatch",
+    "HostedAgentExecution",
+    "HostedAgentRunOutput",
+    "HostedAgentRuntimeLimits",
+    "HostedArenaAgentContext",
+    "HostedArenaAgentRuntime",
+    "HostedGameMemory",
+    "HOSTED_AGENT_INSTRUCTION_VERSION_V1",
+    "MAX_STRATEGY_BYTES",
     "MemorySecretStore",
     "MemoryAttemptRecorder",
     "ModelCapability",
-    "PromptBuildError",
-    "PromptBuilder",
+    "PydanticModelFactory",
     "ProviderAdapter",
     "ProviderInvocationError",
     "ProviderRequest",
@@ -105,6 +128,10 @@ __all__ = [
     "SecretStoreSettings",
     "SecretWrite",
     "SecretWriter",
+    "SafeDecisionSummary",
+    "STRATEGY_CATALOG_VERSION_V1",
+    "StrategyArchetype",
+    "StrategyPreset",
     "TencentSecretController",
     "TencentSecretReader",
     "TencentSecretWriter",
@@ -113,5 +140,8 @@ __all__ = [
     "ThinkingMode",
     "WorkerSecret",
     "build_secret_store_ports",
+    "official_strategy_archetype",
+    "render_strategy_revision",
+    "strategy_preset",
     "tencent_sdk_is_importable",
 ]

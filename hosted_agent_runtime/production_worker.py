@@ -8,6 +8,7 @@ import signal
 
 from db.schema_identity import verify_schema_identity
 
+from .model_factory import PydanticModelFactory
 from .postgres_worker import (
     DurableHostedWorker,
     PostgresHostedWorkerRepository,
@@ -43,6 +44,7 @@ async def main() -> None:
         task_concurrency=int(
             os.getenv("ADX_HOSTED_WORKER_TASK_CONCURRENCY", "5")
         ),
+        model_factory=PydanticModelFactory(providers.registry),
     )
     try:
         await repository.initialize()

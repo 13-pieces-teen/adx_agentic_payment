@@ -100,58 +100,17 @@ docker compose -f docker-compose.local.yml up --build -d
 python scripts/run_full_pawnhouse_game_demo.py
 ```
 
-双 Hosted Agent 路径需要先签发两个全新、一次性使用的本地邀请码：
+Hosted Agent 的当前比赛决策路径已经只使用 PydanticAI Runtime；旧的
+`arena-scripted -> PromptBuilder -> DirectModelDriver` 开发路径已退出 Worker，
+不得再作为比赛验收或失败 fallback。平台官方 Agent 固定通过私有 LiteLLM 使用
+`deepseek-v4-flash`，玩家 BYOK Agent 仍可通过 write-only credential ingress
+直连允许列表内的 DeepSeek 模型。官方 Gateway 的 Key、模型和切换步骤见
+[`docs/official-deepseek-agents.md`](docs/official-deepseek-agents.md)。
 
-```powershell
-docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1
-docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1
-$env:ARENA_BUYER_INVITE="<first invite>"
-$env:ARENA_SELLER_INVITE="<second invite>"
-python scripts/run_dual_hosted_pawnhouse_demo.py
-```
-
-要用开发脚本验证一回合 `agent_a2a.v1` 完整协议、同时不把未付款 Deal 伪装成
-已结算，请使用全新邀请码并执行：
-
-```powershell
-python scripts/run_full_hosted_pawnhouse_demo.py
-```
-
-要验证“首个卖家拒绝后，由同一买方 Agent 从冻结的剩余目录选择第二个卖家”，
-需再签发第三个一次性邀请码并执行：
-
-```powershell
-$env:ARENA_REJECTING_SELLER_INVITE="<third invite>"
-python scripts/run_full_hosted_pawnhouse_demo.py --scenario fallback
-```
-
-要验证更大规模的游戏，可批量签发 JSON 邀请码，让 12 个 Hosted Agent 运行
-版本化、按 seed 洗牌的十回合事件牌组：
-
-```powershell
-$env:ARENA_HOSTED_INVITES = docker compose -f docker-compose.local.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 12 --json
-python scripts/run_many_hosted_pawnhouse_demo.py --agents 12 --rounds 10
-```
-
-`run_full_hosted_pawnhouse_demo.py` 会覆盖 Intent、RFQ、Engage、propose、
-accept 和不可变 Deal；`fallback` 场景还会覆盖第一次 reject、第二个单目标
-RFQ 和随后 accept。它固定使用
-`authorizationMode=none`，所以不会创建 SettlementIntent 或移动资产。脚本只
-输出安全的公开摘要，并使用仅在
-`ADX_HOSTED_LOCAL_DEV=true` 时可用的确定性 `arena-scripted` Provider；它不是
-生产模型 fallback。所有演示都不会在 Injective testnet 付款确认前移动现金或
-库存。若只验证成交边界而不签名或广播交易，请执行：
-
-```powershell
-python scripts/run_dual_hosted_pawnhouse_demo.py --with-settlement-intent
-```
-
-该命令会把一个公开 `SettlementIntent` 冻结在 `authorization_requested`。本地
-settlement bridge 可以签名并提交该精确 Intent，但只有操作员提供已复核的
-`intentHash` 和显式 `--confirm-testnet-transfer` 标志时才会广播。Arena 会在
-广播前记录批准，bridge 为每个 Intent 派生唯一的确定性 nonce，因此重启不会生成
-替代付款。钱包私钥始终留在本地结算进程中，不进入 Arena、PostgreSQL、日志或
-API 响应。
+本地 settlement bridge 只有在操作员提供已复核的 `intentHash` 和显式
+`--confirm-testnet-transfer` 标志时才会广播。Arena 会在广播前记录批准，bridge
+为每个 Intent 派生唯一的确定性 nonce，因此重启不会生成替代付款。钱包私钥始终
+留在本地结算进程中，不进入 Arena、PostgreSQL、日志或 API 响应。
 
 **Arena 402 的游戏内叙事是“王城典当行”：AI Agent 自主买卖、有限轮砍价，
 并把成交交给受约束的 Injective testnet 结算链路。**
@@ -216,8 +175,8 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 |------|----------|
 | 王城典当行 Game Core | Current Game 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 `fcfs.v1`、组间并发有限协商、冻结终场价格与排名；opt-in `agent_a2a.v1` 已完成 wire contracts、协议状态机、migration `055`–`061`、Hosted/Local Runtime task substrate、可恢复市场投影、Round orchestrator、三 Hosted scripted 顺序 fallback Fake E2E、真实双 Codex payment-disabled Deal E2E，以及两个真实 Codex seller 的顺序 fallback。真实 Deal 保留独立 proposal/acceptance Result provenance，未被描述为已结算交易 |
 | Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide/negotiate/market.intent/market.rfq/market.select`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；默认关闭的 WSS wake + stateless MCP 路径已覆盖 claim/status/submit/release/sync、启动/重连与 Gateway sequence gap 主动恢复，并通过隔离 Docker 的协议 E2E；2026-08-02 以本机真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成 FCFS Connector-only 接受局，2026-08-04 的双 Codex `agent_a2a.v1` 先验证自主拒绝，再由 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage → `2.550000 / 2.900000 / accept` 并冻结 Deal。2026-08-05 的 `mixed-fallback-87fc3f3217` 又由两个独立真实 Codex seller 完成 Primary counter、buyer reject、Secondary engage/accept 和顺序 fallback Deal；本地 restart、lease-expiry、deadline 与 outbox replay 也已完成隔离注入。所有 payment-disabled 局均为 0 链写入；外部多实例恢复和支付授权 E2E 仍待验收 |
-| Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
-| 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、Result Sink 与独立 Finalizer；已完成的 FCFS Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；`agent_a2a.v1` 新增任务已进入同一任务和超时基础，并完成真实双 Codex Local Connector Deal、Hosted + 真实 Codex 顺序 fallback、两个真实 Codex seller 顺序 fallback，以及断线重启、lease expiry、deadline default、terminal outbox replay 的 payment-disabled 隔离 E2E；外部多实例恢复、P95/P99 负载校准与 payment-enabled A2A E2E 尚未完成；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
+| Hosted Arena Agent | 生产 Worker 已切换到 bounded PydanticAI Agent run，包含 typed output、只读 Arena 工具、`aggressive/conservative/balanced` 官方策略、冻结 Strategy Revision 和按 `game_agent_id` 隔离的 Game Memory；隔离 PostgreSQL 已验证 applied candidate 推进记忆且 defaulted task 不学习。真实 Provider 多局、跨局学习和 1+9 生产验收仍待完成；BYOK ciphertext vault 与可选腾讯 SSM 边界保持不变 |
+| 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、Result Sink 与独立 Finalizer；Hosted PydanticAI Runtime 仍只提交候选 Result，不直接写 Arena，且记忆补丁绑定具体 Runtime Result digest。已完成的 FCFS Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；`agent_a2a.v1` 新增任务已进入同一任务和超时基础，并完成真实双 Codex Local Connector Deal、Hosted + 真实 Codex 顺序 fallback、两个真实 Codex seller 顺序 fallback，以及断线重启、lease expiry、deadline default、terminal outbox replay 的 payment-disabled 隔离 E2E；外部多实例恢复、P95/P99 负载校准与 payment-enabled A2A E2E 尚未完成 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 `arena402-g` direct relay；Join 后由隔离 owner worker 完成白名单与初始现金铸币，确认前 Participant 不会 Ready。2026-07-26 的 10 Official Agent 生产 testnet 批次已完成 14 笔 provision 广播和一笔 accepted trade 的 x402 V2 → EIP-3009 → 链上确认 → 库存提交闭环。mUSDC 仅保留为历史/底层测试资产；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端默认开放无邀请码的用户名/密码注册，并保留可选 GitHub OAuth + PKCE。两者共用 Session/CSRF Cookie 与内部 `user_id` 业务身份；新账号进入纪念币领取页，已有账号按安全 `return_to` 进入平台。广州公网 API 的未备案访问问题仍需由境外入口或主机迁移解决 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限；`024` 增加单例 Current Game 权威指针和公开 `/api/v1/games/current` 安全投影，`041` 清理旧容量约束，`042` 统一 PostgreSQL 权威动作策略，`043` 只轮换无人加入的旧事件牌组；Arena Worker 已负责首次创建与终态后原子切换下一局，开赛、快照和排名只包含 Ready/active Participant |
@@ -236,10 +195,10 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | `web/` | 当前 HTTP 组合根：Connector、Hosted Agent、Arena participation 与 Pawnhouse API |
 | `arena_game/` | 王城典当行的新游戏领域内核：货物、金额、组合、事件、回合与排名 |
 | `arena_payments/` | 永久钱包绑定、PaymentMandate、x402 V2、Facilitator/Signer 端口、自动结算与云端 lease |
-| `db/` | Connector、Hosted Agent/Runtime/Task、Pawnhouse、GitHub OAuth、加密 credential vault、钱包/x402，以及 `020`–`023` Connector Result inbox、Local Agent identity/mixed Runtime 和最小权限接线迁移 |
+| `db/` | Connector、Hosted Agent/Runtime/Task、Pawnhouse、GitHub OAuth、加密 credential vault、钱包/x402，以及迁移 `063` 的 Strategy Revision、Game Memory、Result-bound patch 和最小权限函数 |
 | `connector/`, `connector_gateway/` | 本地 Agent Connector 与自托管控制面 |
 | `arena_agent_contracts/`, `arena_core/` | 统一 Runtime 契约、Arena Task/Result 持久化、审计、默认收敛与 exactly-once 投影基础 |
-| `hosted_agent_runtime/` | Secret Store、durable Attempt recorder、Provider/Model/thinking capability registry、安全 Prompt/Driver，以及 DeepSeek/OpenAI-compatible HTTPS Provider |
+| `hosted_agent_runtime/` | PydanticAI Agent、只读 Arena tools、typed output、策略/记忆模型、allowlisted Model factory、Secret Store、durable Attempt recorder，以及 DeepSeek/OpenAI-compatible Provider |
 | `hosted_agent_control_plane/` | Hosted capability/readiness、write-only Credential ingress、Agent create/list/detail、同 Provider Runtime PATCH、PostgreSQL repository 与可选 Secret backend 生产组合 |
 | `docs/hosted-arena-agent-*.md` | Hosted/Local 统一 Runtime 的已批准规格、实施计划与当前阶段状态 |
 | [外部 Arena 402 frontend](https://github.com/sunruize93-cmyk/arena402) | 产品 UI 的唯一代码源与 Vercel 部署源；本仓库只维护后端 |
@@ -304,9 +263,11 @@ docker compose -f docker-compose.local.yml down -v
 开发栈使用，禁止复用到公网或共享环境。生产组合仍使用 Tencent Secret Manager、
 独立 Worker 和独立数据库角色。
 
-这条本地路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
+既有本地 scripted 路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
 持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
-可继续冻结 SettlementIntent。人工 CLI bridge 仍要求逐笔确认；目标自动路径设计为
+可继续冻结 SettlementIntent；新的 PydanticAI Runtime 已另以隔离 PostgreSQL
+验证入局冻结、工具回合、Result applied 和记忆 gate，但不等于真实 Provider 多局
+验收。人工 CLI bridge 仍要求逐笔确认；目标自动路径设计为
 用户入局时创建一次受限 PaymentMandate，此后由隔离的 guest signer 和 Settlement
 Worker 处理 accepted trade，不再逐笔确认。默认部署仍将自动广播设为关闭，必须先
 配置 testnet signer、Facilitator、钱包清单和管理员 allowlist，并完成 live testnet

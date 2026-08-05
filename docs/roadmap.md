@@ -1,5 +1,30 @@
 # Arena 402 Roadmap
 
+## Hosted Agent Runtime v2
+
+- [x] 冻结 PydanticAI 直接替换方案：保留 AgentTask/Result、lease、Secret、Result
+  Sink 和 Finalizer，退役 DirectModelDriver/PromptBuilder 认知执行链。
+- [x] 冻结官方策略目录为 `aggressive | conservative | balanced`，随机抽取持久
+  `agent_id`，入局后冻结 identity、Strategy Revision 和独立 Game Memory。
+- [x] 完成 Strategy Revision、Game Memory、pending patch 与 official pool migration。
+- [x] 完成 PydanticAI Agent、只读工具、typed output 和 allowlisted Model factory。
+- [x] 生产 Durable Hosted Worker 已切换到 bounded PydanticAI run；candidate action
+  仍只进入原 Result Sink，pending patch 只在 `apply_status=applied` 后 CAS 投影。
+- [x] 经人工确认物理删除 PromptBuilder/DirectModelDriver 及其测试，Attempt
+  元数据迁入独立模块，Worker 不再保留 legacy/scripted 比赛分支。
+- [x] 官方 PydanticAI Agent 与私有 LiteLLM 上游统一选择
+  `deepseek-v4-flash`，不再使用已停用的 `deepseek-chat` 名称。
+- [x] 使用隔离 PostgreSQL 验证完整迁移、Hosted 入局冻结、PydanticAI Worker、
+  Result applied 推进记忆，以及 defaulted task 不学习；Agent run 的
+  request/tool 安全计数已进入 Attempt 元数据。
+- [x] 使用真实 DeepSeek V4 Flash BYOK 直连验证 Thinking + tools + typed
+  terminal action；三种官方策略各连续执行两个 `arena.decide` 回合，六次任务均
+  succeeded，且每个 Agent 的 Game Memory 从 v0 单调推进至 v2。该证据不等同于
+  私有 LiteLLM、单玩家 + 九官方 Agent 或生产部署验收。
+- [ ] 继续验证 rejected/late、并发 CAS 和 Worker 重启恢复。
+- [ ] 完成 `game.completed` 跨比赛学习、revision gate 和历史回退。
+- [ ] 完成单玩家 + 九官方 Hosted Agent 的多局、重启和策略对比验收。
+
 ## Product narrative baseline
 
 Arena 402 的对外叙事固定为三层：

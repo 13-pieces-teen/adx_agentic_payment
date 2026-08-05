@@ -267,6 +267,10 @@ class PostgresPawnhouseRepository:
             "minParticipants": start_threshold,
             "maxParticipants": max_participants,
             "officialFillAfterSeconds": official_fill_after_seconds,
+            "officialAgentSelectionVersion": "arena.official-selection.v1",
+            "officialAgentStrategyCatalogVersion": (
+                "arena.hosted-strategy.v1"
+            ),
             "portfolioMode": "manual",
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
@@ -696,7 +700,9 @@ class PostgresPawnhouseRepository:
                     official = await connection.fetchrow(
                         """
                         SELECT inventory.wallet_id, inventory.chain_id,
-                               inventory.account_address
+                               inventory.account_address,
+                               pool_entry.strategy_archetype,
+                               pool_entry.strategy_catalog_version
                         FROM arena402.official_agent_pool AS pool_entry
                         JOIN public.arena_agents AS agent
                           ON agent.agent_id = pool_entry.agent_id
@@ -939,7 +945,11 @@ class PostgresPawnhouseRepository:
                         hc.task_schema_version,
                         hc.action_schema_version,
                         hc.capability_version,
-                        hc.adapter_version
+                        hc.adapter_version,
+                        strategy.strategy_revision_id,
+                        strategy.revision_no AS strategy_revision_no,
+                        strategy.archetype AS strategy_archetype,
+                        strategy.catalog_version AS strategy_catalog_version
                     FROM public.arena_agents AS a
                     JOIN public.arena_runtime_bindings AS b
                       ON b.agent_id = a.agent_id
@@ -950,6 +960,9 @@ class PostgresPawnhouseRepository:
                      AND hc.agent_id = a.agent_id
                     JOIN public.arena_model_credentials AS c
                       ON c.credential_id = hc.credential_id
+                    JOIN public.hosted_agent_strategy_revisions AS strategy
+                      ON strategy.agent_id = a.agent_id
+                     AND strategy.status = 'active'
                     WHERE a.agent_id = $1
                       AND a.owner_user_id = $2
                       AND a.status = 'active'
@@ -971,6 +984,16 @@ class PostgresPawnhouseRepository:
                     "credential_id": hosted["credential_id"],
                     "thinking_enabled": hosted["thinking_enabled"],
                     "strategy_instructions": hosted["strategy_instructions"],
+                    "strategy_revision_id": hosted[
+                        "strategy_revision_id"
+                    ],
+                    "strategy_revision_no": hosted[
+                        "strategy_revision_no"
+                    ],
+                    "strategy_archetype": hosted["strategy_archetype"],
+                    "strategy_catalog_version": hosted[
+                        "strategy_catalog_version"
+                    ],
                     "max_output_tokens": hosted["max_output_tokens"],
                     "prompt_version": hosted["prompt_version"],
                     "task_schema_version": hosted["task_schema_version"],
@@ -1024,11 +1047,13 @@ class PostgresPawnhouseRepository:
                     """
                     INSERT INTO public.game_agents (
                         game_agent_id, game_id, user_id, agent_id,
-                        runtime_binding_id, config_snapshot, config_hash,
-                        initial_cash_atomic, initial_inventory
+                        runtime_binding_id, hosted_strategy_revision_id,
+                        config_snapshot, config_hash, initial_cash_atomic,
+                        initial_inventory
                     )
                     VALUES (
-                        $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb
+                        $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9,
+                        $10::jsonb
                     )
                     """,
                     participant_id,
@@ -1036,10 +1061,25 @@ class PostgresPawnhouseRepository:
                     user_id,
                     agent_id,
                     hosted["runtime_binding_id"],
+                    hosted["strategy_revision_id"],
                     _json(config_snapshot),
                     config_hash,
                     portfolio.cash_atomic,
                     _json(portfolio.holdings),
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO public.hosted_agent_game_memory (
+                        game_agent_id, game_id, agent_id,
+                        strategy_revision_id
+                    )
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (game_agent_id) DO NOTHING
+                    """,
+                    participant_id,
+                    game_id,
+                    agent_id,
+                    hosted["strategy_revision_id"],
                 )
                 await connection.execute(
                     """
@@ -1120,6 +1160,15 @@ class PostgresPawnhouseRepository:
                         "participantId": participant_id,
                         "agentId": agent_id,
                         "runtimeKind": "hosted",
+                        **(
+                            {
+                                "strategyArchetype": str(
+                                    hosted["strategy_archetype"]
+                                )
+                            }
+                            if official_pool_join
+                            else {}
+                        ),
                     },
                 )
                 if payment_mandate_id is not None:
@@ -7916,7 +7965,13 @@ class PostgresPawnhouseRepository:
                     AND participant.agent_id = official.agent_id
                     AND participant.readiness <> 'withdrawn'
               )
-            ORDER BY official.priority, official.agent_id
+            ORDER BY
+                md5(
+                    $1::text || ':' || official.agent_id
+                    || ':arena.official-selection.v1'
+                ),
+                official.priority,
+                official.agent_id
             LIMIT $2
             """,
             game["game_id"],

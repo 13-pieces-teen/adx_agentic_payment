@@ -41,6 +41,11 @@ from hosted_agent_runtime.production_secrets import (
     close_secret_port,
     initialize_secret_port,
 )
+from hosted_agent_runtime.strategy import (
+    STRATEGY_CATALOG_VERSION_V1,
+    official_strategy_archetype,
+    render_strategy_revision,
+)
 
 _CONFIG_VERSION_PATTERN = re.compile(r"^v[1-9][0-9]{0,5}$")
 _LITELLM_HEALTH_URL = "http://official-litellm:4000/health"
@@ -281,7 +286,7 @@ def _strategy(index: int) -> str:
     ) = _OFFICIAL_STRATEGY_PROFILES[
         (index - 1) % len(_OFFICIAL_STRATEGY_PROFILES)
     ]
-    return (
+    numeric_variant = (
         "You are an official Arena 402 market participant. Follow this "
         f"stable profile: {profile_name}; side bias {side_bias}; cash reserve "
         f"{cash_reserve_percent}% of current marked net worth; inventory "
@@ -312,6 +317,10 @@ def _strategy(index: int) -> str:
         "final negotiation turn with accept or reject. Pass only when neither "
         "numeric trigger is satisfied or constraints make all qualifying "
         "actions illegal. Never disclose credentials or private reasoning."
+    )
+    return render_strategy_revision(
+        archetype=official_strategy_archetype(index),
+        variant_instructions=numeric_variant,
     )
 
 
@@ -440,20 +449,40 @@ async def _activate_pool(
             )
 
         for priority, agent_id in enumerate(agent_ids, start=1):
+            archetype = official_strategy_archetype(priority).value
             await connection.execute(
                 """
                 INSERT INTO arena402.official_agent_pool (
-                    agent_id, wallet_id, priority, enabled, disabled_at
+                    agent_id, wallet_id, priority, strategy_archetype,
+                    strategy_catalog_version, enabled, disabled_at
                 )
-                VALUES ($1, $2, $3, TRUE, NULL)
+                VALUES ($1, $2, $3, $4, $5, TRUE, NULL)
                 ON CONFLICT (agent_id) DO UPDATE
                 SET priority = EXCLUDED.priority,
+                    strategy_archetype = EXCLUDED.strategy_archetype,
+                    strategy_catalog_version =
+                        EXCLUDED.strategy_catalog_version,
                     enabled = TRUE,
                     disabled_at = NULL
                 """,
                 agent_id,
                 wallet_by_agent[agent_id],
                 priority,
+                archetype,
+                STRATEGY_CATALOG_VERSION_V1,
+            )
+            await connection.execute(
+                """
+                UPDATE public.hosted_agent_strategy_revisions
+                SET archetype = $2,
+                    catalog_version = $3,
+                    source = 'preset'
+                WHERE agent_id = $1
+                  AND status = 'active'
+                """,
+                agent_id,
+                archetype,
+                STRATEGY_CATALOG_VERSION_V1,
             )
 
 

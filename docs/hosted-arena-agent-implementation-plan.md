@@ -1,10 +1,8 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与 1–10 回合游戏编排已完成，
-> Connector typed Task/Result 与 Result Sink 基础接线已完成；Local identity/session/
-> task dispatcher、mixed-Runtime 编排、生产 Tencent SSM/CAM 和完整生产 E2E 待验收；
-> DeepSeek/OpenAI-compatible Provider 已在本地真实链路验证
-> 最后更新：2026-07-25
+> 文档状态：Runtime v2 直接替换计划已批准并开始实施。旧 Phase 0–6 作为已完成
+> foundation 保留；当前权威实施顺序见第 22 节
+> 最后更新：2026-08-05
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
@@ -34,6 +32,10 @@ Agent identity / ownership
 中间的完整 FCFS 撮合、有限轮协商和结算引擎可以独立推进。本计划只实现它们所依赖的
 Agent/Runtime/Task 基础，并提供清晰的 Arena 接口；不会为了演示 Hosted Agent 而把
 已删除的内存 matching 原型冒充生产游戏内核。
+
+Runtime v2 在这些基础上直接替换认知执行链。生产切换后不并行保留
+`DirectModelDriver` fallback；保留的是 Task、lease、Attempt、Secret、Result Sink
+和 Finalizer 等平台基础设施。
 
 ### 1.1 MVP 成功定义
 
@@ -1484,12 +1486,11 @@ class AgentRuntimeDriver(Protocol):
     async def execute(task_snapshot, deadline) -> AgentTaskResult: ...
 ```
 
-当前 `DirectModelDriver` 执行一个逻辑 AgentTask，并按统一规则最多发起两个 Provider
-Attempt。未来可以新增：
+Runtime v2 的 `HostedArenaAgentRuntime` 使用 PydanticAI 执行一个逻辑 AgentTask。
+未来可以在该边界内新增：
 
-- `LangGraphDriver`；
 - 受控多步骤 Planner；
-- 平台 Skill；
+- allowlisted MCP/平台 Skill；
 - 评估与版本发布。
 
 Agent Studio 仍必须遵守：
@@ -1516,7 +1517,7 @@ Agent Studio 不进入本次 MVP 的代码范围。
 | Guest signer Secret 命名与 region | 部署前确定；签名机制已冻结为 `sandbox_guest + single_eip3009` |
 | Native A2A auth/binding | Post-MVP |
 | 多 Runtime failover | Post-MVP，需重新评估公平性 |
-| 跨局长期记忆 | 不在 MVP |
+| 跨局策略学习的自动晋级阈值 | Runtime v2 先持久化 candidate/replay 证据，再用真实比赛校准 |
 
 以上事项不得被实现者用不安全默认值静默决定。
 
@@ -1553,3 +1554,138 @@ Agent Studio 不进入本次 MVP 的代码范围。
       均有脱敏证据；
 - [ ] README、product、game-design、roadmap、agent-onboarding 和 settlement 文档已同步；
 - [ ] frozen specs、compatibility identifiers 和无关用户改动未被破坏。
+
+## 22. Runtime v2：PydanticAI 直接替换计划
+
+本节是 2026-08-05 起的当前实施权威。旧 Phase 3 的 DirectModelDriver 内容只描述
+历史基线；对应实现与测试已经删除，不再定义或参与当前 Runtime。
+
+### 22.1 保留、替换和退役
+
+| 决策 | 范围 |
+|---|---|
+| 保留 | Agent identity、Hosted config、Secret ports、AgentTask/Result、lease、Attempt、Result Sink/Consumer、Finalizer |
+| 重构 | Durable Hosted Worker、Provider composition、official pool bootstrap |
+| 直接替换 | `DirectModelDriver`、`PromptBuilder`、比赛决策用 `ProviderAdapter.invoke` |
+| 已删除 | legacy Driver/Prompt 实现、对应测试、Worker fallback 与无调用引用 |
+
+生产切换后不得按请求或错误静默 fallback 到旧 Driver。数据库迁移保持 forward-only；
+运行故障通过完整部署版本回滚处理。
+
+### 22.2 目标模块
+
+```text
+hosted_agent_runtime/
+  arena_agent.py
+  runtime.py
+  context.py
+  model_factory.py
+  strategy.py
+  tools/
+  memory/
+  learning/
+```
+
+`Agent[ArenaAgentContext, HostedAgentRunOutput]` 组合：
+
+- 平台 instructions；
+- 冻结 Strategy Revision；
+- `RunContext` 中的不可变 Task 和已应用 Game Memory；
+- 只读分析工具；
+- `UsageLimits(request_limit, tool_calls_limit, output_tokens_limit)`；
+- typed terminal action、safe decision summary 和 pending memory patch。
+
+不持久化 PydanticAI raw messages、ThinkingPart、Provider reasoning text 或私有
+chain-of-thought。
+
+### 22.3 官方策略目录与抽取
+
+官方池一级策略固定为：
+
+- `aggressive`；
+- `conservative`；
+- `balanced`。
+
+每个一级类型可以有多个固定数值变体。Bootstrap 为每个官方 `agent_id` 持久化类型
+和 active Strategy Revision。补位候选使用：
+
+```text
+stable_random_key =
+  hash(game_id, agent_id, "arena.official-selection.v1")
+```
+
+相同 Game 的重试得到相同候选顺序；已经落入 `game_participants` 的身份不会被替换。
+入局事务把 Strategy Revision 写入 `game_agents` 快照并初始化
+`hosted_agent_game_memory`。一名玩家加九个官方 Agent 时，九个席位分别绑定九个
+持久身份和九份独立记忆。
+
+### 22.4 实施里程碑
+
+#### V2-0 文档冻结
+
+- [x] 更新 Hosted Spec、Implementation Plan 和 Game Design；
+- [x] 冻结策略类型、随机抽取单位和状态保存权威；
+- [x] 明确无 Runtime fallback、无 direct Arena write、无 CoT persistence。
+
+#### V2-1 状态与抽取 foundation
+
+- [x] 增加 Strategy Revision、Game Memory 和 pending memory patch migration；
+- [x] official pool 增加 strategy archetype；
+- [x] 使用 Game-scoped 稳定随机候选顺序；
+- [x] 入局冻结 revision 并初始化独立 Game Memory；
+- [x] 增加最小权限 SQL 与静态 migration contract 测试；
+- [x] 使用隔离 PostgreSQL 完成 migration、入局冻结、applied/defaulted memory
+  gate 集成验收；
+- [ ] 完成 rejected/late、并发 CAS 和 Worker 重启集成验收。
+
+#### V2-2 PydanticAI Runtime core
+
+- [x] 锁定 `pydantic-ai-slim[openai]==2.24.0`；
+- [x] 实现 allowlisted Model factory；
+- [x] 实现 Agent instructions、typed output、只读工具和 UsageLimits；
+- [x] 使用 TestModel 覆盖多步工具、输出纠正与 Worker 闭环；
+- [x] 不保存 raw message history/thinking content。
+
+#### V2-3 Worker cutover
+
+- [x] 生产 Durable Worker 改为构造 `HostedArenaAgentRuntime`；
+- [x] 一个 DB Attempt 包裹一个 bounded PydanticAI run；
+- [x] 将 run 的 request/tool 安全计数加入 Attempt 持久化；
+- [x] candidate action 仍只进入现有 Result Sink；
+- [x] pending memory patch 绑定具体 Runtime Result digest，只在该 Result
+  applied 后 CAS 提交；
+- [x] credential validation probe 与比赛决策引擎分离。
+
+`arena-scripted` Provider 仅可留作孤立 Provider 单元 fixture；Hosted Worker
+不再发布或执行该比赛路径，也不存在 PydanticAI 失败后的生产 fallback。
+
+#### V2-4 跨比赛学习
+
+- [ ] `game.completed` 创建幂等 learning job；
+- [ ] 只读取可验证的行动、成交、价格、净值和排名；
+- [ ] 生成 candidate Strategy Revision 和安全证据摘要；
+- [ ] schema/replay gate 通过后只对下一场 Game 激活；
+- [ ] 保存历史 revision 并支持自动回退到上一 active 版本。
+
+#### V2-5 删除与生产验收
+
+- [x] 生产入口显式注入 `PydanticModelFactory`，不再调用 DirectModelDriver；
+- [x] 人工确认后物理删除 legacy Driver/Prompt 实现及对应测试，并迁出 Attempt
+  与 Runtime 合同常量；
+- [x] 官方 Agent 与私有 LiteLLM 上游都固定为 `deepseek-v4-flash`；
+- [ ] 完成单玩家 + 九官方 Agent 的多局 E2E；
+- [ ] 证明不同策略类型、独立记忆、重启恢复和下一局学习；
+- [ ] 更新 README/Roadmap/部署证据。
+
+### 22.5 必须通过的行为测试
+
+- 相同 Game 和 pool 状态下，官方候选顺序可复现；
+- 不同 Game 的候选顺序发生变化；
+- 抽中后整局 identity/archetype/revision 不变；
+- 同一 Agent 的两场 Game 使用不同 `game_agent_id` 和独立 Game Memory；
+- rejected/defaulted/late result 不推进 memory version；
+- applied result 最多推进一次；
+- Worker 重启恢复相同 strategy revision 和 memory version；
+- PydanticAI 在限制内调用只读工具并返回唯一合法 terminal action；
+- raw reasoning、Secret 和不可信公开文本不进入记忆；
+- 新 revision 不影响正在进行的 Game。

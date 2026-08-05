@@ -204,6 +204,12 @@ AGENT_MARKET_TERMINALIZATION_SQL_PATH = (
     / "migrations"
     / "062_arena_agent_market_terminalization.sql"
 )
+HOSTED_AGENT_RUNTIME_V2_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "063_hosted_agent_runtime_v2.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1140,4 +1146,35 @@ def test_completed_round_market_state_is_backfilled_to_terminal(
     assert (
         AGENT_MARKET_TERMINALIZATION_SQL_PATH
         in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_runtime_v2_persists_strategy_and_applied_memory(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_RUNTIME_V2_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "strategy_archetype" in sql
+    assert "hosted_agent_strategy_revisions" in sql
+    assert "hosted_agent_game_memory" in sql
+    assert "hosted_agent_memory_patches" in sql
+    assert "hosted_strategy_revision_id" in sql
+    assert "load_hosted_agent_runtime_context" in sql
+    assert "stage_hosted_agent_memory_patch" in sql
+    assert "project_hosted_agent_memory_patches" in sql
+    assert "complete_pydantic_agent_task_attempt" in sql
+    assert "agent_request_count" in sql
+    assert "agent_tool_call_count" in sql
+    assert "patch.runtime_result_id_digest" in sql
+    assert "result.runtime_result_id_digest =" in sql
+    assert "v_patch.apply_status = 'applied'" in sql
+    assert "memory_version = v_patch.expected_memory_version" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert HOSTED_AGENT_RUNTIME_V2_SQL_PATH in migrate_module.migration_files(
+        "arena"
     )

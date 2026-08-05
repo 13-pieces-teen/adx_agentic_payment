@@ -51,9 +51,9 @@ def test_nearest_rank_percentile_uses_observed_tail_value() -> None:
 
 def test_required_combination_preserves_colon_in_hosted_runtime_label() -> None:
     assert _required_combination(
-        "hosted:deepseek/deepseek-chat:arena.market.intent"
+        "hosted:deepseek/deepseek-v4-flash:arena.market.intent"
     ) == (
-        "hosted:deepseek/deepseek-chat",
+        "hosted:deepseek/deepseek-v4-flash",
         "arena.market.intent",
     )
 

@@ -467,7 +467,7 @@ services:
       - --model-alias
       - ${ADX_OFFICIAL_AGENT_MODEL:-deepseek-v4-flash}
       - --upstream-model
-      - ${ADX_OFFICIAL_DEEPSEEK_UPSTREAM_MODEL:-deepseek-chat}
+      - ${ADX_OFFICIAL_DEEPSEEK_UPSTREAM_MODEL:-deepseek-v4-flash}
       - --config-version
       - ${ADX_OFFICIAL_LITELLM_CONFIG_VERSION:-v1}
     environment:

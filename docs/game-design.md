@@ -134,6 +134,13 @@ Participant 会保留自己的席位，但不能参与回合。开赛事务只�
 Participant，并取消仍未准备完成的 Participant，后续 Decide、快照和排名均不得
 包含它们。
 
+官方补位从显式 allowlist 中抽取持久 Hosted Agent identity。候选顺序由
+`gameId + agentId + officialSelectionVersion` 形成稳定伪随机排序，便于重试和审计；
+不是每次 Worker 轮询重新随机。抽中后 `game_participants` 保存席位，
+`game_agents.config_snapshot` 冻结 `aggressive | conservative | balanced` 策略
+类型和 Strategy Revision，`hosted_agent_game_memory` 以 `game_agent_id` 保存局内
+状态。整局不重抽、不换策略；下一局才重新抽取并绑定当时生效的策略版本。
+
 产品 Current Game 的 Join v2 使用 `cashAtomic` 十进制整数字符串和四种货物的
 非负整数数量提交初始组合；服务端按公开初始价重新计算，只有总值严格等于
 `20000000` atomic（20 金）才允许加入。未提交 `portfolio` 的旧客户端使用
@@ -167,11 +174,14 @@ Factory 在同一数据库事务中冻结 participant view、Game Agent 配置�
 `allowedGoods` 只包含其正持仓货物。Arena 后端仍会独立重复余额、库存与限价
 校验，不能只信任 Prompt 约束。
 
-Hosted Prompt v5 要求 Agent 把 `market` 视为已包含当前 market-target 事件效果，
+PydanticAI Hosted Agent instructions 要求 Agent 把 `market` 视为已包含当前
+market-target 事件效果，
 不得重复应用；逐一比较全部允许货物，并按照冻结的私有策略画像计算 `fairValue`、
-买卖触发阈值和作为保留价的 `limitPrice`。官方池按优先级循环十种数值画像，覆盖
-买方偏向、卖方偏向和双边策略，并使用不同的现金保留比例、库存目标、商品同分
-排序和买卖阈值，避免所有官方 Agent 因同一事件使用同一方向。
+买卖触发阈值和作为保留价的 `limitPrice`。官方池固定三种一级类型：
+`aggressive`、`conservative`、`balanced`；每种类型下面保留多个数值画像，使用
+不同的现金保留比例、库存目标、商品同分排序和买卖阈值，避免所有官方 Agent 因
+同一事件使用同一方向。标准十 Agent 官方池采用 `4/3/3` 分布，所以一名玩家加九名
+官方 Agent 的比赛必然覆盖三种一级策略。
 
 Runtime 提交候选 Result 后，Arena Result Sink 在持久化前处理公开输出并使用数据库
 时钟记录 `result_received_at`。Result Consumer 完成 schema、阶段、资产和货物校验

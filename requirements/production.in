@@ -5,6 +5,7 @@
 fastapi>=0.115,<1
 uvicorn[standard]>=0.34,<1
 pydantic>=2.10,<3
+pydantic-ai-slim[openai]==2.24.0
 argon2-cffi>=21.3,<26
 itsdangerous>=2.2,<3
 asyncpg>=0.29,<1

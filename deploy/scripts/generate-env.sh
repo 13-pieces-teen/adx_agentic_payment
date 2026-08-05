@@ -253,6 +253,8 @@ umask 077
   printf 'ADX_OFFICIAL_LITELLM_TOKEN_FILE_HOST_PATH=%s\n' "${official_litellm_token_file}"
   printf 'ADX_OFFICIAL_LITELLM_CONFIG_HOST_PATH=%s\n' "${official_litellm_config}"
   printf 'ADX_OFFICIAL_LITELLM_CONFIG_VERSION=v1\n'
+  printf 'ADX_OFFICIAL_AGENT_MODEL=deepseek-v4-flash\n'
+  printf 'ADX_OFFICIAL_DEEPSEEK_UPSTREAM_MODEL=deepseek-v4-flash\n'
   printf 'ADX_TENCENT_SSM_REGION=ap-guangzhou\n'
   printf 'ADX_TENCENT_SSM_RECOVERY_WINDOW_DAYS=0\n'
   printf 'ADX_TENCENT_SSM_IAM_VERIFIED=false\n'

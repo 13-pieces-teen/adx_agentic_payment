@@ -27,13 +27,13 @@ def _valid_manifest() -> dict[str, object]:
                 "alias": "ARENA_OFFICIAL_DEEPSEEK_001",
                 "modelAlias": "deepseek-v4-flash",
                 "secretRef": "arena402/hosted-model/deepseek-001",
-                "upstreamModel": "deepseek-chat",
+                "upstreamModel": "deepseek-v4-flash",
             },
             {
                 "alias": "ARENA_OFFICIAL_DEEPSEEK_002",
                 "modelAlias": "deepseek-v4-flash",
                 "secretRef": "arena402/hosted-model/deepseek-002",
-                "upstreamModel": "deepseek-chat",
+                "upstreamModel": "deepseek-v4-flash",
             },
         ],
     }
@@ -198,7 +198,7 @@ def test_provisioned_manifest_never_contains_raw_keys(
                 litellm_token_file=tmp_path / "gateway.key",
                 manifest_file=manifest_path,
                 model_alias="deepseek-v4-flash",
-                upstream_model="deepseek-chat",
+                upstream_model="deepseek-v4-flash",
                 config_version="v1",
             )
         )
@@ -221,7 +221,7 @@ def test_provisioned_manifest_never_contains_raw_keys(
                     "arena402/hosted-model/"
                     "official-litellm-v1-deepseek-001"
                 ),
-                "upstreamModel": "deepseek-chat",
+                "upstreamModel": "deepseek-v4-flash",
             },
             {
                 "alias": "ARENA_OFFICIAL_DEEPSEEK_002",
@@ -230,7 +230,7 @@ def test_provisioned_manifest_never_contains_raw_keys(
                     "arena402/hosted-model/"
                     "official-litellm-v1-deepseek-002"
                 ),
-                "upstreamModel": "deepseek-chat",
+                "upstreamModel": "deepseek-v4-flash",
             },
         ],
         "gatewaySecretRef": (
@@ -318,8 +318,8 @@ def test_build_litellm_config_load_balances_same_alias_without_retries() -> None
     assert [
         model["litellm_params"]["model"] for model in model_list
     ] == [
-        "deepseek/deepseek-chat",
-        "deepseek/deepseek-chat",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash",
     ]
     assert config["router_settings"] == {
         "routing_strategy": "simple-shuffle",

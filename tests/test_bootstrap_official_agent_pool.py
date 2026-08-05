@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from hosted_agent_runtime.prompt_builder import MAX_STRATEGY_BYTES
+from hosted_agent_runtime.runtime_contract import MAX_STRATEGY_BYTES
+from hosted_agent_runtime.strategy import official_strategy_archetype
 from scripts.bootstrap_official_agent_pool import (
     _load_litellm_token,
     _owner_id,
@@ -35,6 +36,10 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
     assert len(set(first_cycle)) == 10
     assert second_cycle == first_cycle
     assert all("fairValue" in strategy for strategy in first_cycle)
+    assert all("public archetype" in strategy for strategy in first_cycle)
+    assert len(
+        {official_strategy_archetype(index) for index in range(1, 11)}
+    ) == 3
     assert all("cash reserve" in strategy for strategy in first_cycle)
     assert all("inventory target" in strategy for strategy in first_cycle)
     assert any("BUY_BIASED" in strategy for strategy in first_cycle)
@@ -53,10 +58,10 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
 
 
 def test_official_strategy_refresh_has_a_versioned_stable_idempotency_key() -> None:
-    assert STRATEGY_VERSION == "market-v5"
+    assert STRATEGY_VERSION == "pydantic-agent-v1"
     assert (
         _update_idempotency_key("agent-official-001")
-        == "official-strategy-market-v5-agent-official-001"
+        == "official-strategy-pydantic-agent-v1-agent-official-001"
     )
 
 
@@ -76,7 +81,9 @@ def test_official_pool_requires_every_litellm_deployment_to_be_healthy() -> None
     assert (
         _require_healthy_litellm_payload(
             {
-                "healthy_endpoints": [{"model": "deepseek/deepseek-chat"}],
+                "healthy_endpoints": [
+                    {"model": "deepseek/deepseek-v4-flash"}
+                ],
                 "unhealthy_endpoints": [],
             }
         )
@@ -86,9 +93,11 @@ def test_official_pool_requires_every_litellm_deployment_to_be_healthy() -> None
     with pytest.raises(RuntimeError, match="unhealthy"):
         _require_healthy_litellm_payload(
             {
-                "healthy_endpoints": [{"model": "deepseek/deepseek-chat"}],
+                "healthy_endpoints": [
+                    {"model": "deepseek/deepseek-v4-flash"}
+                ],
                 "unhealthy_endpoints": [
-                    {"model": "deepseek/deepseek-chat"}
+                    {"model": "deepseek/deepseek-v4-flash"}
                 ],
             }
         )

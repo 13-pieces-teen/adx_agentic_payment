@@ -217,7 +217,11 @@ class PostgresArenaParticipationRepository:
                         hc.max_input_bytes,
                         hc.max_context_items,
                         hc.max_output_tokens,
-                        hc.status AS hosted_status
+                        hc.status AS hosted_status,
+                        strategy.strategy_revision_id,
+                        strategy.revision_no AS strategy_revision_no,
+                        strategy.archetype AS strategy_archetype,
+                        strategy.catalog_version AS strategy_catalog_version
                     FROM arena_agents AS a
                     JOIN arena_runtime_bindings AS b
                       ON b.agent_id = a.agent_id
@@ -225,6 +229,9 @@ class PostgresArenaParticipationRepository:
                     LEFT JOIN arena_hosted_configs AS hc
                       ON hc.hosted_config_id = b.hosted_config_id
                      AND hc.agent_id = a.agent_id
+                    LEFT JOIN hosted_agent_strategy_revisions AS strategy
+                      ON strategy.agent_id = a.agent_id
+                     AND strategy.status = 'active'
                     WHERE a.owner_user_id = $1
                       AND a.agent_id = $2
                       AND a.status = 'active'
@@ -239,7 +246,10 @@ class PostgresArenaParticipationRepository:
                     raise ArenaParticipationError("runtime_not_ready")
                 if (
                     runtime["runtime_kind"] == "hosted"
-                    and runtime["hosted_status"] != "ready"
+                    and (
+                        runtime["hosted_status"] != "ready"
+                        or runtime["strategy_revision_id"] is None
+                    )
                 ):
                     raise ArenaParticipationError("runtime_not_ready")
 
@@ -306,12 +316,13 @@ class PostgresArenaParticipationRepository:
                     """
                     INSERT INTO game_agents (
                         game_agent_id, game_id, user_id, agent_id,
-                        runtime_binding_id, config_snapshot, config_hash,
-                        status, initial_cash_atomic, initial_inventory
+                        runtime_binding_id, hosted_strategy_revision_id,
+                        config_snapshot, config_hash, status,
+                        initial_cash_atomic, initial_inventory
                     )
                     VALUES (
-                        $1, $2, $3, $4, $5, $6::jsonb, $7,
-                        'joined', $8, $9::jsonb
+                        $1, $2, $3, $4, $5, $6, $7::jsonb, $8,
+                        'joined', $9, $10::jsonb
                     )
                     """,
                     game_agent_id,
@@ -319,11 +330,29 @@ class PostgresArenaParticipationRepository:
                     owner_user_id,
                     agent_id,
                     runtime["runtime_binding_id"],
+                    runtime["strategy_revision_id"],
                     snapshot,
                     config_hash,
                     initial_cash,
                     dict(initial_inventory),
                 )
+                if runtime["runtime_kind"] == "hosted":
+                    await connection.execute(
+                        """
+                        INSERT INTO hosted_agent_game_memory (
+                            game_agent_id,
+                            game_id,
+                            agent_id,
+                            strategy_revision_id
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (game_agent_id) DO NOTHING
+                        """,
+                        game_agent_id,
+                        game_id,
+                        agent_id,
+                        runtime["strategy_revision_id"],
+                    )
                 await connection.execute(
                     """
                     INSERT INTO arena402.game_participants (
@@ -647,6 +676,12 @@ class PostgresArenaParticipationRepository:
                 "max_input_bytes": row["max_input_bytes"],
                 "max_context_items": row["max_context_items"],
                 "max_output_tokens": row["max_output_tokens"],
+                "strategy_revision_id": row["strategy_revision_id"],
+                "strategy_revision_no": row["strategy_revision_no"],
+                "strategy_archetype": row["strategy_archetype"],
+                "strategy_catalog_version": row[
+                    "strategy_catalog_version"
+                ],
             }
         if runtime_kind == "connector":
             return {

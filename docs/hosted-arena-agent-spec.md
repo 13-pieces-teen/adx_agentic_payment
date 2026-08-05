@@ -1,11 +1,10 @@
 # Arena 402 Hosted Arena Agent 产品与技术规格
 
-> 文档状态：已批准实施；Hosted control/runtime、DeepSeek/OpenAI-compatible
-> Provider、durable Worker 与 Pawnhouse Adapter 已实现。Local Connector typed
-> Task/Result、durable result outbox 与 Result Sink 基础接线已实现；Connector-owned
-> session/task dispatcher、mixed-Runtime 编排、公网 Hosted credential/backend
-> 验收和完整支付授权仍待完成
-> 最后更新：2026-07-25
+> 文档状态：Runtime v2 核心切换已实施。现有 Hosted control plane、durable
+> Worker、AgentTask/Result 与 Result Sink 继续保留；旧
+> `DirectModelDriver + PromptBuilder` 认知执行链已物理删除，当前实现为
+> PydanticAI 原生 Agent、持久局内记忆和待完成的跨比赛策略版本
+> 最后更新：2026-08-05
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
 > 相关入口：[Agent 入场与 Runtime 绑定](./agent-onboarding.md)
@@ -17,22 +16,27 @@
 
 ## 1. 核心结论
 
-Hosted Arena Agent 不是一个通用自主 Agent，也不是把现有
-`POST /api/agents/register` 包装成模型调用。它是一个由平台持续运行的、
-受 Arena 规则约束的 Agent Runtime：
+Hosted Arena Agent 是平台内受 Arena 规则约束的完整 Agent。它不是常驻进程本身，
+也不是把 `POST /api/agents/register` 包装成一次模型调用；它是一个可以在不同
+Worker 进程中恢复的持久逻辑主体：
 
 ```text
 稳定 Agent 身份
   + 私有 Hosted 配置
+  + 冻结的 Strategy Revision
+  + Game Agent 级局内记忆
+  + PydanticAI 认知循环与只读分析工具
   + 可撤销 Runtime Binding
   + 专用 Secret backend 中的模型凭据
   + Arena-owned AgentTask 执行端口
 ```
 
-第一版只负责两种业务能力：
+Agent 当前可以执行以下 Arena 业务能力：
 
 - `arena.decide`：在当前回合选择 `buy`、`sell` 或 `pass`；
 - `arena.negotiate`：在当前协商中选择 `propose`、`accept` 或 `reject`。
+- `arena.market.*`：在启用 Agent-driven market 的 Game 中发布 Intent、选择 RFQ
+  或选择 engagement。
 
 模型不能直接写入买卖池、协商、库存或支付状态。它只能返回结构化候选动作，
 由 Arena 再进行 schema、阶段、回合、资产、报价和轮次校验。Runtime 调用成功
@@ -42,8 +46,9 @@ Hosted Runtime 运行在云端，因此用户关闭网页或电脑离线后仍�
 本地 Agent 则依赖 Connector 的在线状态；Connector 断线时不会自动切换到 Hosted
 Runtime。
 
-MVP 不引入 LangGraph、任意工具调用、长期记忆或通用 Agent Studio。未来的
-Agent Studio 可以在不改变 Arena 任务契约的前提下，以新的 Runtime Driver 接入。
+Runtime v2 不引入 LangGraph、任意 shell/文件系统/浏览器或开放网络工具，但会引入
+PydanticAI Agent Loop、平台定义的只读 Arena 工具、结构化局内记忆和跨比赛策略
+版本。未来 MCP/Agent Studio 仍必须在不改变 Arena 任务契约和权限边界的前提下接入。
 
 ## 2. 目标与非目标
 
@@ -76,15 +81,19 @@ Task 或 Worker。创建完成后，同一个 Agent 可以继续参加后续比�
 - 同一局所有 Runtime 使用相同的行动时间窗；
 - 模型失败不会阻塞整轮，重试和默认动作是确定性的；
 - 浏览器关闭后，Hosted Agent 仍能完成已调度的后续回合。
+- 同一场比赛内，Agent 能恢复自己的计划、风险预算和已应用行动形成的策略调整；
+- 比赛完成后，学习流程可以基于可验证结果生成下一版策略，且只在后续 Game 生效；
+- 官方 Hosted Agent 具有固定、可比较的策略类型和持久身份，入局抽取后整局冻结。
 
 ### 2.3 非目标
 
-第一版明确不实现：
+Runtime v2 明确不实现：
 
 - 通用工作流编排、LangGraph 图编辑器或任意 Agent Studio；
 - Skill 市场、任意 MCP、任意 HTTP Endpoint、任意工具或 shell；
 - 浏览器、文件系统、数据库或用户云资源访问；
-- 跨比赛长期记忆、向量库或 Provider session 续接；
+- 把原始模型消息、自由对话或 Provider session 当作跨比赛记忆；
+- 独立向量数据库；首版使用 PostgreSQL 结构化记忆与版本化策略；
 - 多 Runtime 自动故障转移或比赛中途更换 Runtime；
 - Agent 直接点对点通信；
 - 主网、真实资金、平台托管用户钱包私钥；
@@ -254,6 +263,13 @@ PostgreSQL 17                Tencent Cloud Secret Manager
   └── Arena game state       Hosted Agent Worker
                                   |
                                   v
+                         PydanticAI Hosted Agent
+                           ├── observe / recall / plan
+                           ├── read-only Arena tools
+                           ├── typed terminal action
+                           └── pending memory patch
+                                  |
+                                  v
                          allowlisted Provider APIs
 
 Credential Controller (no public port)
@@ -283,7 +299,9 @@ Arena Core Worker (no public port, DB leader/lease)
 - 独立 Python Hosted Worker；
 - 独立 Arena Core Worker 运行 Result Consumer 与 Deadline Finalizer；
 - PostgreSQL durable queue、lease 和 `FOR UPDATE SKIP LOCKED`；
-- `httpx.AsyncClient` + Provider-specific Adapter；
+- `pydantic-ai-slim[openai]` 2.x 作为 Hosted Agent 认知执行内核；
+- PydanticAI `Agent + RunContext + typed output + UsageLimits`；
+- 固定、服务端审核的 OpenAI-compatible Model factory 与 `httpx.AsyncClient`；
 - 腾讯云 Secrets Manager/KMS 作为生产 Secret backend；
 - 外部 Vercel Next.js 作为统一 Agent 创建与状态界面；
 - Docker Compose 继续承载单机 beta。
@@ -494,13 +512,21 @@ Runtime
   CAS 都是最终保护；
 - 如果所有 Runtime 都不可用，Arena Finalizer 仍能独立产生唯一 `pass`/timeout。
 
-## 7. Provider Adapter 与模型调用
+## 7. PydanticAI Agent Runtime
 
-### 7.1 不使用 LangGraph 的原因
+### 7.1 认知循环与 Driver 边界
 
-首版每个行动是一个有明确输入、deadline 和结构化输出的逻辑 AgentTask；它按统一
-规则最多包含两个 Provider Attempt。回合、协商历史、重试和状态恢复均由 Arena 与
-Task Service 管理，不需要图编排。
+Runtime v2 直接替换 `DirectModelDriver` 的单次 Prompt/JSON 执行链。一个逻辑
+AgentTask 内部允许 PydanticAI 在统一 deadline 和使用预算内完成：
+
+```text
+observe frozen task
+  -> recall frozen strategy + applied game memory
+  -> form/update a bounded plan
+  -> call allowlisted read-only tools
+  -> evaluate candidate actions
+  -> return one typed terminal action
+```
 
 Arena-facing Driver 接口在 Phase 1 就冻结：
 
@@ -509,30 +535,20 @@ class AgentRuntimeDriver(Protocol):
     async def execute(self, task_snapshot, deadline): ...
 ```
 
-MVP 的 `DirectModelDriver` 实现一个受约束逻辑 AgentTask，并按统一重试规则最多发起
-两个 Provider Attempt；未来 `LangGraphDriver` 仍实现同一接口，不能要求 Arena 改
-Task schema。
+`HostedArenaAgentRuntime` 实现这个接口。旧 `DirectModelDriver`、`PromptBuilder`
+和执行期 `ProviderAdapter.invoke` 不再是目标生产路径。Credential validation 可以
+暂时复用最小 Provider probe，但不能承担比赛决策。
 
-Provider-specific 接口：
-
-```python
-class ProviderAdapter(Protocol):
-    async def validate_credential(self, request, deadline): ...
-    async def invoke(self, request, deadline): ...
-```
-
-`HostedAgentRunner` 负责：
+Runtime 负责：
 
 1. 校验 Task schema version、deadline、`input_snapshot` 和 hash；
-2. 读取入局时已经冻结的私有 Runtime 配置，并组合平台规则、策略说明和 Task 快照；
+2. 读取入局时冻结的 Runtime、Strategy Revision 和当前已应用 Game Memory；
 3. 解析 `credential_id` 并由 Worker 获取 Secret；
-4. 调用对应 Provider Adapter；
-5. 归一化 usage、耗时和错误；
-6. 严格校验结构化输出；
-7. 在剩余时间允许时执行一次重试；
-8. 提交唯一候选结果或默认结果。
-
-Provider Adapter 不解释 FCFS、资产、轮次、成交或支付规则。
+4. 通过服务端 Model factory 创建 PydanticAI Model；
+5. 在 `request_limit`、`tool_calls_limit`、Token 和绝对 deadline 内运行 Agent Loop；
+6. 严格校验结构化动作并生成安全 `decision_summary + memory_patch`；
+7. 把动作提交 Result Sink，把 memory patch 暂存为 pending；
+8. 仅在 Arena 将对应结果标记为 `applied` 后提交记忆。
 
 `ArenaTaskFactory` 而不是 Hosted Worker 负责构建 participant view。这样 Task 即使排队、
 重试或在另一进程恢复，也始终使用创建时的相同比赛视图。
@@ -576,14 +592,26 @@ provider
   blob 或其他私有推理载荷，Adapter 在解析内存中立即丢弃，不得进入持久化、日志、
   Trace、Event 或 API；仅允许记录 Provider 明确返回的 `reasoning_tokens` 数值。
 
-### 7.4 Prompt 与结构化输出
+### 7.4 Instructions、工具与结构化输出
 
-每次 Prompt 按固定层级组成：
+每次 Agent run 的可信上下文按固定层级组成：
 
-1. 平台拥有的规则、隐私边界和输出 schema；
-2. 受限、长度有界的用户策略说明；
-3. Arena 生成的 participant view；
-4. 当前 `decide` 或 `negotiate` Task。
+1. 平台拥有的 instructions、隐私边界和 typed output；
+2. 入局冻结、长度有界的 Strategy Revision；
+3. Arena 生成的不可变 participant view；
+4. 已经由 Arena 应用的结构化 Game Memory；
+5. 当前任务可调用的只读工具。
+
+首批工具只允许读取冻结依赖并进行确定性计算：
+
+- `inspect_portfolio`；
+- `inspect_market_history`；
+- `evaluate_candidate_action`；
+- `evaluate_negotiation_boundary`；
+- `recall_strategy_and_plan`。
+
+工具不能查询可变 Arena 实时状态，不能写数据库、发 HTTP、访问钱包、执行 shell 或
+直接提交业务动作。Terminal action 只能作为 PydanticAI typed output 返回。
 
 对手公开文字作为不可信数据字段编码，不能成为新的系统指令。模型返回的完整原始正文
 不进入业务数据库；只提取并保存允许的结构化动作、公开 `message` 和归一化元数据。
@@ -597,14 +625,14 @@ Provider 输入必须有确定性大小上限。Arena Task Factory 在冻结快�
 状态、最近公开协商与已验证摘要；超出上限时按版本化规则截断或汇总，不能由 Worker
 临时决定。
 
-### 7.5 Provider 出站边界
+### 7.5 Model factory 与 Provider 出站边界
 
-- Adapter endpoint 固化在已审核代码/部署 capability 中，不能来自 User、Task、
+- Model endpoint 固化在已审核代码/部署 capability 中，不能来自 User、Task、
   Strategy 或数据库自由文本；
 - 只允许 HTTPS、有效证书、批准的 Host/SNI、标准端口；不接受 IP literal；
 - HTTP client 使用 `follow_redirects=False`、`trust_env=False`，不继承不可信代理；
 - request 只向对应 Provider Host 附加该 Provider 的 Authorization；
-- response body、压缩后大小和读取时间均有上限；
+- Provider response、单次请求和整次 Agent run 均有时间与 Token 上限；
 - 主机层优先通过 egress firewall/proxy 只允许 Tencent API 和已启用 Provider；
 - redirect 到 loopback、RFC1918、link-local、云 metadata 或其他 Host 一律拒绝。
 
@@ -770,18 +798,63 @@ Credential validation 的重试独立于 Arena AgentTask：
 
 ## 9. 局内记忆与上下文
 
-Hosted Agent 的“记忆”由 Arena 数据库重建，而不是 Provider session：
+Hosted Agent 使用两层上下文，二者不得混为业务权威：
 
-- 同一 Game 内保留自己的历史动作、公开谈判、成交和当前资产；
-- Arena Task Factory 在每个逻辑行动创建时，从权威数据重建上下文并在同一事务中
-  冻结为 `input_snapshot`；
-- Hosted Worker 只消费快照，不在执行时读取可能已经变化的实时 Game 状态；
-- Worker 重启或切换进程不会丢失比赛内记忆；
-- 不把完整自由对话自动带入下一局；
-- 同一 Agent 跨局复用的是身份、策略配置和 Runtime Binding，不是上一局的隐式记忆；
-- Provider conversation id、resume token 或 cache id 不能成为业务恢复权威。
+1. Arena Task `input_snapshot`：现金、持仓、公开事件、历史动作和成交等权威事实；
+2. Runtime Game Memory：目标、风险预算、对手假设、计划和安全回合摘要等私有策略态。
 
-这样既支持浏览器和用户电脑离线，也避免 Provider session 丢失导致 Arena 无法审计。
+Game Memory 以 `game_agent_id` 为主键并绑定入局冻结的 `strategy_revision_id`。Runtime
+只能从已应用结果推进记忆：
+
+```text
+Agent run -> pending memory patch
+Result Sink/Consumer -> applied | rejected
+applied -> CAS increment memory version
+rejected/defaulted/late -> discard patch
+```
+
+Worker 重启后从 PostgreSQL 恢复；不依赖 Provider conversation id、resume token 或
+cache id。不保存自由消息历史和私有 chain-of-thought。
+
+跨比赛学习使用 `StrategyRevision`。`game.completed` 后的学习任务读取可验证的排名、
+净值、行动、成交和策略版本，生成候选 revision。通过 schema、安全和回放门槛后，
+它可以成为该 Agent 下一场比赛的 active revision；活动 Game 永不原地换策略。
+
+### 9.1 官方策略类型
+
+官方 Hosted Agent 固定公开三种一级类型：
+
+| 类型 | 稳定倾向 |
+|---|---|
+| `aggressive` | 更积极寻找正期望交易，允许较低现金保留和更接近硬边界的报价 |
+| `conservative` | 更重视本金和成交安全边际，在信息不足时更愿意 `pass/reject` |
+| `balanced` | 在收益、流动性和风险之间采用中性权衡 |
+
+一级类型下面可以有多个数值变体，避免九个官方 Agent 在同一事件下做完全一致的动作。
+类型描述不是业务规则，Arena 仍独立校验全部动作。
+
+标准十 Agent 官方池固定为 `4 aggressive + 3 conservative + 3 balanced`。因此一名
+玩家补入九个官方席位时，无论稳定随机顺序排除哪一个官方身份，三种一级策略都会
+出现在该局中；各身份仍保留自己的数值画像和私有 Game Memory。
+
+### 9.2 官方 Agent 抽取与状态保存
+
+随机抽取的单位是持久 `agent_id`，不是每回合临时生成的 Prompt。Current Game 在
+补位时从显式 allowlist 中按 `gameId + agentId + selectionVersion` 形成稳定伪随机
+顺序，并跳过已经入局或未 ready 的 Agent。
+
+一旦抽中：
+
+- `game_participants` 保存本局实际席位和 Agent identity；
+- `game_agents.config_snapshot` 冻结 Provider、Model、策略类型、Strategy Revision
+  和 Runtime 配置；
+- `hosted_agent_game_memory` 以 `game_agent_id` 保存本局私有策略态；
+- 整局不重抽、不换类型、不切策略版本；
+- Worker 重启只恢复相同状态；
+- 下一场 Game 重新抽取官方身份，并绑定当时 active 的新 Strategy Revision。
+
+因此“一名玩家 + 九名官方 Hosted Agent”是一场十个持久 Agent 实例之间的比赛，
+不是一个模型用九个临时 Prompt 扮演九个席位。
 
 ## 10. Deadline、重试与连续运行
 
@@ -988,6 +1061,7 @@ MVP 使用 `WHERE disabled_at IS NULL` 的 partial unique index，保证一个 A
 
 - `id`、`game_id`、`user_id`、`agent_id`；
 - `runtime_binding_id`；
+- Hosted Agent 的 nullable `hosted_strategy_revision_id`；
 - 私有 `config_snapshot` 与 `config_hash`；
 - 参赛状态；`joined | active | settling` 统一视为 active Game，终态至少包含
   `completed | cancelled`；
@@ -1001,13 +1075,39 @@ MVP 使用 `WHERE disabled_at IS NULL` 的 partial unique index，保证一个 A
 
 `config_snapshot` 至少冻结 Provider/immutable model id、effective thinking、
 adapter version、Task/action schema version、capability version、input/output/token
-上限、strategy instructions/hash 和精确 `credential_id`。快照可记录创建时观察到的
+上限、strategy archetype、strategy revision/instructions/hash 和精确
+`credential_id`。快照可记录创建时观察到的
 Prompt policy version 作为诊断事实，但它不是运行时版本选择器；Hosted Worker 始终
 使用平台当前唯一 Prompt policy，当前为 v4。
 Attempt 另记录 Provider 实际返回的 model/version。安全 revoke 可以令当前 Game
 default，但不会偷偷改用新 Credential。
 
-### 13.6 `arena_agent_tasks`
+### 13.6 `hosted_agent_strategy_revisions`
+
+- `strategy_revision_id`、`agent_id`、单 Agent 递增 revision；
+- `archetype = aggressive | conservative | balanced | custom`；
+- 有界 instructions、catalog version 和 source config hash；
+- `candidate | active | superseded | rejected`；
+- parent revision、安全学习证据和创建/激活时间；
+- 每个 Agent 最多一个 active revision。
+
+### 13.7 `hosted_agent_game_memory`
+
+- `game_agent_id` 主键，同时绑定 `game_id / agent_id / strategy_revision_id`；
+- 单调 `memory_version`；
+- 有界结构化 state；
+- `last_applied_task_id`；
+- 创建和更新时间。
+
+### 13.8 `hosted_agent_memory_patches`
+
+- 每个 `task_id` 最多一个 pending patch，并绑定具体
+  `runtime_result_id_digest`；
+- 保存 expected memory version、安全 decision summary 和结构化 patch；
+- 只有 digest 匹配的对应 Result `apply_status=applied` 才能 CAS 提交；
+- rejected/defaulted/late/stale patch 标记 discarded，不污染后续策略。
+
+### 13.9 `arena_agent_tasks`
 
 - Task envelope 全部关联字段；
 - versioned input snapshot；
@@ -1022,7 +1122,7 @@ default，但不会偷偷改用新 Credential。
 - Task 状态使用数据库 CHECK；
 - 一个 Task 只有一个终态业务结果。
 
-### 13.7 `arena_agent_task_results`
+### 13.10 `arena_agent_task_results`
 
 Durable result inbox：
 
@@ -1042,7 +1142,7 @@ Durable result inbox：
 - Task 终态 CAS 与 Result insert 在同一事务，Finalizer 和 Result Sink 只能一个获胜；
 - Arena Result Consumer 使用 row lock/CAS，并在业务写入事务内更新 apply status。
 
-### 13.8 `arena_agent_task_attempts`
+### 13.11 `arena_agent_task_attempts`
 
 - `task_id`、`attempt_no`；
 - Provider、Model、thinking；
@@ -1055,7 +1155,7 @@ Durable result inbox：
 数据库使用 `UNIQUE(task_id, attempt_no)` 和
 `CHECK (attempt_no BETWEEN 1 AND 2)`；Attempt 分配在锁内原子进行。
 
-### 13.9 `arena_agent_task_events`
+### 13.12 `arena_agent_task_events`
 
 Append-only：
 
@@ -1072,7 +1172,7 @@ Append-only：
 
 它不替代 Game Event、Connector Event 或 Settlement Event。
 
-### 13.10 `hosted_credential_validation_jobs`
+### 13.13 `hosted_credential_validation_jobs`
 
 该表是 provisioning queue，不是 Arena AgentTask：
 
@@ -1094,7 +1194,7 @@ Provider/Model/thinking/credential/capability 所需字段，绝不使用或发�
 最多一个 active validation job。update/replace 终态后清除不再需要的失败 candidate
 明文，只保留 hash、安全字段与结果；成功 candidate 成为当前 Hosted Config。
 
-### 13.11 `hosted_credential_lifecycle_jobs`
+### 13.14 `hosted_credential_lifecycle_jobs`
 
 由 Credential Controller 独占：
 
@@ -1307,13 +1407,15 @@ External:
 
 ## 18. 当前实现矩阵
 
-截至 2026-07-25：
+截至 2026-08-05：
 
 | 能力 | 当前状态 | 说明 |
 |---|---|---|
 | Legacy Agent/matching/ELO API | 已移除 | 不再存在第二套内存业务权威或 Supabase 工厂 |
 | Hosted Agent 创建 UI | 已实现 | `/agents` 同时保留 Local Connector，并提供受 readiness/auth 控制的 Hosted 创建、列表、详情和 Runtime PATCH |
-| Provider contract/PromptBuilder/DirectModelDriver | 已实现 | 覆盖结构化动作、deadline、单次 retry、usage 与安全出站边界 |
+| Legacy PromptBuilder/DirectModelDriver | 已物理删除 | Attempt 合同已迁入独立模块；Worker 不再存在 scripted/legacy 决策分支 |
+| PydanticAI Hosted Agent Runtime | 核心与 Worker 已接线 | typed output、只读工具、策略类型、每局记忆和生产 Worker 已实现；隔离 PostgreSQL applied/defaulted gate 已通过；真实 DeepSeek BYOK 已完成三策略各两回合直连验证，但完整游戏与生产验收仍待完成 |
+| Official Agent model | 已固定，部署待切换 | PydanticAI 使用 `official-deepseek/deepseek-v4-flash`；LiteLLM 上游同样使用非弃用模型名 `deepseek-v4-flash` |
 | 真实 Provider Adapter | 已实现，本地验收 | DeepSeek/OpenAI-compatible HTTPS Adapter 已完成真实五回合与 accepted negotiation；不等于生产服务器验收 |
 | 用户 API Key ingress | 已实现 | write-only ingress、摘要幂等、PostgreSQL control repository 与无回显边界已接线 |
 | Tencent Secret Manager | 生产组合已实现，实机待验收 | SSM Writer/Reader/Controller 权限端口与 fail-closed 组合存在；真实 CAM 身份和部署证据仍缺 |
@@ -1322,7 +1424,7 @@ External:
 | Persistent AgentTask | 已接入游戏 | 版本化契约、lease/CAS 与 Pawnhouse Runtime Run 已完成 |
 | Result Sink/Consumer/Finalizer | 已接入游戏 | 数据库权威时间、默认收敛、late/duplicate 处理和 exactly-once 投影已完成 |
 | Credential validation/lifecycle jobs | 核心路径已实现 | durable validation、claim/CAS、Credential Controller 和创建/Runtime PATCH 已实现；其余生命周期操作仍待完成 |
-| Hosted Worker | 已实现 | 独立无公网端口 Worker 已进入 Compose，并通过本地多回合恢复路径 |
+| Hosted Worker | Runtime v2 已接线 | 独立无公网端口 Worker 构造 bounded PydanticAI run；隔离 PostgreSQL 闭环已通过，真实 Provider、并发 CAS 与重启恢复待验收 |
 | Game Agent 单局唯一 | 已实现 | 数据库约束、入局快照和当前 Runtime/config 冻结已实现 |
 | Arena `decide`/`negotiate` adapter | Hosted/rule/Connector 已实现 | Local identity、session generation、leased task dispatcher、typed Task/Result、Result Sink 与 mixed-Runtime coordinator 已接线；真实 CC/Codex 完整比赛待验收 |
 | Local Connector 控制面 | Self-hosted beta 已实现 | durable command/event/result outbox、进程重启后的 session 重建、单次 Task retry、Arena 隔离 profile 与分层 readiness/fail-closed 已实现；Codex CLI 无等价 no-tools 开关，真实生产重连与完整比赛 E2E 待验收 |
@@ -1398,6 +1500,10 @@ External:
 - [ ] invalid/timeout Decide 只产生一次 `pass`；
 - [ ] invalid/timeout Negotiate 只产生一次 timeout；
 - [ ] 新 Game 不自动携带上一局自由对话；
+- [ ] 同局每个 Hosted Agent 绑定唯一 Strategy Revision 和单调 Game Memory；
+- [ ] 只有 Arena `applied` 结果可以推进 Game Memory；
+- [ ] `game.completed` 学习产生的新策略只在后续 Game 生效；
+- [ ] 官方 Agent 的随机抽取可复现、可审计，抽中后整局身份和策略不变；
 - [ ] 公开时间线可看到合法协商和结算状态；
 - [ ] strategy 原文片段、API-key-like/PII-like message 被拒绝并用中性模板替换，原文
       不进入任何持久化或日志；
@@ -1424,7 +1530,8 @@ External:
 
 ### 20.1 通用 Agent Studio
 
-后续可新增 `LangGraphDriver` 或其他工作流 Driver，但必须实现同一个：
+后续可以在 PydanticAI Runtime 上增加受控 MCP、Capabilities 或其他工作流实现，
+但必须实现同一个：
 
 ```text
 AgentTask -> AgentTaskResult
@@ -1438,8 +1545,8 @@ Agent Studio 可以编辑人格、子步骤、工具和评估，但不能：
 - 访问钱包私钥；
 - 将私有 chain-of-thought 变成平台要求的审计字段。
 
-在 Agent Studio 上线前，Hosted Agent 继续是固定的 DirectModelDriver；每个逻辑
-AgentTask 最多两个 Provider Attempt，不承担图编排复杂度。
+Hosted Agent 的默认认知引擎固定为 PydanticAI Runtime；不得在同一 Game 中静默回退
+到已删除的旧 Driver。物理回滚使用完整部署版本回滚，并保持数据库迁移向前兼容。
 
 ### 20.2 Native A2A
 
@@ -1462,3 +1569,6 @@ Hosted 与 Local 间自动切换。
 - [OpenAI Reasoning Guide](https://developers.openai.com/api/docs/guides/reasoning)
 - [Anthropic Extended Thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 - [Gemini Thinking](https://ai.google.dev/gemini-api/docs/thinking)
+- [PydanticAI Agents](https://pydantic.dev/docs/ai/core-concepts/agent/)
+- [PydanticAI Dependencies](https://pydantic.dev/docs/ai/core-concepts/dependencies/)
+- [PydanticAI Testing](https://pydantic.dev/docs/ai/guides/testing/)
