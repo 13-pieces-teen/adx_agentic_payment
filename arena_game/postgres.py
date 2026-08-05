@@ -3421,10 +3421,8 @@ class PostgresPawnhouseRepository:
                     """
                     SELECT
                         engagement.*,
-                        buyer.source_result_id AS buyer_result_id,
                         buyer.limit_price_atomic
                             AS buyer_limit_price_atomic,
-                        seller.source_result_id AS seller_result_id,
                         seller.limit_price_atomic
                             AS seller_limit_price_atomic,
                         request.opening_price_atomic,
@@ -3455,10 +3453,10 @@ class PostgresPawnhouseRepository:
                 negotiation_ids: list[str] = []
                 for row in rows:
                     buyer_entry_id = (
-                        f"pool:market:{row['buyer_intent_id']}"
+                        f"pool:market:{row['engagement_id']}:buyer"
                     )
                     seller_entry_id = (
-                        f"pool:market:{row['seller_intent_id']}"
+                        f"pool:market:{row['engagement_id']}:seller"
                     )
                     for (
                         entry_id,
@@ -3470,14 +3468,14 @@ class PostgresPawnhouseRepository:
                         (
                             buyer_entry_id,
                             row["buyer_participant_id"],
-                            row["buyer_result_id"],
+                            row["rfq_result_id"],
                             "buy",
                             row["buyer_limit_price_atomic"],
                         ),
                         (
                             seller_entry_id,
                             row["seller_participant_id"],
-                            row["seller_result_id"],
+                            row["selection_result_id"],
                             "sell",
                             row["seller_limit_price_atomic"],
                         ),
@@ -3494,11 +3492,12 @@ class PostgresPawnhouseRepository:
                                 good_id,
                                 quantity,
                                 limit_price_atomic,
+                                market_engagement_id,
                                 status
                             )
                             VALUES (
                                 $1, $2, $3, $4, $5, $6, $7, 1, $8,
-                                'paired'
+                                $9, 'paired'
                             )
                             ON CONFLICT (source_result_id) DO NOTHING
                             """,
@@ -3510,6 +3509,7 @@ class PostgresPawnhouseRepository:
                             side,
                             row["good_id"],
                             limit_price,
+                            row["engagement_id"],
                         )
                     pairing_id = f"pairing:{row['engagement_id']}"
                     sequence = int(

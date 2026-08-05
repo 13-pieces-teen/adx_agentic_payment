@@ -6,7 +6,11 @@
 > Game remains on `fcfs.v1`. A payment-disabled game with two independent
 > Codex Connector Agents has completed Intent, RFQ, selection, bounded
 > negotiation, and an immutable Deal with distinct proposal/acceptance Result
-> provenance. Mixed-Runtime A2A and payment-enabled A2A remain incomplete.
+> provenance. A deterministic three-Hosted-Agent Fake E2E has also completed
+> first-seller rejection and second-seller fallback with durable restart
+> evidence. Hosted + real Codex mixed fallback is complete; all-real
+> multi-seller fallback, mid-run recovery injection, and payment-enabled A2A
+> remain incomplete.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
 > counterparties, choose whom to approach, select which request to engage, and
@@ -538,6 +542,34 @@ Evidence levels remain separate:
   remained zero SettlementIntents, zero inventory commits, zero cash
   mutations, zero holding mutations, and zero chain writes. This is accepted
   payment-disabled real-Agent Deal evidence, not payment settlement evidence.
+- The local scripted run `full-hosted-1785897607-5cd29355` used three
+  development Hosted actors to make sequential fallback deterministic. The
+  buyer selected the rejecting seller first, then a second RFQ Task selected
+  the only remaining seller. The run completed with three Intents, two RFQs,
+  two Engagements, four negotiation messages, one immutable Deal, and zero
+  SettlementIntents. The first attempt exposed a compatibility defect:
+  legacy FCFS `pool_entries` assumed one entry per participant per round, so a
+  second A2A Engagement reused the buyer entry and violated the Pairing
+  uniqueness constraint. Migration `061` gives each A2A Engagement distinct
+  compatibility entries while retaining the FCFS uniqueness invariant through
+  a partial unique index. After restarting API and Arena worker, the RFQ
+  session remained `completed` with `attempt_count=2`, and request,
+  Engagement, Deal, compatibility-entry, and settlement counts did not grow.
+  This is Fake recovery evidence, not real-Agent evidence.
+- The isolated run `mixed-fallback-7f15a77f8c` kept the deterministic Hosted
+  buyer and first rejecting seller, but replaced the remaining seller with a
+  real Codex CLI 0.146.0 Connector Agent over WSS and stateless MCP. Codex
+  independently published an iron sell Intent from its equal-value
+  `0 cash + 4 iron` portfolio, engaged the second RFQ, and accepted the
+  binding `7.000000` opening. All nine AgentTasks completed with succeeded,
+  applied candidate Results. The Game produced two RFQs, two Engagements,
+  four negotiation messages, one immutable Deal, four Engagement-scoped
+  compatibility entries, zero SettlementIntents, zero asset mutations, and
+  zero chain writes. Restarting the isolated API and Arena worker left the RFQ
+  session at `completed / 2 of 3` and counts at `2 requests / 2 engagements /
+  1 deal / 4 entries / 0 settlement intents`. This is mixed real-Agent and
+  terminal projection-recovery evidence; it does not yet cover a disconnect
+  or lease expiry while a task is in flight.
 
 The real probes also show why “few trades” cannot be solved by a matcher
 alone: Agents may choose different goods, private price intervals may not

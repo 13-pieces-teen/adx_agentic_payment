@@ -651,10 +651,15 @@ create game
       0 inventory commit 和 0 chain write。随后双 Codex 局
       `real-runtimes-e8c3b2d723` 在修复 Codex `accept` 回显兼容字段后，由买方
       `2.550000`、卖方 `2.900000`、买方自主 accept 形成 1 个带两个不同
-      proposal/acceptance Result ID 的真实 Agent Deal。Hosted/Connector mixed
-      证据仍待补；下一验收组合冻结为 Hosted + Codex，并覆盖 reconnect、
-      lease expiry、deadline default、durable Result replay 和 projection
-      recovery。Claude Code 待其外部 API/证书路径健康后补跑，不阻塞该阶段。
+      proposal/acceptance Result ID 的真实 Agent Deal。随后
+      `mixed-fallback-7f15a77f8c` 以 Hosted scripted buyer/rejecting seller +
+      真实 Codex CLI 0.146.0 seller 完成 mixed-Runtime 顺序 fallback：Codex
+      自主发布 iron sell Intent，第二次 RFQ 后自主 Engage 并 accept；9 个
+      AgentTask 全部成功应用，形成 2 个 Engagement、1 个 Deal、0
+      SettlementIntent 和 0 链写入。该局结束后重启 API/Arena worker，session
+      与各实体计数保持不变。剩余验收覆盖中途 reconnect、lease expiry、
+      deadline default 和 durable Result replay 故障注入。Claude Code 待其
+      外部 API/证书路径健康后补跑，不阻塞该阶段。
 - [x] Phase C payment-disabled foundation：只有 buyer RFQ Result + seller
       Engage Result 才能物化兼容 Pairing/Negotiation；接受后冻结包含 proposal /
       acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 与
@@ -662,7 +667,8 @@ create game
       `authorizationMode=none`，所以谈判安全终结为 `settlement_failed`，且为
       0 SettlementIntent、0 inventory commit、0 现金/持仓变更、0 chain write。
       payment-enabled Injective testnet A2A 仍待显式人工确认后验收。
-- [x] Phase C protocol implementation：迁移 `060` 和 Runtime/Coordinator 已将
+- [x] Phase C protocol implementation：迁移 `060`–`061` 和
+      Runtime/Coordinator 已将
       RFQ `openingPrice` 作为 Engage 后不可变的 Turn 1 proposal；每个 RFQ
       Task 只联系一个对手，冻结目录、尝试序号、最多三次尝试和两次
       Agent-selected fallback 均持久化，同一买方只能有一个 pending/engaged
@@ -670,9 +676,19 @@ create game
       accepted Deal 和 settlement failure 会关闭 RFQ session，不能 fallback。
       Fake scripted 局 `full-hosted-1785853139-cd4e22d1` 已验证 request/result
       级 binding proposal Deal、卖方直接 accept、0 SettlementIntent 和 0 链写入。
-- [ ] Phase C protocol acceptance：补真实多卖方 fallback E2E，以及 Hosted +
-      Codex mixed reconnect、lease expiry、deadline default、durable replay 和
-      projection recovery；完成真实 P95/P99 负载校准前不切换 Current Game。
+      三 Hosted scripted 局 `full-hosted-1785897607-5cd29355` 进一步验证首个
+      卖家 reject 后，同一买方由第二个 RFQ Task 从冻结剩余目录选择另一卖家并
+      accept：3 个 Intent、2 个 RFQ、2 个 Engagement、4 条 negotiation
+      message、1 个 Deal、0 SettlementIntent。该局暴露并修复了旧 FCFS
+      compatibility pool entry “每参与者每轮唯一”与多次顺序 Engagement 的
+      冲突；`061` 为每个 A2A Engagement 建独立 compatibility entry，同时用
+      partial unique index 保留 `fcfs.v1` 的原唯一约束。服务重启后 session
+      保持 `completed / 2 of 3`，请求、Engagement、Deal 和 entry 计数均未增长。
+- [ ] Phase C protocol acceptance：Hosted + Codex mixed 顺序 fallback 和
+      终局后 projection recovery 已由 `mixed-fallback-7f15a77f8c` 完成；仍需补
+      全部卖方均为真实 Runtime 的多卖方 fallback，以及 mixed-Runtime 中途
+      reconnect、lease expiry、deadline default、durable replay 故障注入。
+      完成真实 P95/P99 负载校准前不切换 Current Game。
 - [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
       fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；
       `agent_a2a.v1` 永久保持 `quantity=1`。

@@ -192,6 +192,12 @@ BINDING_RFQ_FALLBACK_SQL_PATH = (
     / "migrations"
     / "060_arena_binding_rfq_and_sequential_fallback.sql"
 )
+A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "061_arena_a2a_engagement_pool_entries.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1080,4 +1086,27 @@ def test_binding_rfq_and_sequential_fallback_are_durable(
     )
     assert BINDING_RFQ_FALLBACK_SQL_PATH in migrate_module.migration_files(
         "arena"
+    )
+
+
+def test_a2a_engagement_entries_preserve_fcfs_participant_uniqueness(
+    monkeypatch,
+):
+    sql = A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN market_engagement_id TEXT" in sql
+    assert "DROP CONSTRAINT pool_entries_round_id_game_participant_id_key" in sql
+    assert "pool_entries_fcfs_participant_uidx" in sql
+    assert "WHERE market_engagement_id IS NULL" in sql
+    assert "pool_entries_a2a_engagement_participant_uidx" in sql
+    assert "WHERE market_engagement_id IS NOT NULL" in sql
+    assert "REFERENCES arena402.market_engagements(engagement_id)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH
+        in migrate_module.migration_files("arena")
     )
