@@ -291,6 +291,13 @@ Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息
 先创建后等待结果，不同 pairing 可并发协商，但同一 pairing 内仍严格按
 `turn_sequence` 顺序执行。
 
+对 `agent_a2a.v1`，Round close 必须在同一事务内把仍为 `active` 的 RFQ
+session、`pending` 的 RFQ 和 `open | reserved` 的 Intent 终态化为
+`expired`，截断 Intent/session 的未来 TTL，并释放仍为 `reserved` 的
+Participant round slot。已经进入协商的 RFQ、Deal、协商消息和已消费 slot
+保留历史状态，不得被清理成“未发生”。Game complete 还需跨全局执行一次幂等
+兜底，完成的 Game 不得残留可活动的市场对象。
+
 只要存在 `accepted_pending_settlement` 或 `settling` pairing，Round 就保持在
 `settle`，不得关闭或进入下一回合。最后一轮关闭后，Arena 将最后的
 `final_price_atomic` 冻结为独立结算价表，再用最后一轮 portfolio snapshot

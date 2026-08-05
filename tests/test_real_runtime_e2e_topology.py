@@ -1,4 +1,7 @@
+import pytest
+
 from tests.real_runtimes_docker_e2e import (
+    assert_terminal_agent_market,
     game_create_payload,
     portfolio_for_seat,
     resolve_topology,
@@ -48,3 +51,20 @@ def test_diversified_seller_portfolios_keep_equal_initial_net_worth() -> None:
         {"cash": "4.000000", "holdings": {"warhorse": 2}},
         {"cash": "2.000000", "holdings": {"gems": 6}},
     ]
+
+
+def test_completed_a2a_game_evidence_rejects_residual_market_state() -> None:
+    clean = {
+        "nonterminal_market_intents": 0,
+        "pending_market_requests": 0,
+        "active_market_sessions": 0,
+        "reserved_market_slots": 0,
+    }
+    assert_terminal_agent_market(clean)
+
+    dirty = {**clean, "pending_market_requests": 1}
+    with pytest.raises(
+        RuntimeError,
+        match="completed A2A game retained nonterminal market state",
+    ):
+        assert_terminal_agent_market(dirty)

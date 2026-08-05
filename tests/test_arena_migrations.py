@@ -198,6 +198,12 @@ A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH = (
     / "migrations"
     / "061_arena_a2a_engagement_pool_entries.sql"
 )
+AGENT_MARKET_TERMINALIZATION_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "062_arena_agent_market_terminalization.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1108,5 +1114,30 @@ def test_a2a_engagement_entries_preserve_fcfs_participant_uniqueness(
     )
     assert (
         A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_completed_round_market_state_is_backfilled_to_terminal(
+    monkeypatch,
+):
+    sql = AGENT_MARKET_TERMINALIZATION_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "UPDATE arena402.market_rfq_sessions" in sql
+    assert "SET status = 'expired'" in sql
+    assert "UPDATE arena402.market_negotiation_requests" in sql
+    assert "UPDATE arena402.participant_round_slots" in sql
+    assert "SET status = 'available'" in sql
+    assert "UPDATE arena402.market_intents" in sql
+    assert "status IN ('open', 'reserved')" in sql
+    assert "expires_at = LEAST" in sql
+    assert "round_row.phase IN ('completed', 'cancelled')" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_MARKET_TERMINALIZATION_SQL_PATH
         in migrate_module.migration_files("arena")
     )

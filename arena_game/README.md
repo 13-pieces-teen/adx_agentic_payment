@@ -68,6 +68,10 @@ and Deal E2E.
   settlement arithmetic.
 - A `balanced_auto` game assigns each ready participant one deterministic good
   unit plus cash at portfolio lock; `manual` remains the default mode.
+- A completed A2A round has no `open`/`reserved` Intent, `pending` RFQ,
+  `active` RFQ session, or `reserved` participant slot. Round close owns the
+  normal transition and game completion repeats it idempotently across the
+  game.
 
 ## Persistent rule-Agent demonstration
 

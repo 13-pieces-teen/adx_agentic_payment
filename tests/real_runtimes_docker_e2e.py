@@ -670,6 +670,30 @@ async def _database_evidence(
                  WHERE game_id = $1) AS market_deals,
                 (
                     SELECT count(*)
+                    FROM arena402.market_intents
+                    WHERE game_id = $1
+                      AND status IN ('open', 'reserved')
+                ) AS nonterminal_market_intents,
+                (
+                    SELECT count(*)
+                    FROM arena402.market_negotiation_requests
+                    WHERE game_id = $1
+                      AND status = 'pending'
+                ) AS pending_market_requests,
+                (
+                    SELECT count(*)
+                    FROM arena402.market_rfq_sessions
+                    WHERE game_id = $1
+                      AND status = 'active'
+                ) AS active_market_sessions,
+                (
+                    SELECT count(*)
+                    FROM arena402.participant_round_slots
+                    WHERE game_id = $1
+                      AND status = 'reserved'
+                ) AS reserved_market_slots,
+                (
+                    SELECT count(*)
                     FROM arena402.inventory_commits AS inventory_commit
                     JOIN arena402.settlement_intents AS intent
                       ON intent.settlement_intent_id =
@@ -748,6 +772,8 @@ async def _database_evidence(
         raise RuntimeError(
             "no-payment E2E moved authoritative inventory: " f"{dict(counts)!r}"
         )
+    if MARKET_PROTOCOL == "agent_a2a.v1":
+        assert_terminal_agent_market(dict(counts))
     if EXPECT_MATCH and (
         int(counts["pairings"]) < 1 or int(counts["negotiation_messages"]) < 1
     ):
@@ -787,6 +813,24 @@ async def _database_evidence(
         "deals": deal_values,
         "counts": dict(counts),
     }
+
+
+def assert_terminal_agent_market(counts: dict[str, Any]) -> None:
+    residual = {
+        key: int(counts[key])
+        for key in (
+            "nonterminal_market_intents",
+            "pending_market_requests",
+            "active_market_sessions",
+            "reserved_market_slots",
+        )
+        if int(counts[key]) != 0
+    }
+    if residual:
+        raise RuntimeError(
+            "completed A2A game retained nonterminal market state: "
+            f"{residual!r}"
+        )
 
 
 async def _public_evidence(

@@ -743,6 +743,16 @@ create game
       4 entries、completed 2/3`，且为 0 SettlementIntent、0 资产变更、
       0 链写入。
       完成真实 P95/P99 负载校准前不切换 Current Game。
+- [x] Phase C full-game market terminalization：十个独立 Codex CLI 0.146.0
+      Connector 在 `real-runtimes-4b8fd267d0` 完成八回合
+      `agent_a2a.v1`：140 个 AgentTask 全部
+      `completed/succeeded/applied`，形成 78 个 Intent、36 个 RFQ、
+      11 个 Engagement/Deal、24 条协商消息和 10 条终局排名。迁移 `062`
+      与 Round close/Game complete 双层幂等清理使每个关闭回合及终局的
+      `open | reserved` Intent、`pending` RFQ、`active` RFQ session 和
+      `reserved` round slot 均为 0；历史 `engaged` RFQ、Deal 与 consumed
+      slot 保持不变。该局为 `authorizationMode=none`，因此仍是
+      0 SettlementIntent、0 资产变更和 0 链写入。
 - [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
       fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；
       `agent_a2a.v1` 永久保持 `quantity=1`。

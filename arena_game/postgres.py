@@ -7456,6 +7456,11 @@ class PostgresPawnhouseRepository:
                         "round_not_ready_to_close"
                     )
 
+                await self._terminalize_agent_market_scope(
+                    connection,
+                    game_id=game_id,
+                    round_id=round_id,
+                )
                 await self._snapshot_round_portfolios(
                     connection,
                     game_id=game_id,
@@ -9594,6 +9599,14 @@ class PostgresPawnhouseRepository:
         event_seed: str,
         event_schedule_commitment: str,
     ) -> list[dict[str, object]]:
+        # Round close is the normal owner of market cleanup. The game-wide
+        # pass also repairs any older round that reached completion before
+        # that cleanup was introduced or was missed by a recovery path.
+        await self._terminalize_agent_market_scope(
+            connection,
+            game_id=game_id,
+            round_id=None,
+        )
         await connection.execute(
             """
             INSERT INTO arena402.final_settlement_prices (
@@ -9775,6 +9788,72 @@ class PostgresPawnhouseRepository:
             },
         )
         return public_rankings
+
+    @staticmethod
+    async def _terminalize_agent_market_scope(
+        connection: Any,
+        *,
+        game_id: str,
+        round_id: str | None,
+    ) -> None:
+        """Close unfinished A2A market state at a durable round boundary."""
+
+        await connection.execute(
+            """
+            UPDATE arena402.market_rfq_sessions
+            SET status = 'expired',
+                deadline_at = LEAST(
+                    deadline_at,
+                    clock_timestamp()
+                ),
+                updated_at = clock_timestamp()
+            WHERE game_id = $1
+              AND ($2::text IS NULL OR round_id = $2)
+              AND status = 'active'
+            """,
+            game_id,
+            round_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.market_negotiation_requests
+            SET status = 'expired'
+            WHERE game_id = $1
+              AND ($2::text IS NULL OR round_id = $2)
+              AND status = 'pending'
+            """,
+            game_id,
+            round_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.participant_round_slots
+            SET status = 'available',
+                engagement_id = NULL,
+                version = version + 1,
+                updated_at = clock_timestamp()
+            WHERE game_id = $1
+              AND ($2::text IS NULL OR round_id = $2)
+              AND status = 'reserved'
+            """,
+            game_id,
+            round_id,
+        )
+        await connection.execute(
+            """
+            UPDATE arena402.market_intents
+            SET status = 'expired',
+                expires_at = LEAST(
+                    expires_at,
+                    clock_timestamp()
+                )
+            WHERE game_id = $1
+              AND ($2::text IS NULL OR round_id = $2)
+              AND status IN ('open', 'reserved')
+            """,
+            game_id,
+            round_id,
+        )
 
     async def _persist_world_snapshot(
         self,
