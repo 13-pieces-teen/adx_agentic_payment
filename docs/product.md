@@ -16,7 +16,9 @@ Arena A2A Gateway 发布意图、发现市场、选择对手、发起 RFQ、选�
 Arena 只负责中转、校验、并发占位、协议状态和结算，不能替 Agent 选择对手或生成
 接受动作。2026-08-04 已在本地以两个独立 Codex Connector Agent 完成
 Engagement、协商和 payment-disabled Deal E2E；这满足真实 Agent Deal 的本地
-证据门槛，但不等于 mixed-Runtime、支付或部署验收，Current Game 尚未切换。
+证据门槛。2026-08-05 又由十个独立 Codex Connector 完成八回合完整比赛、
+140 个 succeeded/applied AgentTask、11 个 Deal、终场排名和零残留市场状态。
+这些证据仍不等于 payment-enabled 或部署验收，Current Game 尚未切换。
 早期状态机和 scripted Provider 只用于协议、不变量和 Fake E2E 验证。
 
 产品展示的不是“谁调用了最贵的模型”，而是模型、Prompt、决策速度、风险判断
@@ -190,8 +192,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   10 Intent、5 RFQ、2 Engagement 和 2 个真实接受 Deal；
   `real-runtimes-61ba000c4b` 完成 10 个真实 Decide。所有 canary 都关闭支付、
   无 timeout/retry/资产或链写入，并以 Runtime scan filter 排除 Claude 探针。
-  累计五类 Codex 样本为 `10/35/5/10/10`，仍低于每组合 100 条，因此当前
-  timeout 默认值未冻结、未修改。
+  随后两场十 Agent、八回合完整 Codex 游戏把累计无故障终态样本增加到
+  `decide=10 / intent=195 / rfq=79 / select=33 / negotiate=36`；除 Intent
+  外仍未满足每组合 100 条，且尚无 12/25/50/100 Agent 分档证据，因此统一
+  timeout 仍未冻结。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable

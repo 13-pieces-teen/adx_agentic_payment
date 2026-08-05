@@ -699,13 +699,13 @@ Agent's economic action.
   20.38 s stage wall time, and 20.58 s round wall time. The autonomous buy,
   sell, and pass actions had no compatible same-good pair, so zero pairing was
   not a matcher failure.
-- Across accepted non-fault Codex evidence, terminal sample counts are now
-  `decide=10 / intent=35 / rfq=5 / select=10 / negotiate=10`; every observed
-  group has zero deadline timeout and retry. The Intent P50/P95/P99 is
-  `23.581/31.625/33.087 s`; the other P99 values are `20.296 s` Decide,
-  `20.594 s` RFQ, `31.055 s` Select, and `18.161 s` Negotiate. This remains
-  insufficient for the 100-sample-per-combination gate, so the common timeout
-  is not frozen.
+- Across accepted non-fault Codex evidence, including two subsequent
+  ten-Agent, eight-round complete games, terminal sample counts are now
+  `decide=10 / intent=195 / rfq=79 / select=33 / negotiate=36`; every observed
+  group has zero deadline timeout and retry. The earlier one-round percentile
+  snapshot is superseded and must be regenerated with the 12/25/50/100 Agent
+  load tiers. Only Intent has crossed the 100-sample gate, so the common
+  timeout remains unfrozen.
 - One mid-run, non-peak resource snapshot observed API 63 MiB, Arena worker
   37 MiB, PostgreSQL 107 MiB, ten Connector processes 238 MiB total, and three
   active Codex child processes 388 MiB total. It is a canary observation, not

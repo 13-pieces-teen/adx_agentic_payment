@@ -78,10 +78,11 @@ apply P50/P95/P99、deadline timeout 和 retry。只有每个明确要求的组�
 `real-runtimes-61ba000c4b` 完成 10 个真实 Decide，整轮 20.58 秒，经济动作
 未形成兼容 pairing。三局均为 0 timeout、0 retry、0 SettlementIntent、0
 资产变更、0 链写入，且通过 `--runtime-kind codex` 没有执行 Claude 探针。
-连同既有无故障样本，累计为 `decide=10 / market.intent=35 /
-market.rfq=5 / market.select=10 / negotiate=10`，仍远低于每组合 100 条，
-所以没有修改当前 timeout 默认值。小样本 10-Agent wave 的公式结果不得作为
-生产冻结值。
+连同既有无故障样本及后续两场十 Agent、八回合完整 Codex 游戏，累计为
+`decide=10 / market.intent=195 / market.rfq=79 / market.select=33 /
+negotiate=36`。除 Intent 外仍低于每组合 100 条，并且尚无 12/25/50/100
+Agent 分档证据，所以没有修改当前 timeout 默认值。十 Agent 样本的公式结果
+不得作为生产冻结值。
 
 同一隔离 API 的只读 `/api/ready` 控制面基线在 1000 请求下，以并发
 25/50/64 分别得到 P95 `63.72/107.47/161.51 ms` 和错误率

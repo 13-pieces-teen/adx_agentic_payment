@@ -6,7 +6,9 @@
 > dispatcher、typed Task/Result、Result Sink 和 Hosted/Connector mixed-Runtime
 > 回合编排已接线；PaymentMandate 与 x402 V2 自动链路已实现并通过 Fake E2E。
 > 经自建 Facilitator 的新鲜 Injective EVM testnet 交易、链上确认和库存提交已完成；
-> 真实 CC/Codex 完整比赛、公共第三方 Facilitator 兼容和完整生产验收尚未完成。
+> 十个独立 Codex Connector 已完成八回合 `agent_a2a.v1` 完整比赛；Claude Code
+> 因其外部 API/证书连接问题不作为该阶段阻塞。公共第三方 Facilitator 兼容、
+> payment-enabled A2A 完整比赛和完整生产验收尚未完成。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 第一次参赛见 [`player-guide.md`](player-guide.md)。本文维护游戏规则、跨模块状态

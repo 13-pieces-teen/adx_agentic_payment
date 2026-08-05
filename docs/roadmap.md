@@ -599,10 +599,10 @@ create game
       确保未执行 Claude 探针。中途资源快照为 API `63 MiB`、Worker `37 MiB`、
       PostgreSQL `107 MiB`、10 Connector 合计 `238 MiB`、当时 3 个 Codex
       子进程合计 `388 MiB`，不宣称为峰值上界。
-- [ ] 与既有无故障局合并后的 Codex 五类终态样本为
-      `decide=10 / intent=35 / rfq=5 / select=10 / negotiate=10`，均为
-      0 deadline timeout、0 retry。该数据完成 10-Agent canary，不完成每组合
-      100 样本、12/25/50/100 Agent 或真实 Hosted Provider wave，统一
+- [ ] 与既有无故障局和两场十 Agent、八回合完整 Codex 游戏合并后，五类终态
+      样本为 `decide=10 / intent=195 / rfq=79 / select=33 / negotiate=36`，
+      均为 0 deadline timeout、0 retry。Intent 已超过 100 样本，但其余组合、
+      12/25/50/100 Agent 分档和真实 Hosted Provider wave 仍未完成，统一
       `action_timeout_ms` 继续不冻结。
 - [x] 隔离 API `/api/ready` 的 1000 请求串行基线已覆盖并发 25/50/64：
       P95 分别为 `63.72/107.47/161.51 ms`，错误率 `0/0/0.3%`，通过
@@ -666,8 +666,9 @@ create game
 - [x] Phase B substrate：已加入 `arena.market.intent/rfq/select`、Hosted
       Prompt/Driver 结构化输出和 Local Connector 通用任务投递；Fake Provider
       测试只证明 transport/schema/Result Sink，不是真实 Agent 证据。
-- [ ] Phase B E2E：本机真实 Claude Code + Codex 已完成
-      `agent_a2a.v1` Intent/Discovery 局，但买方上限 `3.600000` 低于卖方下限
+- [x] Phase B E2E：真实 Codex 验收已完成；Claude Code 的外部连接问题被隔离为
+      非 Arena 阻塞。早期本机 Claude Code + Codex
+      `agent_a2a.v1` Intent/Discovery 局中，买方上限 `3.600000` 低于卖方下限
       `4.300000`，因此按协议无 Engagement；另一次角色互换验证了 180 秒 deadline
       的确定性 pass。第三次局中限价区间已经相交，但 Claude RFQ 在约 291 秒后
       返回 `runtime_failed`；保留的 Runtime Event 显示 Claude Code 因
