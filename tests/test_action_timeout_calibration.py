@@ -28,6 +28,7 @@ def _sample(
     return TaskLatencySample(
         task_id=f"task-{index}",
         game_id="game-calibration",
+        round_id="round-calibration",
         runtime_label=runtime_label,
         task_kind=task_kind,
         task_status=task_status,
@@ -83,6 +84,30 @@ def test_report_refuses_to_recommend_when_required_sample_is_missing() -> None:
             "reason": "sample_count_below_minimum",
             "observed": 2,
             "required": 3,
+        }
+    ]
+
+
+def test_report_exposes_round_launch_and_completion_skew() -> None:
+    report = build_calibration_report(
+        [
+            _sample(1, latency_ms=1_000),
+            _sample(2, latency_ms=2_000),
+        ],
+        required_combinations=[("codex", "arena.market.intent")],
+        minimum_samples=2,
+    )
+
+    assert report["waves"] == [
+        {
+            "gameId": "game-calibration",
+            "roundId": "round-calibration",
+            "runtimeLabel": "codex",
+            "taskKind": "arena.market.intent",
+            "sampleCount": 2,
+            "taskLaunchSkewMs": 1_000.0,
+            "resultReceiptSkewMs": 2_000.0,
+            "stageWallTimeMs": 3_020.0,
         }
     ]
 

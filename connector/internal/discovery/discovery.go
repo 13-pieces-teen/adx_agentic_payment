@@ -98,6 +98,39 @@ func NewScanner(connectorVersion string, timeout time.Duration) *Scanner {
 	}
 }
 
+// RestrictKinds limits discovery to explicitly selected Runtime kinds.
+// Excluded executables are not located, versioned, or authentication-probed.
+func (s *Scanner) RestrictKinds(kinds ...string) error {
+	if len(kinds) == 0 {
+		return fmt.Errorf("at least one runtime kind is required")
+	}
+	allowed := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		normalized := strings.TrimSpace(kind)
+		if normalized == "" {
+			return fmt.Errorf("runtime kind cannot be empty")
+		}
+		allowed[normalized] = struct{}{}
+	}
+	filtered := make([]Candidate, 0, len(allowed))
+	for _, candidate := range s.Candidates {
+		if _, ok := allowed[candidate.Kind]; ok {
+			filtered = append(filtered, candidate)
+			delete(allowed, candidate.Kind)
+		}
+	}
+	if len(allowed) != 0 {
+		unknown := make([]string, 0, len(allowed))
+		for kind := range allowed {
+			unknown = append(unknown, kind)
+		}
+		sort.Strings(unknown)
+		return fmt.Errorf("unsupported runtime kind: %s", strings.Join(unknown, ", "))
+	}
+	s.Candidates = filtered
+	return nil
+}
+
 // EnableTaskExecution advertises managed-session capabilities only for runtime
 // kinds that the local user explicitly enabled. New scanners are detection-only.
 func (s *Scanner) EnableTaskExecution(kinds ...string) {

@@ -151,6 +151,12 @@ gap 时主动执行有界 sync。Gateway 对未完成 Task 的周期 wake 重发
 Connector 路径的模型凭据、OAuth、钱包私钥和本地环境秘密始终留在用户设备上，
 不适用 Hosted BYOK 的 Secret Manager 例外。
 
+本地用户若只允许某一种 Runtime 进入 inventory，可重复传
+`--runtime-kind codex` 或 `--runtime-kind claude_code`。该选择发生在 executable
+查找之前：被排除的 Runtime 不做版本、认证或兼容性探测，也不会发布到 Gateway。
+它与 task 权限是两个独立门；Codex 仍需显式 `--enable-codex-tasks`，Claude
+仍需隔离开发环境中的 `--unsafe-enable-claude-tasks`。
+
 Local Agent 依赖 Connector 在线。心跳丢失后的恢复窗口是 30 秒与当前行动剩余时间
 中的较短者；窗口内使用同一 Task/idempotency key 恢复。超出窗口后，当前 Decide
 由 Arena Finalizer 明确收敛为 `pass`，当前 Negotiate 收敛为 timeout；后续行动也

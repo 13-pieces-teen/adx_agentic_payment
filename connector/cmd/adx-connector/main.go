@@ -210,7 +210,13 @@ func runConnector(arguments []string, commandName string) error {
 	)
 	var roots stringList
 	var allowedEnvironment stringList
+	var runtimeKinds stringList
 	flags.Var(&roots, "allow-root", "working directory root allowed for managed sessions; may be repeated")
+	flags.Var(
+		&runtimeKinds,
+		"runtime-kind",
+		"discover only this Runtime kind (codex or claude_code); may be repeated",
+	)
 	flags.Var(
 		&allowedEnvironment,
 		"allow-env",
@@ -253,6 +259,11 @@ func runConnector(arguments []string, commandName string) error {
 	}
 
 	runtimeScanner := newScanner(*discoveryTimeout)
+	if len(runtimeKinds) > 0 {
+		if err := runtimeScanner.RestrictKinds(runtimeKinds...); err != nil {
+			return err
+		}
+	}
 	enabledDrivers := make([]driver.Driver, 0, 2)
 	enabledKinds := make([]string, 0, 2)
 	if *enableCodexTasks {

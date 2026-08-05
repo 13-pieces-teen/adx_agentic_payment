@@ -674,3 +674,39 @@ Agent's economic action.
   the isolated Compose limit `ADX_API_MAX_CONCURRENCY=64` and receives
   admission 503s. This control-plane result is intentionally excluded from the
   action-timeout formula.
+
+### Ten-Agent real Codex canaries (2026-08-05)
+
+- The real-Runtime harness now accepts 2–100 independent invite, User, Device,
+  Binding, Session, and Connector seats. `--runtime-kind codex` restricts
+  discovery before executable/version/auth probes; all three canaries observed
+  zero newly started Claude processes. Buyer and seller portfolios remain
+  exactly 20 gold at initial prices. Multi-good seller portfolios increase
+  market coverage without changing or manufacturing any Agent action.
+- Baseline A2A game `real-runtimes-a2a048b555` completed ten succeeded/applied
+  Intents with 72.52 ms launch skew, 7.01 s Result receipt skew, 29.56 s Intent
+  stage wall time, and 29.77 s round wall time. Buyers independently chose
+  non-grain goods while every seller held grain, so zero RFQ and Deal was the
+  correct economic outcome.
+- Diversified A2A game `real-runtimes-d95129aafc` completed 10 Intents, 5 RFQs,
+  2 seller Select/Engage actions, 2 accepts, and 2 immutable Deals. The Intent
+  launch skew was 56.74 ms and the whole round took 82.11 s. All 19 Tasks were
+  succeeded/applied with zero timeout and retry. Payment was disabled, so both
+  accepted negotiations ended `settlement_failed` with zero SettlementIntent,
+  asset mutation, or chain write.
+- FCFS compatibility game `real-runtimes-61ba000c4b` completed ten real
+  `arena.decide` Tasks with 55.41 ms launch skew, 4.16 s Result receipt skew,
+  20.38 s stage wall time, and 20.58 s round wall time. The autonomous buy,
+  sell, and pass actions had no compatible same-good pair, so zero pairing was
+  not a matcher failure.
+- Across accepted non-fault Codex evidence, terminal sample counts are now
+  `decide=10 / intent=35 / rfq=5 / select=10 / negotiate=10`; every observed
+  group has zero deadline timeout and retry. The Intent P50/P95/P99 is
+  `23.581/31.625/33.087 s`; the other P99 values are `20.296 s` Decide,
+  `20.594 s` RFQ, `31.055 s` Select, and `18.161 s` Negotiate. This remains
+  insufficient for the 100-sample-per-combination gate, so the common timeout
+  is not frozen.
+- One mid-run, non-peak resource snapshot observed API 63 MiB, Arena worker
+  37 MiB, PostgreSQL 107 MiB, ten Connector processes 238 MiB total, and three
+  active Codex child processes 388 MiB total. It is a canary observation, not
+  a capacity ceiling or production host sizing result.

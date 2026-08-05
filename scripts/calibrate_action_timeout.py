@@ -33,6 +33,7 @@ class TaskLatencySample:
     result_received_at: datetime | None
     arena_applied_at: datetime | None
     terminal_reason: str | None = None
+    round_id: str = "unknown"
 
 
 def nearest_rank_percentile(
@@ -155,6 +156,70 @@ def _group_report(
     }
 
 
+def _spread_ms(values: Sequence[datetime]) -> float | None:
+    if not values:
+        return None
+    return round((max(values) - min(values)).total_seconds() * 1000, 2)
+
+
+def _wave_reports(
+    samples: Sequence[TaskLatencySample],
+) -> list[dict[str, object]]:
+    grouped: dict[
+        tuple[str, str, str, str],
+        list[TaskLatencySample],
+    ] = {}
+    for sample in samples:
+        key = (
+            sample.game_id,
+            sample.round_id,
+            sample.runtime_label,
+            sample.task_kind,
+        )
+        grouped.setdefault(key, []).append(sample)
+
+    reports: list[dict[str, object]] = []
+    for (
+        game_id,
+        round_id,
+        runtime_label,
+        task_kind,
+    ), group_samples in sorted(grouped.items()):
+        created = [sample.created_at for sample in group_samples]
+        received = [
+            sample.result_received_at
+            for sample in group_samples
+            if sample.result_received_at is not None
+        ]
+        terminal = [
+            sample.arena_applied_at or sample.result_received_at
+            for sample in group_samples
+            if sample.arena_applied_at is not None
+            or sample.result_received_at is not None
+        ]
+        stage_wall_time = (
+            round(
+                (max(terminal) - min(created)).total_seconds() * 1000,
+                2,
+            )
+            if terminal
+            else None
+        )
+        reports.append(
+            {
+                "gameId": game_id,
+                "roundId": round_id,
+                "runtimeLabel": runtime_label,
+                "taskKind": task_kind,
+                "sampleCount": len(group_samples),
+                "taskLaunchSkewMs": _spread_ms(created),
+                "resultReceiptSkewMs": _spread_ms(received),
+                "stageWallTimeMs": stage_wall_time,
+            }
+        )
+    return reports
+
+
 def build_calibration_report(
     samples: Iterable[TaskLatencySample],
     *,
@@ -270,6 +335,7 @@ def build_calibration_report(
         ],
         "includedGameIds": sorted({sample.game_id for sample in sample_values}),
         "groups": groups,
+        "waves": _wave_reports(sample_values),
         "blockingReasons": blockers,
         "recommendedActionTimeoutMs": recommendation,
     }
@@ -285,6 +351,7 @@ WITH first_lease AS (
 SELECT
     task.task_id,
     task.game_id,
+    task.round_id,
     CASE binding.runtime_kind
         WHEN 'connector' THEN coalesce(runtime.kind, 'connector:unknown')
         WHEN 'hosted' THEN concat(
@@ -352,6 +419,7 @@ async def load_samples(
         TaskLatencySample(
             task_id=row["task_id"],
             game_id=row["game_id"],
+            round_id=row["round_id"],
             runtime_label=row["runtime_label"],
             task_kind=row["task_kind"],
             task_status=row["task_status"],

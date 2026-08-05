@@ -185,10 +185,13 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   `scripts/calibrate_action_timeout.py` 已将统一 timeout 公式实现为
   fail-closed 证据门：按权威 Runtime/Task 分组读取 Arena 时间戳，每组合少于
   100 个终态样本、deadline timeout 超过 1% 或没有成功端到端样本时均不输出
-  推荐值。Codex-only pilot `real-runtimes-f65b334bd1` 用两个独立 Connector
-  完成三回合和 6 个 succeeded/applied Intent，但双方自主决策没有产生 RFQ 或
-  Deal；连同七个无故障 mixed run，Codex 五类支持任务的样本仍只有
-  `0/15/0/8/8`，因此当前 timeout 默认值未冻结、未修改。
+  推荐值。三个 10-Agent Codex-only canary 又分别完成基础 A2A、等值多商品
+  A2A coverage 和 FCFS compatibility：`real-runtimes-d95129aafc` 形成
+  10 Intent、5 RFQ、2 Engagement 和 2 个真实接受 Deal；
+  `real-runtimes-61ba000c4b` 完成 10 个真实 Decide。所有 canary 都关闭支付、
+  无 timeout/retry/资产或链写入，并以 Runtime scan filter 排除 Claude 探针。
+  累计五类 Codex 样本为 `10/35/5/10/10`，仍低于每组合 100 条，因此当前
+  timeout 默认值未冻结、未修改。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable

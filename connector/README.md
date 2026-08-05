@@ -226,8 +226,15 @@ To enable Connector-owned Codex tasks for a trusted local demo:
 ./adx-connector run \
   --api-base http://localhost:8000 \
   --allow-root /path/to/project \
+  --runtime-kind codex \
   --enable-codex-tasks
 ```
+
+`--runtime-kind` may be repeated and limits inventory discovery itself. An
+excluded Runtime executable is not located, version-probed, authentication-
+probed, or published. Omit the flag to retain the compatibility behavior of
+detecting every supported local Runtime. This is separate from
+`--enable-codex-tasks`: discovery selection never grants task execution.
 
 Claude task execution requires the separate
 `--unsafe-enable-claude-tasks` development flag. The Connector cannot yet

@@ -70,13 +70,18 @@ payment-enabled testnet 仍需显式人工确认。`agent_a2a.v1` 永久固定�
 apply P50/P95/P99、deadline timeout 和 retry。只有每个明确要求的组合达到
 至少 100 个终态样本、合法 Task deadline timeout 不超过 1% 时，工具才按上述
 公式给出推荐值；样本不足以退出码 2 和 `recommendedActionTimeoutMs=null`
-拒绝冻结。2026-08-05 的 Codex-only pilot 包含新鲜
-`real-runtimes-f65b334bd1`（两个独立 Codex、三回合、6 个真实 Intent、0 RFQ、
-0 Deal、0 SettlementIntent/资产变更/链写入）及七个无故障 mixed run。累计
-Codex 样本为 `decide=0 / market.intent=15 / market.rfq=0 /
-market.select=8 / negotiate=8`，已有三组均为 0 deadline timeout、0 retry，
-但仍远低于冻结门槛，所以没有修改当前 timeout 默认值。该局 0 RFQ/0 Deal 是
-两个 Agent 自主动作没有形成交易机会，不是 Arena 撮合故障。
+拒绝冻结。2026-08-05 进一步完成三个 10-Agent Codex-only canary。基础 A2A 局
+`real-runtimes-a2a048b555` 的 10 个 Intent 全部成功，但买方选择的商品与全粮食
+卖方不重合，因此正确结束为 0 RFQ/Deal。等值多商品局
+`real-runtimes-d95129aafc` 完成 `10 Intent → 5 RFQ → 2 Select →
+2 accept → 2 Deal`，整轮 82.11 秒；FCFS 兼容局
+`real-runtimes-61ba000c4b` 完成 10 个真实 Decide，整轮 20.58 秒，经济动作
+未形成兼容 pairing。三局均为 0 timeout、0 retry、0 SettlementIntent、0
+资产变更、0 链写入，且通过 `--runtime-kind codex` 没有执行 Claude 探针。
+连同既有无故障样本，累计为 `decide=10 / market.intent=35 /
+market.rfq=5 / market.select=10 / negotiate=10`，仍远低于每组合 100 条，
+所以没有修改当前 timeout 默认值。小样本 10-Agent wave 的公式结果不得作为
+生产冻结值。
 
 同一隔离 API 的只读 `/api/ready` 控制面基线在 1000 请求下，以并发
 25/50/64 分别得到 P95 `63.72/107.47/161.51 ms` 和错误率

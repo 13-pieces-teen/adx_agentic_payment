@@ -3,14 +3,15 @@
 Prerequisites:
 
 * an isolated Compose stack using ``docker-compose.real-runtimes-e2e.yml``;
-* two one-time invites in ``ADX_REAL_RUNTIME_E2E_INVITES`` as a JSON array;
+* 2–100 one-time invites in ``ADX_REAL_RUNTIME_E2E_INVITES`` as a JSON array;
 * locally authenticated CLIs selected by ``ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS``;
 * Go available to build the current Connector source.
 
-Arena, Gateway, PostgreSQL, and the Arena worker run in Docker. Two independent
+Arena, Gateway, PostgreSQL, and the Arena worker run in Docker. Independent
 Connectors and their managed Runtime children run on the host so existing local
-CLI authentication never enters a container. The default is one Claude Code
-and one Codex Runtime; ``codex,codex`` runs a Codex-only game with separate
+CLI authentication never enters a container. The default remains one Claude
+Code and one Codex Runtime for compatibility. A repeated Codex list plus
+``ADX_REAL_RUNTIME_E2E_BUYER_SEATS`` runs a Codex-only load wave with separate
 users, devices, bindings, sessions, and state stores. Payment support is
 disabled and the game freezes ``authorizationMode=none``; an accepted
 negotiation must close as ``settlement_failed`` without moving inventory or
@@ -77,10 +78,14 @@ EXPECT_DEAL = os.getenv(
     "ADX_REAL_RUNTIME_E2E_EXPECT_DEAL",
     "",
 ).strip().lower() in {"1", "true", "yes"}
-BUYER_RUNTIME = os.getenv(
-    "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME",
-    "claude-code",
-).strip().lower()
+BUYER_RUNTIME = (
+    os.getenv(
+        "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME",
+        "claude-code",
+    )
+    .strip()
+    .lower()
+)
 RUNTIME_KINDS = tuple(
     value.strip().lower()
     for value in os.getenv(
@@ -90,10 +95,115 @@ RUNTIME_KINDS = tuple(
     if value.strip()
 )
 BUYER_SEAT = int(os.getenv("ADX_REAL_RUNTIME_E2E_BUYER_SEAT", "-1"))
+BUYER_SEATS = os.getenv(
+    "ADX_REAL_RUNTIME_E2E_BUYER_SEATS",
+    "",
+).strip()
+SELLER_GOODS = tuple(
+    value.strip().lower()
+    for value in os.getenv(
+        "ADX_REAL_RUNTIME_E2E_SELLER_GOODS",
+        "",
+    ).split(",")
+    if value.strip()
+)
 MARKET_PROTOCOL = os.getenv(
     "ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL",
     "fcfs.v1",
 ).strip()
+
+
+@dataclass(frozen=True, slots=True)
+class E2ETopology:
+    invites: tuple[str, ...]
+    runtime_kinds: tuple[str, ...]
+    buyer_seats: frozenset[int]
+
+    @property
+    def participant_count(self) -> int:
+        return len(self.invites)
+
+
+def resolve_topology(
+    *,
+    invites: list[str] | tuple[str, ...],
+    runtime_kinds: list[str] | tuple[str, ...],
+    buyer_seats: range | list[int] | tuple[int, ...] | frozenset[int],
+) -> E2ETopology:
+    normalized_invites = tuple(value.strip() for value in invites)
+    normalized_kinds = tuple(value.strip().lower() for value in runtime_kinds)
+    normalized_buyers = frozenset(buyer_seats)
+    participant_count = len(normalized_invites)
+    if participant_count < 2 or participant_count > 100:
+        raise ValueError("real Runtime E2E requires between 2 and 100 participants")
+    if len(normalized_kinds) != participant_count:
+        raise ValueError("invite and Runtime-kind counts must match")
+    if any(not value for value in normalized_invites):
+        raise ValueError("invites must be non-empty")
+    if len(set(normalized_invites)) != participant_count:
+        raise ValueError("invites must be unique")
+    if any(kind not in {"claude-code", "codex"} for kind in normalized_kinds):
+        raise ValueError("unsupported real Runtime kind")
+    if (
+        not normalized_buyers
+        or len(normalized_buyers) == participant_count
+        or any(
+            isinstance(seat, bool)
+            or not isinstance(seat, int)
+            or seat < 0
+            or seat >= participant_count
+            for seat in normalized_buyers
+        )
+    ):
+        raise ValueError("buyer seats must leave at least one buyer and seller")
+    return E2ETopology(
+        invites=normalized_invites,
+        runtime_kinds=normalized_kinds,
+        buyer_seats=normalized_buyers,
+    )
+
+
+def portfolio_for_seat(
+    seat: int,
+    buyer_seats: frozenset[int],
+    *,
+    safe_no_trade: bool = False,
+    seller_good: str = "grain",
+) -> dict[str, object]:
+    if safe_no_trade or seat in buyer_seats:
+        return {"cash": "20.000000", "holdings": {}}
+    seller_portfolios = {
+        "grain": {"cash": "0.000000", "holdings": {"grain": 10}},
+        "iron": {"cash": "0.000000", "holdings": {"iron": 4}},
+        "warhorse": {"cash": "4.000000", "holdings": {"warhorse": 2}},
+        "gems": {"cash": "2.000000", "holdings": {"gems": 6}},
+    }
+    try:
+        return seller_portfolios[seller_good]
+    except KeyError as exc:
+        raise ValueError(f"unsupported seller good: {seller_good}") from exc
+
+
+def game_create_payload(
+    *,
+    game_id: str,
+    event_seed: str,
+    participant_count: int,
+    action_timeout_ms: int,
+    round_count: int,
+    market_protocol: str,
+) -> dict[str, object]:
+    return {
+        "gameId": game_id,
+        "eventSeed": event_seed,
+        "actionTimeoutMs": action_timeout_ms,
+        "roundCount": round_count,
+        "eventMode": "seeded_shuffle",
+        "marketProtocol": market_protocol,
+        "maxParticipants": participant_count,
+        "portfolioMode": "manual",
+        "settlement": {"authorizationMode": "none"},
+    }
 
 
 def _require_ok(response: httpx.Response) -> dict[str, Any]:
@@ -270,11 +380,7 @@ class RealConnector:
 
     @property
     def state_path(self) -> Path:
-        return (
-            self.temp_root
-            / self.label
-            / f"state-{self.run_id}.json"
-        )
+        return self.temp_root / self.label / f"state-{self.run_id}.json"
 
     def start(self) -> None:
         environment = os.environ.copy()
@@ -312,6 +418,12 @@ class RealConnector:
             arguments.append("--enable-codex-tasks")
         else:
             arguments.append("--unsafe-enable-claude-tasks")
+        arguments.extend(
+            [
+                "--runtime-kind",
+                "codex" if self.kind == "codex" else "claude_code",
+            ]
+        )
         process = subprocess.Popen(
             arguments,
             cwd=ROOT,
@@ -439,7 +551,12 @@ async def _wait_for_completion(
     )
 
 
-async def _database_evidence(game_id: str) -> dict[str, Any]:
+async def _database_evidence(
+    game_id: str,
+    *,
+    expected_participants: int | None = None,
+) -> dict[str, Any]:
+    expected_participants = expected_participants or len(RUNTIME_KINDS)
     connection = await asyncpg.connect(ADMIN_URL)
     try:
         game = await connection.fetchrow(
@@ -590,21 +707,20 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
     participant_values = [dict(row) for row in participants]
     if game["phase"] != "completed":
         raise RuntimeError(f"database game is not completed: {dict(game)!r}")
-    if len(participant_values) != 2:
+    if len(participant_values) != expected_participants:
         raise RuntimeError(
-            f"expected two Connector participants: {participant_values!r}"
+            f"expected {expected_participants} Connector participants: "
+            f"{participant_values!r}"
         )
-    if int(counts["rankings"]) != 2:
-        raise RuntimeError(f"expected two rankings: {dict(counts)!r}")
+    if int(counts["rankings"]) != expected_participants:
+        raise RuntimeError(
+            f"expected {expected_participants} rankings: {dict(counts)!r}"
+        )
     opening_kind = (
-        "arena.market.intent"
-        if MARKET_PROTOCOL == "agent_a2a.v1"
-        else "arena.decide"
+        "arena.market.intent" if MARKET_PROTOCOL == "agent_a2a.v1" else "arena.decide"
     )
-    opening_tasks = [
-        row for row in task_values if row["kind"] == opening_kind
-    ]
-    expected_opening_tasks = 2 * ROUND_COUNT
+    opening_tasks = [row for row in task_values if row["kind"] == opening_kind]
+    expected_opening_tasks = expected_participants * ROUND_COUNT
     if len(opening_tasks) != expected_opening_tasks:
         raise RuntimeError(
             f"expected {expected_opening_tasks} real {opening_kind} tasks: "
@@ -630,21 +746,16 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
         or int(counts["holding_mutations"]) != 0
     ):
         raise RuntimeError(
-            "no-payment E2E moved authoritative inventory: "
-            f"{dict(counts)!r}"
+            "no-payment E2E moved authoritative inventory: " f"{dict(counts)!r}"
         )
     if EXPECT_MATCH and (
-        int(counts["pairings"]) < 1
-        or int(counts["negotiation_messages"]) < 1
+        int(counts["pairings"]) < 1 or int(counts["negotiation_messages"]) < 1
     ):
-        raise RuntimeError(
-            f"trade probe did not reach negotiation: {dict(counts)!r}"
-        )
+        raise RuntimeError(f"trade probe did not reach negotiation: {dict(counts)!r}")
     deal_values = [dict(row) for row in deal_rows]
     for deal in deal_values:
         if (
-            deal["latest_proposal_result_id"]
-            == deal["acceptance_result_id"]
+            deal["latest_proposal_result_id"] == deal["acceptance_result_id"]
             or int(deal["quantity"]) != 1
             or int(deal["unit_price_atomic"]) <= 0
         ):
@@ -681,7 +792,10 @@ async def _database_evidence(game_id: str) -> dict[str, Any]:
 async def _public_evidence(
     user: UserSession,
     game_id: str,
+    *,
+    expected_participants: int | None = None,
 ) -> dict[str, Any]:
+    expected_participants = expected_participants or len(RUNTIME_KINDS)
     state = await _read_json_with_retry(
         user.client,
         f"/api/v1/pawnhouse/games/{game_id}",
@@ -700,22 +814,22 @@ async def _public_evidence(
     )
     if state.get("phase") != "completed":
         raise RuntimeError(f"public game state is not completed: {state!r}")
-    if len(state.get("participants", [])) != 2:
-        raise RuntimeError(f"expected two public participants: {state!r}")
-    if len(state.get("rankings", [])) != 2:
-        raise RuntimeError(f"expected two public rankings: {state!r}")
-    if runtime_run.get("status") != "completed":
+    if len(state.get("participants", [])) != expected_participants:
         raise RuntimeError(
-            f"public Runtime Run is not completed: {runtime_run!r}"
+            f"expected {expected_participants} public participants: {state!r}"
         )
+    if len(state.get("rankings", [])) != expected_participants:
+        raise RuntimeError(
+            f"expected {expected_participants} public rankings: {state!r}"
+        )
+    if runtime_run.get("status") != "completed":
+        raise RuntimeError(f"public Runtime Run is not completed: {runtime_run!r}")
     if SAFE_NO_TRADE and settlements.get("total") != 0:
         raise RuntimeError(
             f"safe no-trade game created a settlement intent: {settlements!r}"
         )
     if EXPECT_MATCH and not state.get("pairings"):
-        raise RuntimeError(
-            f"public trade probe did not create a pairing: {state!r}"
-        )
+        raise RuntimeError(f"public trade probe did not create a pairing: {state!r}")
     return {
         "game": state,
         "timeline": timeline,
@@ -759,53 +873,77 @@ def _probe_mcp_data_plane() -> None:
 
 async def main() -> None:
     invites = json.loads(os.environ["ADX_REAL_RUNTIME_E2E_INVITES"])
-    if (
-        not isinstance(invites, list)
-        or len(invites) != 2
-        or not all(isinstance(value, str) for value in invites)
+    if not isinstance(invites, list) or not all(
+        isinstance(value, str) for value in invites
     ):
         raise RuntimeError(
-            "ADX_REAL_RUNTIME_E2E_INVITES must be a JSON array of two invites"
+            "ADX_REAL_RUNTIME_E2E_INVITES must be a JSON array of invites"
         )
     health = httpx.get(f"{API_BASE}/api/health", timeout=15)
     health.raise_for_status()
     if health.json().get("arena_mcp") is not True:
         _probe_mcp_data_plane()
     if ROUND_COUNT < 1 or ROUND_COUNT > 10:
-        raise RuntimeError(
-            "ADX_REAL_RUNTIME_E2E_ROUND_COUNT must be between 1 and 10"
-        )
-    if len(RUNTIME_KINDS) != 2 or any(
-        value not in {"claude-code", "codex"} for value in RUNTIME_KINDS
-    ):
-        raise RuntimeError(
-            "ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS must contain exactly two "
-            "comma-separated values chosen from claude-code and codex"
-        )
-    buyer_seat = BUYER_SEAT
-    if buyer_seat == -1:
-        matches = [
-            index
-            for index, runtime_kind in enumerate(RUNTIME_KINDS)
-            if runtime_kind == BUYER_RUNTIME
-        ]
-        if len(matches) == 1:
-            buyer_seat = matches[0]
-        elif len(set(RUNTIME_KINDS)) == 1:
-            buyer_seat = 0
-        else:
-            raise RuntimeError(
-                "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME must identify one Runtime "
-                "or ADX_REAL_RUNTIME_E2E_BUYER_SEAT must be 0 or 1"
+        raise RuntimeError("ADX_REAL_RUNTIME_E2E_ROUND_COUNT must be between 1 and 10")
+    if BUYER_SEATS:
+        try:
+            buyer_seats = tuple(
+                int(value.strip()) for value in BUYER_SEATS.split(",") if value.strip()
             )
-    if buyer_seat not in {0, 1}:
-        raise RuntimeError(
-            "ADX_REAL_RUNTIME_E2E_BUYER_SEAT must be -1, 0, or 1"
+        except ValueError as exc:
+            raise RuntimeError(
+                "ADX_REAL_RUNTIME_E2E_BUYER_SEATS must contain integer seats"
+            ) from exc
+    else:
+        buyer_seat = BUYER_SEAT
+        if buyer_seat != -1:
+            buyer_seats = (buyer_seat,)
+        else:
+            matches = [
+                index
+                for index, runtime_kind in enumerate(RUNTIME_KINDS)
+                if runtime_kind == BUYER_RUNTIME
+            ]
+            if len(matches) == 1:
+                buyer_seats = (matches[0],)
+            elif len(set(RUNTIME_KINDS)) == 1:
+                buyer_seats = (0,)
+            else:
+                raise RuntimeError(
+                    "ADX_REAL_RUNTIME_E2E_BUYER_RUNTIME must identify one "
+                    "Runtime or ADX_REAL_RUNTIME_E2E_BUYER_SEATS must be set"
+                )
+    try:
+        topology = resolve_topology(
+            invites=invites,
+            runtime_kinds=RUNTIME_KINDS,
+            buyer_seats=buyer_seats,
         )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    participant_count = topology.participant_count
+    runtime_kinds = topology.runtime_kinds
+    buyer_seats = topology.buyer_seats
+    seller_seats = sorted(set(range(participant_count)) - buyer_seats)
+    seller_goods = SELLER_GOODS or ("grain",) * len(seller_seats)
+    if len(seller_goods) != len(seller_seats):
+        raise RuntimeError(
+            "ADX_REAL_RUNTIME_E2E_SELLER_GOODS must contain exactly one "
+            "good for each seller seat"
+        )
+    seller_goods_by_seat = dict(zip(seller_seats, seller_goods, strict=True))
+    try:
+        for seat in seller_seats:
+            portfolio_for_seat(
+                seat,
+                buyer_seats,
+                seller_good=seller_goods_by_seat[seat],
+            )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     if MARKET_PROTOCOL not in {"fcfs.v1", "agent_a2a.v1"}:
         raise RuntimeError(
-            "ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL must be fcfs.v1 or "
-            "agent_a2a.v1"
+            "ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL must be fcfs.v1 or " "agent_a2a.v1"
         )
 
     run_id = uuid.uuid4().hex[:10]
@@ -816,7 +954,7 @@ async def main() -> None:
         )
         _build_connector(connector_executable)
         codex_shim_root = temp_root / "codex-shim"
-        if "codex" in RUNTIME_KINDS:
+        if "codex" in runtime_kinds:
             _create_codex_shim(codex_shim_root)
 
         users = tuple(
@@ -827,7 +965,7 @@ async def main() -> None:
                         f"seat{index + 1}_{runtime_kind.replace('-', '_')}",
                         run_id,
                     )
-                    for index, runtime_kind in enumerate(RUNTIME_KINDS)
+                    for index, runtime_kind in enumerate(runtime_kinds)
                 )
             )
         )
@@ -836,11 +974,9 @@ async def main() -> None:
                 *(
                     _create_device_credential(
                         users[index],
-                        device_name=(
-                            f"Real {runtime_kind} E2E seat {index + 1}"
-                        ),
+                        device_name=(f"Real {runtime_kind} E2E seat {index + 1}"),
                     )
-                    for index, runtime_kind in enumerate(RUNTIME_KINDS)
+                    for index, runtime_kind in enumerate(runtime_kinds)
                 )
             )
         )
@@ -855,7 +991,7 @@ async def main() -> None:
                 codex_shim_root=codex_shim_root,
                 run_id=run_id,
             )
-            for index, runtime_kind in enumerate(RUNTIME_KINDS)
+            for index, runtime_kind in enumerate(runtime_kinds)
         )
         game_id = f"real-runtimes-{run_id}"
         try:
@@ -870,17 +1006,14 @@ async def main() -> None:
                 await users[0].client.post(
                     "/api/v1/pawnhouse/games",
                     headers=users[0].mutation_headers,
-                    json={
-                        "gameId": game_id,
-                        "eventSeed": EVENT_SEED,
-                        "actionTimeoutMs": ACTION_TIMEOUT_MS,
-                        "roundCount": ROUND_COUNT,
-                        "eventMode": "seeded_shuffle",
-                        "marketProtocol": MARKET_PROTOCOL,
-                        "maxParticipants": 2,
-                        "portfolioMode": "manual",
-                        "settlement": {"authorizationMode": "none"},
-                    },
+                    json=game_create_payload(
+                        game_id=game_id,
+                        event_seed=EVENT_SEED,
+                        participant_count=participant_count,
+                        action_timeout_ms=ACTION_TIMEOUT_MS,
+                        round_count=ROUND_COUNT,
+                        market_protocol=MARKET_PROTOCOL,
+                    ),
                 )
             )
             join_responses = await asyncio.gather(
@@ -890,17 +1023,18 @@ async def main() -> None:
                         headers=users[index].mutation_headers,
                         json={
                             "agentId": bindings[index]["agent_id"],
-                            "portfolio": (
-                                {"cash": "20.000000", "holdings": {}}
-                                if SAFE_NO_TRADE or index == buyer_seat
-                                else {
-                                    "cash": "0.000000",
-                                    "holdings": {"grain": 10},
-                                }
+                            "portfolio": portfolio_for_seat(
+                                index,
+                                buyer_seats,
+                                safe_no_trade=SAFE_NO_TRADE,
+                                seller_good=seller_goods_by_seat.get(
+                                    index,
+                                    "grain",
+                                ),
                             ),
                         },
                     )
-                    for index in range(2)
+                    for index in range(participant_count)
                 )
             )
             for response in join_responses:
@@ -917,9 +1051,16 @@ async def main() -> None:
                 connectors,
             )
             evidence = (
-                await _public_evidence(users[0], game_id)
+                await _public_evidence(
+                    users[0],
+                    game_id,
+                    expected_participants=participant_count,
+                )
                 if PUBLIC_EVIDENCE_ONLY
-                else await _database_evidence(game_id)
+                else await _database_evidence(
+                    game_id,
+                    expected_participants=participant_count,
+                )
             )
             print(
                 json.dumps(
@@ -949,8 +1090,24 @@ async def main() -> None:
                         "safeNoTrade": SAFE_NO_TRADE,
                         "expectedMatch": EXPECT_MATCH,
                         "expectedDeal": EXPECT_DEAL,
-                        "buyerRuntime": RUNTIME_KINDS[buyer_seat],
-                        "buyerSeat": connectors[buyer_seat].label,
+                        "buyerRuntimes": [
+                            runtime_kinds[index] for index in sorted(buyer_seats)
+                        ],
+                        "buyerSeats": [
+                            connectors[index].label for index in sorted(buyer_seats)
+                        ],
+                        **(
+                            {
+                                "buyerRuntime": runtime_kinds[next(iter(buyer_seats))],
+                                "buyerSeat": connectors[next(iter(buyer_seats))].label,
+                            }
+                            if len(buyer_seats) == 1
+                            else {}
+                        ),
+                        "sellerGoods": {
+                            connectors[index].label: seller_goods_by_seat[index]
+                            for index in seller_seats
+                        },
                         "evidenceClass": "real_local_connector_agents",
                         "evidence": evidence,
                         "chainWrites": 0,
@@ -967,9 +1124,7 @@ async def main() -> None:
                 )
                 for connector in connectors
             )
-            raise RuntimeError(
-                f"{exc}\nConnector logs:\n{connector_logs}"
-            ) from exc
+            raise RuntimeError(f"{exc}\nConnector logs:\n{connector_logs}") from exc
         finally:
             await asyncio.gather(*(connector.stop() for connector in connectors))
             await asyncio.gather(*(user.client.aclose() for user in users))

@@ -587,12 +587,23 @@ create game
       从 `arena_runtime_binding → connector_binding → connector_runtime` 解析真实
       Runtime 身份，以 Arena 的 created/first leased/result received/applied
       时间戳计算分组合 P50/P95/P99、timeout 和 retry；样本或成功证据不足、
-      timeout 超标时拒绝输出推荐值。2026-08-05 Codex-only pilot 新增
-      `real-runtimes-f65b334bd1`（两个独立 Codex、三回合、6 个 succeeded/applied
-      Intent），与七个无故障 mixed run 合并后五类支持任务仅为
-      `decide=0 / intent=15 / rfq=0 / select=8 / negotiate=8`，已有组均为
-      0 deadline timeout、0 retry，因此本项只完成校准工具和 pilot，不完成上项
-      100 样本/目标负载冻结。
+      timeout 超标时拒绝输出推荐值。报告已增加逐 Game/Round/Runtime/Task 的
+      launch skew、result receipt skew 和 stage wall time。
+- [x] 2026-08-05 完成三个 payment-disabled 10-Agent Codex-only canary。
+      `real-runtimes-a2a048b555` 验证 10 个并发 Intent；
+      `real-runtimes-d95129aafc` 以五买五卖、四商品等值资产完成
+      `10 Intent / 5 RFQ / 2 Select / 2 negotiate / 2 Deal`，整轮
+      `82.11s`；`real-runtimes-61ba000c4b` 以 `fcfs.v1` 完成 10 个 Decide，
+      整轮 `20.58s`。所有 Task succeeded/applied，0 timeout、0 retry、
+      0 SettlementIntent、0 资产变更、0 链写入；`--runtime-kind codex`
+      确保未执行 Claude 探针。中途资源快照为 API `63 MiB`、Worker `37 MiB`、
+      PostgreSQL `107 MiB`、10 Connector 合计 `238 MiB`、当时 3 个 Codex
+      子进程合计 `388 MiB`，不宣称为峰值上界。
+- [ ] 与既有无故障局合并后的 Codex 五类终态样本为
+      `decide=10 / intent=35 / rfq=5 / select=10 / negotiate=10`，均为
+      0 deadline timeout、0 retry。该数据完成 10-Agent canary，不完成每组合
+      100 样本、12/25/50/100 Agent 或真实 Hosted Provider wave，统一
+      `action_timeout_ms` 继续不冻结。
 - [x] 隔离 API `/api/ready` 的 1000 请求串行基线已覆盖并发 25/50/64：
       P95 分别为 `63.72/107.47/161.51 ms`，错误率 `0/0/0.3%`，通过
       1%/500ms 门槛。并发 100 超过测试 Compose 的
