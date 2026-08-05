@@ -302,7 +302,7 @@ class RealConnector:
             arguments.append("--enable-codex-tasks")
         else:
             arguments.append("--unsafe-enable-claude-tasks")
-        self.process = subprocess.Popen(
+        process = subprocess.Popen(
             arguments,
             cwd=ROOT,
             env=environment,
@@ -312,12 +312,12 @@ class RealConnector:
             encoding="utf-8",
             errors="replace",
         )
-        assert self.process.stdout is not None
+        self.process = process
+        assert process.stdout is not None
 
         def drain() -> None:
-            assert self.process is not None
-            assert self.process.stdout is not None
-            for line in self.process.stdout:
+            assert process.stdout is not None
+            for line in process.stdout:
                 self.logs.append(line.rstrip())
 
         threading.Thread(target=drain, daemon=True).start()
@@ -325,7 +325,7 @@ class RealConnector:
     def _failure_logs(self) -> str:
         return "\n".join(list(self.logs)[-100:])
 
-    async def wait_online_and_bind(self) -> dict[str, Any]:
+    async def wait_online(self) -> dict[str, Any]:
         assert self.process is not None
         device_id = self.credential["device_id"]
         for _ in range(240):
@@ -351,34 +351,39 @@ class RealConnector:
                         and {"session.start", "task.dispatch"} <= capabilities
                     ):
                         self.runtime = runtime
-                        self.binding = _require_ok(
-                            await self.user.client.post(
-                                f"/api/connectors/devices/{device_id}/bindings",
-                                headers=self.user.mutation_headers,
-                                json={
-                                    "runtime_id": runtime["runtime_id"],
-                                    "display_name": (
-                                        f"Real Claude Code {self.label}"
-                                        if self.kind == "claude-code"
-                                        else f"Real Codex {self.label}"
-                                    ),
-                                    "working_directory": str(ROOT),
-                                },
-                            )
-                        )
-                        registration = self.binding.get("arenaRegistration", {})
-                        if registration.get("routeStatus") != "ready":
-                            raise RuntimeError(
-                                f"{self.label} ({self.kind}) Arena route is not ready: "
-                                f"{registration!r}"
-                            )
-                        return self.binding
+                        return runtime
             await asyncio.sleep(0.25)
         raise RuntimeError(
             f"{self.label} ({self.kind}) Connector did not publish a locally "
             "ready Runtime:\n"
             f"{self._failure_logs()}"
         )
+
+    async def wait_online_and_bind(self) -> dict[str, Any]:
+        runtime = await self.wait_online()
+        device_id = self.credential["device_id"]
+        self.binding = _require_ok(
+            await self.user.client.post(
+                f"/api/connectors/devices/{device_id}/bindings",
+                headers=self.user.mutation_headers,
+                json={
+                    "runtime_id": runtime["runtime_id"],
+                    "display_name": (
+                        f"Real Claude Code {self.label}"
+                        if self.kind == "claude-code"
+                        else f"Real Codex {self.label}"
+                    ),
+                    "working_directory": str(ROOT),
+                },
+            )
+        )
+        registration = self.binding.get("arenaRegistration", {})
+        if registration.get("routeStatus") != "ready":
+            raise RuntimeError(
+                f"{self.label} ({self.kind}) Arena route is not ready: "
+                f"{registration!r}"
+            )
+        return self.binding
 
     async def stop(self) -> None:
         if self.process is None or self.process.poll() is not None:

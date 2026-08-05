@@ -159,15 +159,21 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   Result Sink 和 Hosted/Connector mixed-Runtime 编排。2026-08-02 已完成真实
   Claude Code/Codex 的一回合 Connector-only 比赛，并由 Result Sink 应用四项
   decide/negotiate 结果；该局形成 FCFS pairing、proposal 和 accept。隔离局未提供
-  PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。生产重连、
-  中途 lease/replay 故障注入和 payment-enabled Connector 真实 E2E 尚未验收。
+  PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。真实 Codex
+  的任务执行中重启恢复和不重连 deadline default 已完成隔离故障注入；
+  真实 lease-expiry takeover、terminal Result outbox replay 和
+  payment-enabled Connector E2E 尚未验收。
   opt-in `agent_a2a.v1` 另已由两个独立 Codex Connector 完成 Intent、RFQ、
   seller Engage、三轮协商和 immutable Deal；proposal 与 acceptance 来自不同
   的已应用 Runtime Result。该局同样关闭支付，因此没有 SettlementIntent、
   资产移动或链写入。另一个 `agent_a2a.v1` 隔离局
   `mixed-fallback-7f15a77f8c` 已由 Hosted scripted buyer/rejecting seller
   与真实 Codex seller 完成两次顺序 RFQ、第二次 Engage/accept 和 Deal；终局后
-  API/Arena worker 重启未重复消耗 RFQ budget 或增加 Deal/entry。
+  API/Arena worker 重启未重复消耗 RFQ budget 或增加 Deal/entry。后续
+  `mixed-fallback-a865aba66f` 在第二个 seller-selection Task 执行中重启
+  Connector，同一 Task 最终仅一条 Result 和一次 apply；不重连的
+  `mixed-fallback-5f00bae33a` 则由 Finalizer 精确应用 `market_timeout`。
+  两局都保持零 SettlementIntent、零资产移动和零链写入。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable

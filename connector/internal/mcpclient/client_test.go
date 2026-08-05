@@ -194,6 +194,52 @@ func TestClaimAndSubmitUseStatelessMCPHeadersAndBindingToken(t *testing.T) {
 	}
 }
 
+func TestClaimCommandIDChangesWithRecoveredManagedSession(t *testing.T) {
+	deadline := time.Now().Add(time.Minute).UTC()
+	task := json.RawMessage(
+		`{"taskId":"task-1","idempotencyKey":"idem-1","deadlineAt":"` +
+			deadline.Format(time.RFC3339Nano) + `"}`,
+	)
+	beforeRestart := Claim{
+		Task: task,
+		Execution: ExecutionRoute{
+			BindingID:    "binding-1",
+			BindingEpoch: 7,
+			AgentID:      "agent-1",
+			RuntimeID:    "runtime-1",
+			SessionID:    "session-before-restart",
+		},
+	}
+	afterRestart := beforeRestart
+	afterRestart.Execution.SessionID = "session-after-restart"
+
+	first, err := beforeRestart.DecodeCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := beforeRestart.DecodeCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := afterRestart.DecodeCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CommandID != replayed.CommandID {
+		t.Fatalf(
+			"same task and session must retain a stable command id: %q != %q",
+			first.CommandID,
+			replayed.CommandID,
+		)
+	}
+	if first.CommandID == recovered.CommandID {
+		t.Fatalf(
+			"recovered session must receive a new command id: %q",
+			first.CommandID,
+		)
+	}
+}
+
 func TestNewRejectsRemotePlaintextMCPOrigin(t *testing.T) {
 	_, err := New(
 		store.Credentials{

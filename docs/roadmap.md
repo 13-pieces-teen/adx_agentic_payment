@@ -334,9 +334,10 @@ create game
       成功返回并由 Result Sink 应用，Arena 形成一个 FCFS pairing 和两条公开
       negotiation message。该局 `authorizationMode=none`，因此以
       `settlement_disabled` 终结且 0 链写入，不构成支付证据。
-- [ ] 仍需真实进程断线重连、lease expiry、durable result replay、
-      Hosted/Connector mixed 比赛，以及带 PaymentMandate 的真实 Connector
-      settlement E2E。
+- [x] Hosted/Connector mixed 比赛、真实 Codex 任务执行中断线重连和不重连的
+      deadline default 已完成故障注入；恢复任务只生成一条 Result 并只应用一次。
+- [ ] 仍需真实 lease-expiry takeover、已持久化 terminal Result 的 durable
+      outbox replay，以及带 PaymentMandate 的真实 Connector settlement E2E。
 - [x] Connector 进程重启会递增持久化的 `session_generation`，使原进程的
       Session 失效并用新的 session incarnation 重建；处理中 typed AgentTask 仅在
       旧 receipt 明确为 `connector_restarted` 时以新 Command 重试一次，总 Attempt
@@ -350,8 +351,9 @@ create game
       inventory 分离 installed/task-enabled/auth-status/compatible/isolation/
       local-ready，Gateway 与 Connector 交叉校验并对未就绪 Runtime fail closed。Codex CLI
       当前没有等价 no-tools 开关，该差异保留为明确限制。
-- [ ] 使用真实 CC/Codex 跑通 Hosted/Connector mixed 比赛，并保存断线重连、
-      deadline default、Result replay 与 payment-enabled settlement 证据。
+- [x] 使用 Hosted scripted + 真实 Codex 跑通 mixed 比赛，并保存执行中断线重连
+      与 deadline default 证据；Claude Code 待外部 API/证书路径健康后补跑。
+- [ ] 保存 terminal Result outbox replay 与 payment-enabled settlement 证据。
 - [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
       `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
 - [x] 平台 `user_id` 永久绑定 platform-managed testnet guest wallet；`045`
@@ -657,9 +659,17 @@ create game
       自主发布 iron sell Intent，第二次 RFQ 后自主 Engage 并 accept；9 个
       AgentTask 全部成功应用，形成 2 个 Engagement、1 个 Deal、0
       SettlementIntent 和 0 链写入。该局结束后重启 API/Arena worker，session
-      与各实体计数保持不变。剩余验收覆盖中途 reconnect、lease expiry、
-      deadline default 和 durable Result replay 故障注入。Claude Code 待其
-      外部 API/证书路径健康后补跑，不阻塞该阶段。
+      与各实体计数保持不变。随后 `mixed-fallback-a865aba66f` 在真实 Codex
+      seller 的第二个 `arena.market.select` 已 leased 时终止并重启 Connector；
+      修复 MCP command 未区分新 Session，以及旧 `session.start` receipt
+      重放恢复失效进程 Session 的两个问题后，同一 Task 有 5 次 lease 事件、
+      1 条 Result、1 次 apply，最终仍形成第二个 Engagement 和 1 个 Deal。
+      `mixed-fallback-5f00bae33a` 在相同边界终止且不重连，使用全局统一的
+      60 秒 action timeout，由 Finalizer 将 Task 精确收口为
+      `defaulted/timed_out/applied/market_timeout`，第二个 RFQ 为 `expired`，
+      0 Deal。两局均为 0 SettlementIntent、0 资产变更和 0 链写入。
+      剩余恢复验收为 lease-expiry takeover 和 terminal Result outbox replay。
+      Claude Code 待其外部 API/证书路径健康后补跑，不阻塞该阶段。
 - [x] Phase C payment-disabled foundation：只有 buyer RFQ Result + seller
       Engage Result 才能物化兼容 Pairing/Negotiation；接受后冻结包含 proposal /
       acceptance Result ID 的 Deal，并复用现有 Settlement 边界。Fake E2E 与
@@ -684,10 +694,11 @@ create game
       冲突；`061` 为每个 A2A Engagement 建独立 compatibility entry，同时用
       partial unique index 保留 `fcfs.v1` 的原唯一约束。服务重启后 session
       保持 `completed / 2 of 3`，请求、Engagement、Deal 和 entry 计数均未增长。
-- [ ] Phase C protocol acceptance：Hosted + Codex mixed 顺序 fallback 和
-      终局后 projection recovery 已由 `mixed-fallback-7f15a77f8c` 完成；仍需补
-      全部卖方均为真实 Runtime 的多卖方 fallback，以及 mixed-Runtime 中途
-      reconnect、lease expiry、deadline default、durable replay 故障注入。
+- [ ] Phase C protocol acceptance：Hosted + Codex mixed 顺序 fallback、
+      终局 projection recovery、中途 reconnect 和 deadline default 已由
+      `mixed-fallback-7f15a77f8c`、`mixed-fallback-a865aba66f` 与
+      `mixed-fallback-5f00bae33a` 完成；仍需全部卖方均为真实 Runtime 的
+      多卖方 fallback、lease-expiry takeover 和 terminal Result outbox replay。
       完成真实 P95/P99 负载校准前不切换 Current Game。
 - [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
       fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；

@@ -8,9 +8,10 @@
 > negotiation, and an immutable Deal with distinct proposal/acceptance Result
 > provenance. A deterministic three-Hosted-Agent Fake E2E has also completed
 > first-seller rejection and second-seller fallback with durable restart
-> evidence. Hosted + real Codex mixed fallback is complete; all-real
-> multi-seller fallback, mid-run recovery injection, and payment-enabled A2A
-> remain incomplete.
+> evidence. Hosted + real Codex mixed fallback, in-flight Connector restart,
+> and deadline-default injection are complete. All-real multi-seller fallback,
+> lease-expiry takeover, durable Result-outbox replay injection, and
+> payment-enabled A2A remain incomplete.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
 > counterparties, choose whom to approach, select which request to engage, and
@@ -374,9 +375,10 @@ Phase A alone is not evidence of a playable real-Agent market.
       Connector Runtime paths;
 - [x] run real Codex Local Connector games through negotiation and a
       payment-disabled Deal;
-- [ ] run a real Hosted-model + Codex Connector mixed game and preserve
-      reconnect, lease-expiry, deadline-default, durable Result replay, and
-      projection-recovery evidence;
+- [x] run a real Hosted + Codex Connector mixed game and preserve in-flight
+      reconnect, deadline-default, and projection-recovery evidence;
+- [ ] preserve real lease-expiry takeover and durable Result-outbox replay
+      injection evidence;
 - [ ] rerun Claude Code after its external API/certificate path is healthy;
       this is follow-up evidence and does not block Hosted + Codex acceptance;
 - [x] require buyer RFQ and seller selection Result provenance for every
@@ -568,8 +570,28 @@ Evidence levels remain separate:
   zero chain writes. Restarting the isolated API and Arena worker left the RFQ
   session at `completed / 2 of 3` and counts at `2 requests / 2 engagements /
   1 deal / 4 entries / 0 settlement intents`. This is mixed real-Agent and
-  terminal projection-recovery evidence; it does not yet cover a disconnect
-  or lease expiry while a task is in flight.
+  terminal projection-recovery evidence; the following fault runs add the
+  in-flight recovery cases.
+- The fault-injected run `mixed-fallback-a865aba66f` terminated the Connector
+  while real Codex CLI 0.146.0 held the second `arena.market.select` Task,
+  then restarted from the same local state. The probe exposed and fixed two
+  recovery defects: MCP command identity did not distinguish a rebuilt
+  Connector-owned Session, and replay of the pre-restart `session.start`
+  receipt could restore a process-local Session that no longer existed.
+  MCP command identity is now stable per `task_id + session_id`, while Gateway
+  command records freeze `session_generation` and cannot project a stale
+  lifecycle receipt into the current binding. The recovered Task recorded five
+  lease events but exactly one Result row and one applied action; the Game then
+  completed the second RFQ, Engagement, negotiation, and Deal with zero
+  SettlementIntents, asset mutations, or chain writes.
+- The no-reconnect run `mixed-fallback-5f00bae33a` terminated the Connector at
+  the same seller-selection boundary and used a uniform 60-second action
+  timeout. The Deadline Finalizer closed that Task exactly once as
+  `defaulted / timed_out / applied / market_timeout`; the second RFQ became
+  `expired`, the Game completed with zero Deals, and payment/asset/chain
+  counts remained zero. This proves deadline closure while a Connector lease
+  is outstanding. It is not yet evidence of lease-expiry takeover or replay
+  of a terminal Result already persisted in the Connector outbox.
 
 The real probes also show why “few trades” cannot be solved by a matcher
 alone: Agents may choose different goods, private price intervals may not
