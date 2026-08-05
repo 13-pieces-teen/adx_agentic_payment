@@ -41,13 +41,15 @@ AgentTask 自动调度与 mixed-Runtime 回合编排也已接入。Connector 的
 1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
 2. Arena 的 Game/Round/Pool/Negotiation/Inventory 已由 PostgreSQL 持久化；
    Connector terminal Result 只能进入 Arena-owned Result Sink，不能直接修改这些
-   状态；真实 CC/Codex 完整自动比赛仍待 E2E 验收。
+   状态；真实 Codex 已完成 payment-disabled 完整自动比赛，Claude Code 仍受外部
+   API/证书路径阻塞，payment-enabled 与外部部署 E2E 尚未验收。
 3. Runtime task 默认 detection-only；fixed-argv Codex/Claude runner 不具备完整的平台审批闭环。
 4. 安装包目前有 HTTPS 传输与 SHA-256 校验，但签名发布、SBOM、独立信任根和安全自动更新仍是后续。
 5. Connector WSS 已实现版本化 `arena.agent-task.v1` /
    `arena.agent-result.v1` 映射与 Arena Result Sink 接线；统一 Finalizer 已由 Arena
    独立运行，Connector Task dispatcher 与 mixed-Runtime coordinator 已完成代码
-   接线，但尚未形成生产重连证据。
+   接线，并完成本地隔离的重连、lease-expiry、deadline default 和 terminal
+   Result outbox replay 证据；这些仍不等于外部多实例生产重连验收。
 
 ## 2. 产品边界
 
@@ -381,8 +383,10 @@ PostgreSQL inbox、Arena Result Sink、Local Agent identity/join、Session 自�
 Codex 已完成 Connector-only、Hosted/Connector mixed、执行中重启恢复和
 deadline default 隔离 E2E；Claude Code 的后续实测仍受其外部 API/证书路径
 阻塞。真实 lease-expiry takeover 与 terminal Result outbox replay 也已完成
-隔离故障注入；外部部署与 payment-enabled Connector E2E 尚未验收，不能把
-本地证据误报为生产可用证据。
+隔离故障注入；`mixed-fallback-87fc3f3217` 进一步由两个独立真实 Codex seller
+完成两次顺序 RFQ、counter/reject fallback、第二 seller accept 和不可变 Deal。
+外部部署与 payment-enabled Connector E2E 尚未验收，不能把本地证据误报为
+生产可用证据。
 
 ### 8.4 Driver 边界
 
@@ -496,7 +500,7 @@ private chain-of-thought。
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |
 | Signed release / SBOM | `deploy/artifacts/` | 未实现；当前仅 HTTPS + SHA-256 |
 | Native A2A Endpoint | 未接入 | 第二方案，后续独立实现 |
-| Arena typed task/result | `arena_agent_contracts/`、`arena_core/`、`connector_gateway/arena_adapter.py`、`connector/` | 统一 schema、Local identity/join、自动 Session、leased dispatcher、typed WSS、durable terminal Result、Result Sink 与 mixed-Runtime 编排已实现；真实完整比赛待验收 |
+| Arena typed task/result | `arena_agent_contracts/`、`arena_core/`、`connector_gateway/arena_adapter.py`、`connector/` | 统一 schema、Local identity/join、自动 Session、leased dispatcher、typed WSS、durable terminal Result、Result Sink 与 mixed-Runtime 编排已实现；真实 Codex payment-disabled Deal、多卖方 fallback 和隔离恢复矩阵已验收，外部部署与 payment-enabled 仍待验收 |
 
 ## 13. 验收门槛
 

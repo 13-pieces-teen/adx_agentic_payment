@@ -267,3 +267,69 @@ def test_scripted_fallback_buyer_chooses_rejecting_seller_then_remaining_seller(
     outputs = asyncio.run(run())
     assert outputs[0]["requests"][0]["targetIntentId"] == "intent:rejecting"
     assert outputs[1]["requests"][0]["targetIntentId"] == "intent:accepting"
+
+
+def test_scripted_fallback_buyer_lowballs_primary_real_seller_then_rejects_counter() -> None:
+    async def run() -> list[dict[str, object]]:
+        bundle = build_local_development_provider_bundle()
+        provider = bundle.adapters[ARENA_SCRIPTED_PROVIDER_ID]
+        requests = [
+            _request(
+                model="arena-fallback-buyer-v1",
+                kind="arena.market.rfq",
+                arena_input={
+                    "attemptSequence": 1,
+                    "directory": [
+                        {
+                            "intentId": "intent:secondary",
+                            "displayName": "Real Codex Secondary Seller",
+                            "publicPrice": "5.200000",
+                        },
+                        {
+                            "intentId": "intent:primary",
+                            "displayName": "Real Codex Primary Seller",
+                            "publicPrice": "5.000000",
+                        },
+                    ],
+                },
+            ),
+            _request(
+                model="arena-fallback-buyer-v1",
+                kind="arena.negotiate",
+                arena_input={
+                    "role": "buyer",
+                    "counterparty": {
+                        "displayName": "Real Codex Primary Seller",
+                    },
+                    "latestCounterpartyQuote": {
+                        "price": "4.500000",
+                    },
+                },
+            ),
+        ]
+        outputs: list[dict[str, object]] = []
+        for request in requests:
+            secret = WorkerSecret(b"development-only-placeholder")
+            try:
+                response = await provider.invoke(request, secret)
+                outputs.append(dict(response.structured_output))
+            finally:
+                secret.close()
+        await bundle.close()
+        return outputs
+
+    outputs = asyncio.run(run())
+    assert outputs[0] == {
+        "action": "request_negotiations",
+        "requests": [
+            {
+                "targetIntentId": "intent:primary",
+                "openingPrice": "1.000000",
+                "message": "I choose the primary seller with a low opening bid.",
+            }
+        ],
+    }
+    assert outputs[1] == {
+        "action": "reject",
+        "message": "I will try another seller.",
+    }

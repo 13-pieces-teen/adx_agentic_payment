@@ -124,8 +124,13 @@ class ArenaScriptedProvider:
                         entry
                         for entry in directory
                         if isinstance(entry, Mapping)
-                        and "rejecting"
-                        in str(entry.get("displayName", "")).casefold()
+                        and any(
+                            marker
+                            in str(
+                                entry.get("displayName", "")
+                            ).casefold()
+                            for marker in ("rejecting", "primary")
+                        )
                     ),
                     target,
                 )
@@ -133,13 +138,27 @@ class ArenaScriptedProvider:
                 raise ProviderInvocationError(
                     "invalid_structured_output"
                 )
+            primary_target = (
+                request.model_id == ARENA_SCRIPTED_FALLBACK_BUYER_MODEL
+                and "primary"
+                in str(target.get("displayName", "")).casefold()
+            )
             return {
                 "action": "request_negotiations",
                 "requests": [
                     {
                         "targetIntentId": target["intentId"],
-                        "openingPrice": target["publicPrice"],
-                        "message": "I choose this seller.",
+                        "openingPrice": (
+                            "1.000000"
+                            if primary_target
+                            else target["publicPrice"]
+                        ),
+                        "message": (
+                            "I choose the primary seller with a low "
+                            "opening bid."
+                            if primary_target
+                            else "I choose this seller."
+                        ),
                     }
                 ],
             }
@@ -159,6 +178,20 @@ class ArenaScriptedProvider:
 
         role = arena_input.get("role")
         if role == "buyer":
+            counterparty = arena_input.get("counterparty")
+            if (
+                request.model_id
+                == ARENA_SCRIPTED_FALLBACK_BUYER_MODEL
+                and isinstance(counterparty, Mapping)
+                and "primary"
+                in str(
+                    counterparty.get("displayName", "")
+                ).casefold()
+            ):
+                return {
+                    "action": "reject",
+                    "message": "I will try another seller.",
+                }
             return {
                 "action": "propose",
                 "price": "7.000000",

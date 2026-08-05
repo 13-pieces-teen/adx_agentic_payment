@@ -17,6 +17,12 @@ and require the Deadline Finalizer to apply ``market_timeout`` exactly once.
 The ``lease_expiry_takeover`` and ``replay_terminal_outbox`` modes respectively
 inject an orphan lease before MCP claim and reject one terminal Result submit
 after it has been persisted in the Connector outbox.
+
+Set ``ADX_MIXED_FALLBACK_E2E_ALL_REAL_SELLERS=true`` with fault mode ``none``
+to replace the scripted rejecting seller with an independent real Codex
+Connector. The scripted buyer first sends that Primary seller a bounded
+low opening bid, then uses the remaining frozen directory to contact the
+Secondary real Codex seller after the first engagement is rejected.
 """
 
 from __future__ import annotations
@@ -64,6 +70,10 @@ ORPHAN_LEASE_SECONDS = int(
     os.getenv("ADX_MIXED_FALLBACK_E2E_ORPHAN_LEASE_SECONDS", "5")
 )
 ORPHAN_WORKER_ID = "fault-orphan-worker"
+ALL_REAL_SELLERS = os.getenv(
+    "ADX_MIXED_FALLBACK_E2E_ALL_REAL_SELLERS",
+    "",
+).strip().lower() in {"1", "true", "yes"}
 
 
 class MixedRuntimeFaultProxy:
@@ -618,6 +628,7 @@ async def _evidence(
     *,
     fault_task_id: str | None = None,
     fault_mode: str = "none",
+    all_real_sellers: bool = False,
 ) -> dict[str, Any]:
     connection = await asyncpg.connect(ADMIN_URL)
     try:
@@ -653,10 +664,20 @@ async def _evidence(
                 task.task_kind,
                 task.game_agent_id,
                 task.status AS task_status,
+                agent.name AS agent_name,
+                binding.runtime_kind,
+                result.candidate_action,
                 result.runtime_status,
                 result.apply_status,
                 applied.application_outcome
             FROM public.arena_agent_tasks AS task
+            JOIN arena402.game_participants AS participant
+              ON participant.game_participant_id = task.game_agent_id
+            JOIN public.arena_agents AS agent
+              ON agent.agent_id = participant.agent_id
+            JOIN public.arena_runtime_bindings AS binding
+              ON binding.runtime_binding_id =
+                 participant.runtime_binding_id
             LEFT JOIN public.arena_agent_task_results AS result
               ON result.task_id = task.task_id
             LEFT JOIN public.arena_applied_agent_actions AS applied
@@ -697,6 +718,24 @@ async def _evidence(
             FROM arena402.market_engagements
             WHERE game_id = $1
             ORDER BY created_at, engagement_id
+            """,
+            game_id,
+        )
+        deals = await connection.fetch(
+            """
+            SELECT
+                deal.deal_id,
+                deal.latest_proposal_result_id,
+                deal.acceptance_result_id,
+                seller.name AS seller_name
+            FROM arena402.market_deals AS deal
+            JOIN arena402.game_participants AS participant
+              ON participant.game_participant_id =
+                 deal.seller_participant_id
+            JOIN public.arena_agents AS seller
+              ON seller.agent_id = participant.agent_id
+            WHERE deal.game_id = $1
+            ORDER BY deal.created_at, deal.deal_id
             """,
             game_id,
         )
@@ -805,11 +844,15 @@ async def _evidence(
     if game is None or game["phase"] != "completed":
         raise RuntimeError(f"mixed fallback game is not completed: {game!r}")
     participant_values = [dict(row) for row in participants]
-    if sorted(row["runtime_kind"] for row in participant_values) != [
-        "connector",
-        "hosted",
-        "hosted",
-    ]:
+    expected_runtime_kinds = (
+        ["connector", "connector", "hosted"]
+        if all_real_sellers
+        else ["connector", "hosted", "hosted"]
+    )
+    if (
+        sorted(row["runtime_kind"] for row in participant_values)
+        != expected_runtime_kinds
+    ):
         raise RuntimeError(
             f"unexpected Runtime composition: {participant_values!r}"
         )
@@ -822,11 +865,23 @@ async def _evidence(
     request_values = [dict(row) for row in requests]
     if len(request_values) != 2:
         raise RuntimeError(f"expected two RFQs: {request_values!r}")
-    if "Rejecting" not in request_values[0]["seller_name"]:
+    first_seller_marker = (
+        "Primary" if all_real_sellers else "Rejecting"
+    )
+    if (
+        first_seller_marker.casefold()
+        not in request_values[0]["seller_name"].casefold()
+    ):
         raise RuntimeError(
-            f"first RFQ did not target rejecting seller: {request_values!r}"
+            f"first RFQ targeted the wrong seller: {request_values!r}"
         )
-    if "Codex" not in request_values[1]["seller_name"]:
+    second_seller_marker = (
+        "Secondary" if all_real_sellers else "Codex"
+    )
+    if (
+        second_seller_marker.casefold()
+        not in request_values[1]["seller_name"].casefold()
+    ):
         raise RuntimeError(
             f"fallback RFQ did not target Codex seller: {request_values!r}"
         )
@@ -840,19 +895,34 @@ async def _evidence(
             f"unexpected fallback RFQ outcomes: {request_values!r}"
         )
     engagement_values = [dict(row) for row in engagements]
+    engagement_statuses = [
+        row["status"] for row in engagement_values
+    ]
     expected_engagement_statuses = (
-        ["rejected"]
+        (["rejected"],)
         if fault_mode == "disconnect_until_deadline"
-        else ["rejected", "settlement_failed"]
+        else (
+            (["settlement_failed"], ["rejected", "settlement_failed"])
+            if all_real_sellers
+            else (["rejected", "settlement_failed"],)
+        )
     )
-    if [row["status"] for row in engagement_values] != expected_engagement_statuses:
+    if engagement_statuses not in expected_engagement_statuses:
         raise RuntimeError(
             f"unexpected Engagement outcomes: {engagement_values!r}"
         )
     count_values = dict(counts)
     expected_counts = {
         "deals": 0 if fault_mode == "disconnect_until_deadline" else 1,
-        "a2a_pool_entries": 2 if fault_mode == "disconnect_until_deadline" else 4,
+        "a2a_pool_entries": (
+            2 * len(engagement_values)
+            if all_real_sellers
+            else (
+                2
+                if fault_mode == "disconnect_until_deadline"
+                else 4
+            )
+        ),
         "settlement_intents": 0,
         "cash_mutations": 0,
         "holding_mutations": 0,
@@ -895,6 +965,62 @@ async def _evidence(
         raise RuntimeError(
             f"task lacks expected applied result: {invalid_tasks!r}"
         )
+    if all_real_sellers:
+        seller_tasks = [
+            row
+            for row in task_values
+            if row["runtime_kind"] == "connector"
+        ]
+        for marker in ("Primary", "Secondary"):
+            kinds = {
+                row["task_kind"]
+                for row in seller_tasks
+                if marker.casefold() in row["agent_name"].casefold()
+            }
+            if not {
+                "arena.market.intent",
+                "arena.market.select",
+                "arena.negotiate",
+            } <= kinds:
+                raise RuntimeError(
+                    f"real {marker} seller lacks a complete A2A task path: "
+                    f"{seller_tasks!r}"
+                )
+        primary_actions = [
+            row["candidate_action"]
+            for row in seller_tasks
+            if "primary" in row["agent_name"].casefold()
+            and row["task_kind"] in {
+                "arena.market.select",
+                "arena.negotiate",
+            }
+        ]
+        secondary_actions = [
+            row["candidate_action"]
+            for row in seller_tasks
+            if "secondary" in row["agent_name"].casefold()
+            and row["task_kind"] in {
+                "arena.market.select",
+                "arena.negotiate",
+            }
+        ]
+        if not primary_actions or not secondary_actions:
+            raise RuntimeError(
+                "both real sellers must author selection or negotiation "
+                f"actions: {seller_tasks!r}"
+            )
+        deal_values = [dict(row) for row in deals]
+        if (
+            len(deal_values) != 1
+            or "secondary"
+            not in deal_values[0]["seller_name"].casefold()
+            or deal_values[0]["latest_proposal_result_id"]
+            == deal_values[0]["acceptance_result_id"]
+        ):
+            raise RuntimeError(
+                "fallback Deal lacks secondary real-seller provenance: "
+                f"{deal_values!r}"
+            )
     fault_task_value = dict(fault_task) if fault_task is not None else None
     expected_fault_status = (
         "defaulted"
@@ -938,6 +1064,7 @@ async def _evidence(
         "rfqSession": dict(session),
         "requests": request_values,
         "engagements": engagement_values,
+        "deals": [dict(row) for row in deals],
         "counts": count_values,
         "taskCount": len(task_values),
         "taskKinds": [row["task_kind"] for row in task_values],
@@ -957,6 +1084,10 @@ async def main() -> None:
         raise RuntimeError(
             "ADX_MIXED_FALLBACK_E2E_ACTION_TIMEOUT_MS must be between "
             "1000 and 900000"
+        )
+    if ALL_REAL_SELLERS and FAULT_MODE != "none":
+        raise RuntimeError(
+            "all-real-seller fallback currently requires fault mode none"
         )
     if FAULT_MODE == "lease_expiry_takeover" and (
         ORPHAN_LEASE_SECONDS < 1
@@ -998,9 +1129,26 @@ async def main() -> None:
         _build_connector(connector_executable)
         codex_shim_root = temp_root / "codex-shim"
         _create_codex_shim(codex_shim_root)
-        credential = await _create_device_credential(
-            users[2],
-            device_name="Real Codex mixed fallback seller",
+        seller_user_indexes = (
+            (1, 2) if ALL_REAL_SELLERS else (2,)
+        )
+        credentials = tuple(
+            await asyncio.gather(
+                *(
+                    _create_device_credential(
+                        users[index],
+                        device_name=(
+                            "Real Codex "
+                            + (
+                                "Primary fallback seller"
+                                if index == 1
+                                else "Secondary fallback seller"
+                            )
+                        ),
+                    )
+                    for index in seller_user_indexes
+                )
+            )
         )
         proxy: MixedRuntimeFaultProxy | None = None
         gateway_url = WS_URL
@@ -1021,35 +1169,55 @@ async def main() -> None:
                 proxy.origin.replace("http://", "ws://", 1)
                 + "/api/connectors/ws"
             )
-        connector = RealConnector(
-            kind="codex",
-            label="accepting-seller",
-            user=users[2],
-            credential=credential,
-            connector_executable=connector_executable,
-            temp_root=temp_root,
-            codex_shim_root=codex_shim_root,
-            run_id=run_id,
-            gateway_url=gateway_url,
+        connectors = tuple(
+            RealConnector(
+                kind="codex",
+                label=(
+                    (
+                        "primary-seller"
+                        if index == 1
+                        else "secondary-seller"
+                    )
+                    if ALL_REAL_SELLERS
+                    else "accepting-seller"
+                ),
+                user=users[index],
+                credential=credentials[position],
+                connector_executable=connector_executable,
+                temp_root=temp_root,
+                codex_shim_root=codex_shim_root,
+                run_id=run_id,
+                gateway_url=gateway_url,
+            )
+            for position, index in enumerate(seller_user_indexes)
         )
+        connector = connectors[-1]
         game_id = f"mixed-fallback-{run_id}"
         try:
-            connector.start()
-            connector_binding = await connector.wait_online_and_bind()
-            buyer_agent_id, rejecting_seller_agent_id = await asyncio.gather(
-                _create_hosted_agent(
-                    users[0],
-                    display_name="Mixed Fallback Buyer",
-                    model_id="arena-fallback-buyer-v1",
-                    run_id=run_id,
-                ),
-                _create_hosted_agent(
+            for current in connectors:
+                current.start()
+            connector_bindings = tuple(
+                await asyncio.gather(
+                    *(
+                        current.wait_online_and_bind()
+                        for current in connectors
+                    )
+                )
+            )
+            buyer_agent_id = await _create_hosted_agent(
+                users[0],
+                display_name="Mixed Fallback Buyer",
+                model_id="arena-fallback-buyer-v1",
+                run_id=run_id,
+            )
+            rejecting_seller_agent_id = None
+            if not ALL_REAL_SELLERS:
+                rejecting_seller_agent_id = await _create_hosted_agent(
                     users[1],
                     display_name="Mixed Rejecting Seller",
                     model_id="arena-rejecting-seller-v1",
                     run_id=run_id,
-                ),
-            )
+                )
             _require_ok(
                 await users[0].client.post(
                     "/api/v1/pawnhouse/games",
@@ -1067,7 +1235,7 @@ async def main() -> None:
                     },
                 )
             )
-            joins = await asyncio.gather(
+            join_requests = [
                 users[0].client.post(
                     f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
                     headers=users[0].mutation_headers,
@@ -1078,30 +1246,57 @@ async def main() -> None:
                             "holdings": {},
                         },
                     },
-                ),
-                users[1].client.post(
-                    f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
-                    headers=users[1].mutation_headers,
-                    json={
-                        "agentId": rejecting_seller_agent_id,
-                        "portfolio": {
-                            "cash": "15.000000",
-                            "holdings": {"iron": 1},
+                )
+            ]
+            if ALL_REAL_SELLERS:
+                join_requests.extend(
+                    users[index].client.post(
+                        f"/api/v1/pawnhouse/games/{game_id}/connector-participants",
+                        headers=users[index].mutation_headers,
+                        json={
+                            "agentId": connector_bindings[position][
+                                "agent_id"
+                            ],
+                            "portfolio": {
+                                "cash": "0.000000",
+                                "holdings": {"iron": 4},
+                            },
                         },
-                    },
-                ),
-                users[2].client.post(
-                    f"/api/v1/pawnhouse/games/{game_id}/connector-participants",
-                    headers=users[2].mutation_headers,
-                    json={
-                        "agentId": connector_binding["agent_id"],
-                        "portfolio": {
-                            "cash": "0.000000",
-                            "holdings": {"iron": 4},
-                        },
-                    },
-                ),
-            )
+                    )
+                    for position, index in enumerate(
+                        seller_user_indexes
+                    )
+                )
+            else:
+                join_requests.extend(
+                    [
+                        users[1].client.post(
+                            f"/api/v1/pawnhouse/games/{game_id}/hosted-participants",
+                            headers=users[1].mutation_headers,
+                            json={
+                                "agentId": rejecting_seller_agent_id,
+                                "portfolio": {
+                                    "cash": "15.000000",
+                                    "holdings": {"iron": 1},
+                                },
+                            },
+                        ),
+                        users[2].client.post(
+                            f"/api/v1/pawnhouse/games/{game_id}/connector-participants",
+                            headers=users[2].mutation_headers,
+                            json={
+                                "agentId": connector_bindings[0][
+                                    "agent_id"
+                                ],
+                                "portfolio": {
+                                    "cash": "0.000000",
+                                    "holdings": {"iron": 4},
+                                },
+                            },
+                        ),
+                    ]
+                )
+            joins = await asyncio.gather(*join_requests)
             for response in joins:
                 _require_ok(response)
             _require_ok(
@@ -1145,7 +1340,7 @@ async def main() -> None:
             live_connectors = (
                 ()
                 if FAULT_MODE == "disconnect_until_deadline"
-                else (connector,)
+                else connectors
             )
             final_state = await _wait_for_completion(
                 users[0],
@@ -1160,6 +1355,7 @@ async def main() -> None:
                     else None
                 ),
                 fault_mode=FAULT_MODE,
+                all_real_sellers=ALL_REAL_SELLERS,
             )
             if (
                 FAULT_MODE == "replay_terminal_outbox"
@@ -1180,12 +1376,35 @@ async def main() -> None:
                         "marketProtocol": "agent_a2a.v1",
                         "runtimeComposition": [
                             "hosted-scripted",
-                            "hosted-scripted",
-                            "connector-codex",
+                            *(
+                                [
+                                    "connector-codex",
+                                    "connector-codex",
+                                ]
+                                if ALL_REAL_SELLERS
+                                else [
+                                    "hosted-scripted",
+                                    "connector-codex",
+                                ]
+                            ),
                         ],
                         "codexVersion": connector.runtime["version"],
+                        **(
+                            {
+                                "codexVersions": [
+                                    current.runtime["version"]
+                                    for current in connectors
+                                ]
+                            }
+                            if ALL_REAL_SELLERS
+                            else {}
+                        ),
                         "taskTransport": "mcp",
-                        "evidenceClass": "mixed_real_codex_connector",
+                        "evidenceClass": (
+                            "all_real_codex_sellers"
+                            if ALL_REAL_SELLERS
+                            else "mixed_real_codex_connector"
+                        ),
                         "faultMode": FAULT_MODE,
                         "faultInjection": fault_evidence,
                         "evidence": evidence,
@@ -1198,10 +1417,15 @@ async def main() -> None:
         except Exception as exc:
             raise RuntimeError(
                 f"{exc}\nCodex Connector logs:\n"
-                f"{connector._failure_logs()}"
+                + "\n\n".join(
+                    f"[{current.label}]\n{current._failure_logs()}"
+                    for current in connectors
+                )
             ) from exc
         finally:
-            await connector.stop()
+            await asyncio.gather(
+                *(current.stop() for current in connectors)
+            )
             if proxy is not None:
                 await proxy.stop()
             await asyncio.gather(*(user.client.aclose() for user in users))

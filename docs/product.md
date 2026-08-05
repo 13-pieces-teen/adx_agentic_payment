@@ -177,6 +177,11 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   接管；`mixed-fallback-4f99467b24` 验证 terminal Result 在本地 outbox
   持久化、首次 submit 失败并重启后只进入 Arena 一次。上述局都保持零
   SettlementIntent、零资产移动和零链写入。
+  `mixed-fallback-87fc3f3217` 又将两个 seller 都替换为独立真实 Codex
+  Connector：Primary seller 对低价 opening 自主 counter，buyer reject 后从冻结
+  剩余目录选择 Secondary seller，后者 engage 并 accept。该局完成 10 个
+  succeeded/applied AgentTask、2 个 RFQ、2 个 Engagement 和 1 个 Deal；服务
+  重启后计数不增长，同样保持零 SettlementIntent、零资产移动和零链写入。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable
@@ -264,5 +269,6 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 `openingPrice` 是不可在 Engage 后反悔的第一个权威 proposal；每个买方每轮最多
 三次 RFQ 尝试，其中最多两次是从原冻结目录自主选择的 fallback，且同一时间最多
 一个 Engagement。Settlement failure 不触发 fallback。真实 Runtime 验收优先完成
-Hosted + Codex mixed 与恢复矩阵；Claude Code 待其外部连接健康后补证据，不阻塞
-前者。
+的 Hosted + Codex mixed、恢复矩阵和双真实 Codex seller fallback 已完成；
+Claude Code 待其外部连接健康后补证据，不阻塞 Codex 验收。进入 Current Game
+前仍需真实 P95/P99 负载校准；payment-enabled testnet 需另行显式人工确认。

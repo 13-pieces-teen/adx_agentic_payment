@@ -10,8 +10,8 @@
 > first-seller rejection and second-seller fallback with durable restart
 > evidence. Hosted + real Codex mixed fallback, in-flight Connector restart,
 > deadline-default injection, lease-expiry takeover, and durable terminal
-> Result-outbox replay are complete. All-real multi-seller fallback and
-> payment-enabled A2A remain incomplete.
+> Result-outbox replay are complete. All-real Codex multi-seller fallback is
+> also complete. Payment-enabled A2A remains incomplete.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
 > counterparties, choose whom to approach, select which request to engage, and
@@ -405,7 +405,7 @@ schema, and Result Sink transport; they are not real-Agent evidence.
 - [x] run a local Fake scripted binding-opening Deal E2E
       (`full-hosted-1785853139-cd4e22d1`) with exact request/Result proposal
       provenance, zero SettlementIntent, and zero chain write;
-- [ ] run a real multi-counterparty sequential-fallback E2E and preserve
+- [x] run a real multi-counterparty sequential-fallback E2E and preserve
       restart/replay evidence;
 - [ ] run a fresh payment-enabled Injective testnet E2E only after explicit
       human confirmation and after the binding-RFQ, sequential-fallback,
@@ -609,6 +609,28 @@ Evidence levels remain separate:
   Arena's normalized authoritative Result ID are preserved separately; they
   are not incorrectly treated as one identifier. The Game then completed its
   Deal with zero SettlementIntents, asset mutations, or chain writes.
+- The all-real-seller run `mixed-fallback-87fc3f3217` used one deterministic
+  Hosted buyer only to bound the scenario; both seller seats were independent
+  real Codex CLI 0.146.0 Connectors with separate users, Devices, Bindings,
+  Sessions, and durable state. Both Codex Agents independently published iron
+  sell Intents at `5.000000` with a private `4.500000` floor. The buyer sent
+  the Primary seller a `1.000000` opening; that real seller engaged and
+  countered at `5.500000`, after which the buyer rejected. A second RFQ from
+  the original frozen directory targeted the Secondary real seller, which
+  engaged and accepted its `5.000000` opening. All ten AgentTasks completed
+  as succeeded/applied candidates. Arena preserved two RFQs, two Engagements,
+  four Engagement-scoped compatibility entries, and one Deal with distinct
+  proposal/acceptance Result IDs. After restarting API and Arena worker the
+  counts remained `10 tasks / 10 Results / 10 applies / 2 RFQs /
+  2 Engagements / 1 Deal / 4 entries`, with the RFQ session still
+  `completed / 2 of 3`. Payment remained disabled, so SettlementIntent,
+  asset-mutation, and chain-write counts were all zero.
+- The preceding calibration run `mixed-fallback-d56b70ab63` is retained as an
+  economic non-failure: its Primary real Codex Agent chose to buy gems instead
+  of publishing an iron sell Intent, so only one compatible seller existed
+  and the Game correctly completed after one RFQ. The accepted run used equal
+  seller portfolios to exercise the intended two-seller path; no Arena
+  matcher or Result was rewritten to manufacture fallback.
 
 The real probes also show why “few trades” cannot be solved by a matcher
 alone: Agents may choose different goods, private price intervals may not

@@ -704,13 +704,18 @@ create game
       冲突；`061` 为每个 A2A Engagement 建独立 compatibility entry，同时用
       partial unique index 保留 `fcfs.v1` 的原唯一约束。服务重启后 session
       保持 `completed / 2 of 3`，请求、Engagement、Deal 和 entry 计数均未增长。
-- [ ] Phase C protocol acceptance：Hosted + Codex mixed 顺序 fallback、
+- [x] Phase C payment-disabled protocol acceptance：Hosted + Codex mixed 顺序 fallback、
       终局 projection recovery、中途 reconnect 和 deadline default 已由
       `mixed-fallback-7f15a77f8c`、`mixed-fallback-a865aba66f` 与
       `mixed-fallback-5f00bae33a` 完成；lease-expiry takeover 与 terminal
       Result outbox replay 又由 `mixed-fallback-8af2ba9c8c` 和
-      `mixed-fallback-4f99467b24` 完成。仍需全部卖方均为真实 Runtime 的
-      多卖方 fallback。
+      `mixed-fallback-4f99467b24` 完成。`mixed-fallback-87fc3f3217`
+      进一步以两个独立真实 Codex seller 完成 Primary `engage → counter`、
+      buyer reject、Secondary `engage → accept` 的两次顺序 RFQ；10 个
+      AgentTask 全部 succeeded/applied，形成 1 个 Deal。API/Arena worker
+      重启后保持 `10 tasks/results/applies、2 RFQ、2 Engagement、1 Deal、
+      4 entries、completed 2/3`，且为 0 SettlementIntent、0 资产变更、
+      0 链写入。
       完成真实 P95/P99 负载校准前不切换 Current Game。
 - [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
       fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；

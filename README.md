@@ -42,7 +42,9 @@ opt-in Round orchestrator 已接通 intent → RFQ → select → negotiate，�
 Connector 已在 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage →
 三轮 negotiation，并由卖方 `2.900000` proposal 与买方独立 accept 冻结一个
 带不同来源 Result ID 的 Deal。该局关闭支付，因此为 0 SettlementIntent、
-0 资产变更和 0 链写入；mixed-Runtime A2A 与 payment-enabled A2A 仍未验收，
+0 资产变更和 0 链写入。后续 Hosted + Codex mixed fallback、断线/租约/
+deadline/outbox 恢复矩阵，以及两个独立真实 Codex seller 的顺序 fallback
+也已完成本地隔离验收；payment-enabled A2A 和外部生产验收仍未完成，
 Current Game 尚不切换。
 
 迁移 `060_arena_binding_rfq_and_sequential_fallback.sql` 已实现下一段协议：
@@ -53,10 +55,14 @@ fallback。同一买方不能同时存在两个未终结 RFQ，accepted Deal 或
 failure 都不会触发 fallback。本地 `full-hosted-1785853139-cd4e22d1` Fake
 scripted E2E 已验证 RFQ Result/请求与 Deal 最新 proposal 的精确绑定、卖方直接
 accept、0 SettlementIntent 和 0 链写入；真实多对手 fallback 与 mixed-Runtime
-恢复证据仍待补。同局所有 Runtime 的 `action_timeout_ms` 使用目标负载下
+恢复证据已由 `mixed-fallback-87fc3f3217` 及同系列故障注入局补齐。本局两个
+seller 均为真实 Codex：Primary counter 后买方 reject，Secondary engage/accept，
+服务重启后 10 个 Task/Result/apply、2 个 RFQ、2 个 Engagement、1 个 Deal 和
+4 个 entry 均未增长。同局所有 Runtime 的 `action_timeout_ms` 使用目标负载下
 端到端 P99 最大值 × `1.25` 并向上取整到 5 秒。真实验收优先 Hosted + Codex
-mixed/recovery，不等待 Claude Code 外部连接；payment-enabled testnet 仍需显式
-人工确认。`agent_a2a.v1` 永久固定数量 1，未来无 partial fill 的有界数量使用新
+mixed/recovery，不等待 Claude Code 外部连接；P95/P99 仍需真实负载校准，
+payment-enabled testnet 仍需显式人工确认。`agent_a2a.v1` 永久固定数量 1，
+未来无 partial fill 的有界数量使用新
 协议版本；链上吞吐不足时先并行逐笔，再采用保持逐 Deal transfer 证据的 batch。
 
 生产配置基础允许一个最多 100 个 Agent 的 Current Game、四个各含 25 个任务槽的
@@ -183,10 +189,10 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 
 | 模块 | 当前状态 |
 |------|----------|
-| 王城典当行 Game Core | Current Game 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 `fcfs.v1`、组间并发有限协商、冻结终场价格与排名；opt-in `agent_a2a.v1` 已完成 wire contracts、协议状态机、migration `055`–`061`、Hosted/Local Runtime task substrate、可恢复市场投影、Round orchestrator、三 Hosted scripted 顺序 fallback Fake E2E，以及真实双 Codex payment-disabled Deal E2E。真实 Deal 保留独立 proposal/acceptance Result provenance，未被描述为已结算交易 |
-| Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide/negotiate/market.intent/market.rfq/market.select`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；默认关闭的 WSS wake + stateless MCP 路径已覆盖 claim/status/submit/release/sync、启动/重连与 Gateway sequence gap 主动恢复，并通过隔离 Docker 的协议 E2E；2026-08-02 以本机真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成 FCFS Connector-only 接受局，2026-08-04 的双 Codex `agent_a2a.v1` 先验证自主拒绝，再由 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage → `2.550000 / 2.900000 / accept` 并冻结 Deal。2026-08-05 的 `mixed-fallback-7f15a77f8c` 又完成 Hosted scripted buyer/rejecting seller + 真实 Codex seller 的两次顺序 RFQ、第二次 Engage/accept 和 Deal。所有 payment-disabled 局均为 0 链写入；生产重连、中途 lease/replay 故障注入和支付授权 E2E 仍待验收 |
+| 王城典当行 Game Core | Current Game 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 `fcfs.v1`、组间并发有限协商、冻结终场价格与排名；opt-in `agent_a2a.v1` 已完成 wire contracts、协议状态机、migration `055`–`061`、Hosted/Local Runtime task substrate、可恢复市场投影、Round orchestrator、三 Hosted scripted 顺序 fallback Fake E2E、真实双 Codex payment-disabled Deal E2E，以及两个真实 Codex seller 的顺序 fallback。真实 Deal 保留独立 proposal/acceptance Result provenance，未被描述为已结算交易 |
+| Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide/negotiate/market.intent/market.rfq/market.select`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；默认关闭的 WSS wake + stateless MCP 路径已覆盖 claim/status/submit/release/sync、启动/重连与 Gateway sequence gap 主动恢复，并通过隔离 Docker 的协议 E2E；2026-08-02 以本机真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成 FCFS Connector-only 接受局，2026-08-04 的双 Codex `agent_a2a.v1` 先验证自主拒绝，再由 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage → `2.550000 / 2.900000 / accept` 并冻结 Deal。2026-08-05 的 `mixed-fallback-87fc3f3217` 又由两个独立真实 Codex seller 完成 Primary counter、buyer reject、Secondary engage/accept 和顺序 fallback Deal；本地 restart、lease-expiry、deadline 与 outbox replay 也已完成隔离注入。所有 payment-disabled 局均为 0 链写入；外部多实例恢复和支付授权 E2E 仍待验收 |
 | Hosted Arena Agent | PostgreSQL control repository、DeepSeek/OpenAI-compatible HTTPS Provider、credential validation、durable Worker、创建 API 和最小 UI 已实现；单机 beta 使用独立主机密钥加密的 PostgreSQL ciphertext vault，腾讯 SSM 保留为可选高安全后端 |
-| 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、Result Sink 与独立 Finalizer；已完成的 FCFS Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；`agent_a2a.v1` 新增任务已进入同一任务和超时基础，并完成真实双 Codex Local Connector Deal E2E，以及 Hosted + 真实 Codex 的顺序 fallback、重启后计数不重复的 payment-disabled mixed E2E；中途断线/lease expiry/deadline default 故障注入与 payment-enabled A2A E2E 尚未完成；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
+| 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、Result Sink 与独立 Finalizer；已完成的 FCFS Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；`agent_a2a.v1` 新增任务已进入同一任务和超时基础，并完成真实双 Codex Local Connector Deal、Hosted + 真实 Codex 顺序 fallback、两个真实 Codex seller 顺序 fallback，以及断线重启、lease expiry、deadline default、terminal outbox replay 的 payment-disabled 隔离 E2E；外部多实例恢复、P95/P99 负载校准与 payment-enabled A2A E2E 尚未完成；通用 Join API 同步写入 `arena402.game_participants`、20 gold 初始组合与公开事件 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 `arena402-g` direct relay；Join 后由隔离 owner worker 完成白名单与初始现金铸币，确认前 Participant 不会 Ready。2026-07-26 的 10 Official Agent 生产 testnet 批次已完成 14 笔 provision 广播和一笔 accepted trade 的 x402 V2 → EIP-3009 → 链上确认 → 库存提交闭环。mUSDC 仅保留为历史/底层测试资产；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端默认开放无邀请码的用户名/密码注册，并保留可选 GitHub OAuth + PKCE。两者共用 Session/CSRF Cookie 与内部 `user_id` 业务身份；新账号进入纪念币领取页，已有账号按安全 `return_to` 进入平台。广州公网 API 的未备案访问问题仍需由境外入口或主机迁移解决 |
 | 游戏业务持久化 | `006`–`012` 已实现 Game/Round/Event/Pool/Pairing/Negotiation/Runtime Run/SettlementIntent/Confirmation/Inventory Commit、Round portfolio snapshot、final settlement prices、Rankings 与数据库级参赛人数上限；`024` 增加单例 Current Game 权威指针和公开 `/api/v1/games/current` 安全投影，`041` 清理旧容量约束，`042` 统一 PostgreSQL 权威动作策略，`043` 只轮换无人加入的旧事件牌组；Arena Worker 已负责首次创建与终态后原子切换下一局，开赛、快照和排名只包含 Ready/active Participant |
