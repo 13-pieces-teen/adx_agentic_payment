@@ -161,8 +161,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   decide/negotiate 结果；该局形成 FCFS pairing、proposal 和 accept。隔离局未提供
   PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。真实 Codex
   的任务执行中重启恢复和不重连 deadline default 已完成隔离故障注入；
-  真实 lease-expiry takeover、terminal Result outbox replay 和
-  payment-enabled Connector E2E 尚未验收。
+  lease-expiry takeover 和 terminal Result outbox replay 也已完成隔离
+  故障注入。payment-enabled Connector E2E 尚未验收。
   opt-in `agent_a2a.v1` 另已由两个独立 Codex Connector 完成 Intent、RFQ、
   seller Engage、三轮协商和 immutable Deal；proposal 与 acceptance 来自不同
   的已应用 Runtime Result。该局同样关闭支付，因此没有 SettlementIntent、
@@ -173,7 +173,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   `mixed-fallback-a865aba66f` 在第二个 seller-selection Task 执行中重启
   Connector，同一 Task 最终仅一条 Result 和一次 apply；不重连的
   `mixed-fallback-5f00bae33a` 则由 Finalizer 精确应用 `market_timeout`。
-  两局都保持零 SettlementIntent、零资产移动和零链写入。
+  `mixed-fallback-8af2ba9c8c` 验证 orphan lease 到期后由真实 MCP worker
+  接管；`mixed-fallback-4f99467b24` 验证 terminal Result 在本地 outbox
+  持久化、首次 submit 失败并重启后只进入 Arena 一次。上述局都保持零
+  SettlementIntent、零资产移动和零链写入。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable

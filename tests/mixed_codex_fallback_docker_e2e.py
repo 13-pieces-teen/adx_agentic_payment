@@ -13,6 +13,10 @@ be reclaimed and applied exactly once.
 
 Set the mode to ``disconnect_until_deadline`` to leave the Connector offline
 and require the Deadline Finalizer to apply ``market_timeout`` exactly once.
+
+The ``lease_expiry_takeover`` and ``replay_terminal_outbox`` modes respectively
+inject an orphan lease before MCP claim and reject one terminal Result submit
+after it has been persisted in the Connector outbox.
 """
 
 from __future__ import annotations
@@ -22,15 +26,18 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from collections.abc import Awaitable, Callable
 from typing import Any
 import uuid
 
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 import asyncpg
 
 from real_runtimes_docker_e2e import (
     ADMIN_URL,
     API_BASE,
     RealConnector,
+    WS_URL,
     _build_connector,
     _create_codex_shim,
     _create_device_credential,
@@ -47,10 +54,232 @@ VALID_FAULT_MODES = {
     "none",
     "restart_during_codex_select",
     "disconnect_until_deadline",
+    "lease_expiry_takeover",
+    "replay_terminal_outbox",
 }
 ACTION_TIMEOUT_MS = int(
     os.getenv("ADX_MIXED_FALLBACK_E2E_ACTION_TIMEOUT_MS", "300000")
 )
+ORPHAN_LEASE_SECONDS = int(
+    os.getenv("ADX_MIXED_FALLBACK_E2E_ORPHAN_LEASE_SECONDS", "5")
+)
+ORPHAN_WORKER_ID = "fault-orphan-worker"
+
+
+class MixedRuntimeFaultProxy:
+    def __init__(
+        self,
+        *,
+        upstream_origin: str,
+        orphan_claim_injector: (
+            Callable[[str], Awaitable[bool]] | None
+        ) = None,
+    ) -> None:
+        self.upstream_origin = upstream_origin.rstrip("/")
+        self._orphan_claim_injector = orphan_claim_injector
+        self.origin = ""
+        self._runner: web.AppRunner | None = None
+        self._session: ClientSession | None = None
+        self._terminal_result_task_id: str | None = None
+        self._terminal_result_failed = asyncio.Event()
+        self._orphan_lease_task_id: str | None = None
+        self._orphan_lease_injected = asyncio.Event()
+
+    async def start(self) -> None:
+        self._session = ClientSession(timeout=ClientTimeout(total=60))
+        application = web.Application(client_max_size=2 * 1024 * 1024)
+        application.router.add_route("*", "/{tail:.*}", self._handle)
+        self._runner = web.AppRunner(application)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await site.start()
+        assert site._server is not None
+        port = site._server.sockets[0].getsockname()[1]
+        self.origin = f"http://127.0.0.1:{port}"
+
+    async def stop(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
+        if self._runner is not None:
+            await self._runner.cleanup()
+            self._runner = None
+
+    def fail_next_terminal_result(self, task_id: str) -> None:
+        self._terminal_result_task_id = task_id
+        self._terminal_result_failed.clear()
+
+    async def wait_for_terminal_result_failure(
+        self,
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        await asyncio.wait_for(
+            self._terminal_result_failed.wait(),
+            timeout=timeout_seconds,
+        )
+
+    async def wait_for_orphan_lease_injection(
+        self,
+        *,
+        timeout_seconds: float,
+    ) -> str:
+        await asyncio.wait_for(
+            self._orphan_lease_injected.wait(),
+            timeout=timeout_seconds,
+        )
+        assert self._orphan_lease_task_id is not None
+        return self._orphan_lease_task_id
+
+    async def _handle(self, request: web.Request) -> web.Response:
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return await self._bridge_websocket(request)
+        body = await request.read()
+        claim_task_id = self._claim_task_id(request, body)
+        if (
+            claim_task_id is not None
+            and self._orphan_claim_injector is not None
+            and await self._orphan_claim_injector(claim_task_id)
+        ):
+            self._orphan_lease_task_id = claim_task_id
+            self._orphan_lease_injected.set()
+        if self._should_fail_terminal_result(request, body):
+            self._terminal_result_task_id = None
+            self._terminal_result_failed.set()
+            return web.Response(
+                status=503,
+                text="fault-injected terminal Result submission failure",
+            )
+        assert self._session is not None
+        headers = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower()
+            not in {
+                "connection",
+                "content-length",
+                "host",
+                "transfer-encoding",
+            }
+        }
+        upstream = await self._session.request(
+            request.method,
+            f"{self.upstream_origin}{request.rel_url}",
+            headers=headers,
+            data=body,
+        )
+        response_body = await upstream.read()
+        response_headers = {
+            key: value
+            for key, value in upstream.headers.items()
+            if key.lower()
+            not in {
+                "connection",
+                "content-encoding",
+                "content-length",
+                "transfer-encoding",
+            }
+        }
+        return web.Response(
+            status=upstream.status,
+            headers=response_headers,
+            body=response_body,
+        )
+
+    async def _bridge_websocket(
+        self,
+        request: web.Request,
+    ) -> web.WebSocketResponse:
+        assert self._session is not None
+        headers = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower()
+            not in {
+                "connection",
+                "host",
+                "sec-websocket-extensions",
+                "sec-websocket-key",
+                "sec-websocket-version",
+                "upgrade",
+            }
+        }
+        downstream = web.WebSocketResponse()
+        await downstream.prepare(request)
+        upstream = await self._session.ws_connect(
+            f"{self.upstream_origin}{request.rel_url}",
+            headers=headers,
+        )
+
+        async def client_to_upstream() -> None:
+            async for message in downstream:
+                if message.type == WSMsgType.TEXT:
+                    await upstream.send_str(message.data)
+                elif message.type == WSMsgType.BINARY:
+                    await upstream.send_bytes(message.data)
+
+        async def upstream_to_client() -> None:
+            async for message in upstream:
+                if message.type == WSMsgType.TEXT:
+                    await downstream.send_str(message.data)
+                elif message.type == WSMsgType.BINARY:
+                    await downstream.send_bytes(message.data)
+
+        pumps = {
+            asyncio.create_task(client_to_upstream()),
+            asyncio.create_task(upstream_to_client()),
+        }
+        done, pending = await asyncio.wait(
+            pumps,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*done, *pending, return_exceptions=True)
+        await upstream.close()
+        await downstream.close()
+        return downstream
+
+    def _should_fail_terminal_result(
+        self,
+        request: web.Request,
+        body: bytes,
+    ) -> bool:
+        if (
+            request.path != "/mcp"
+            or self._terminal_result_task_id is None
+        ):
+            return False
+        try:
+            payload = json.loads(body)
+            params = payload["params"]
+            result = params["arguments"]["result"]
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return False
+        return (
+            params.get("name") == "arena_submit_agent_task_result"
+            and result.get("taskId") == self._terminal_result_task_id
+        )
+
+    @staticmethod
+    def _claim_task_id(
+        request: web.Request,
+        body: bytes,
+    ) -> str | None:
+        if request.path != "/mcp":
+            return None
+        try:
+            payload = json.loads(body)
+            params = payload["params"]
+            task_id = params["arguments"]["taskId"]
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return None
+        if (
+            params.get("name") != "arena_claim_agent_task"
+            or not isinstance(task_id, str)
+        ):
+            return None
+        return task_id
 
 
 async def _create_hosted_agent(
@@ -157,6 +386,139 @@ async def _wait_for_leased_connector_task(
     )
 
 
+async def _inject_orphan_select_lease(task_id: str) -> bool:
+    connection = await asyncpg.connect(ADMIN_URL)
+    try:
+        async with connection.transaction():
+            row = await connection.fetchrow(
+                """
+                UPDATE public.arena_agent_tasks
+                SET status = 'leased',
+                    leased_by = $2,
+                    lease_expires_at =
+                        clock_timestamp() + $3 * interval '1 second'
+                WHERE task_id = $1
+                  AND task_kind = 'arena.market.select'
+                  AND status = 'queued'
+                  AND deadline_at >
+                      clock_timestamp() + $3 * interval '1 second'
+                RETURNING lease_expires_at
+                """,
+                task_id,
+                ORPHAN_WORKER_ID,
+                ORPHAN_LEASE_SECONDS,
+            )
+            if row is None:
+                return False
+            await connection.execute(
+                """
+                INSERT INTO public.arena_agent_task_events (
+                    event_id,
+                    task_id,
+                    event_type,
+                    created_at,
+                    safe_metadata
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    'leased',
+                    clock_timestamp(),
+                    $3::jsonb
+                )
+                """,
+                f"{task_id}:event:fault-orphan:{uuid.uuid4().hex[:12]}",
+                task_id,
+                json.dumps(
+                    {
+                        "transport": "fault-injection",
+                        "worker_id": ORPHAN_WORKER_ID,
+                        "lease_expires_at": row[
+                            "lease_expires_at"
+                        ].isoformat(),
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+        return True
+    finally:
+        await connection.close()
+
+
+async def _task_lease_snapshot(task_id: str) -> dict[str, Any]:
+    connection = await asyncpg.connect(ADMIN_URL)
+    try:
+        row = await connection.fetchrow(
+            """
+            SELECT
+                task_id,
+                leased_by,
+                lease_expires_at,
+                deadline_at
+            FROM public.arena_agent_tasks
+            WHERE task_id = $1
+            """,
+            task_id,
+        )
+    finally:
+        await connection.close()
+    if row is None:
+        raise RuntimeError(f"fault Task disappeared: {task_id}")
+    return dict(row)
+
+
+def _local_outbox_result(
+    connector: RealConnector,
+    task_id: str,
+) -> dict[str, Any] | None:
+    try:
+        state = json.loads(connector.state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    results = state.get("agent_task_results", {})
+    if not isinstance(results, dict):
+        raise RuntimeError("Connector durable Result outbox is invalid")
+    value = results.get(task_id)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise RuntimeError("Connector durable Result entry is invalid")
+    return value
+
+
+async def _wait_for_outbox_replay(
+    connector: RealConnector,
+    task_id: str,
+    *,
+    timeout_seconds: float = 60,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    connection = await asyncpg.connect(ADMIN_URL)
+    try:
+        while asyncio.get_running_loop().time() < deadline:
+            server_results = int(
+                await connection.fetchval(
+                    """
+                    SELECT count(*)
+                    FROM public.arena_agent_task_results
+                    WHERE task_id = $1
+                    """,
+                    task_id,
+                )
+            )
+            if (
+                server_results == 1
+                and _local_outbox_result(connector, task_id) is None
+            ):
+                return
+            await asyncio.sleep(0.05)
+    finally:
+        await connection.close()
+    raise TimeoutError(
+        f"terminal Result outbox was not replayed for {task_id}"
+    )
+
+
 async def _restart_during_codex_select(
     connector: RealConnector,
     game_id: str,
@@ -193,6 +555,61 @@ async def _disconnect_until_deadline(
         "leaseExpiresAt": leased["lease_expires_at"],
         "deadlineAt": leased["deadline_at"],
         "reconnectedRuntimeId": None,
+    }
+
+
+async def _replay_terminal_outbox(
+    proxy: MixedRuntimeFaultProxy,
+    connector: RealConnector,
+    game_id: str,
+) -> dict[str, Any]:
+    leased = await _wait_for_leased_connector_task(
+        game_id,
+        task_kind="arena.market.select",
+    )
+    task_id = str(leased["task_id"])
+    proxy.fail_next_terminal_result(task_id)
+    await proxy.wait_for_terminal_result_failure(timeout_seconds=360)
+    await connector.stop()
+    durable = _local_outbox_result(connector, task_id)
+    if durable is None:
+        raise RuntimeError(
+            "faulted terminal Result was not durable before restart"
+        )
+    connection = await asyncpg.connect(ADMIN_URL)
+    try:
+        server_results_before_restart = int(
+            await connection.fetchval(
+                """
+                SELECT count(*)
+                FROM public.arena_agent_task_results
+                WHERE task_id = $1
+                """,
+                task_id,
+            )
+        )
+    finally:
+        await connection.close()
+    if server_results_before_restart != 0:
+        raise RuntimeError(
+            "faulted terminal Result reached Arena before Connector restart"
+        )
+    result = durable.get("result", {})
+    if not isinstance(result, dict) or not result.get("resultId"):
+        raise RuntimeError("durable terminal Result identity is missing")
+    connector.start()
+    runtime = await connector.wait_online()
+    await _wait_for_outbox_replay(connector, task_id)
+    return {
+        "faultTaskId": task_id,
+        "leasedBy": leased["leased_by"],
+        "leaseExpiresAt": leased["lease_expires_at"],
+        "deadlineAt": leased["deadline_at"],
+        "durableResultId": result["resultId"],
+        "serverResultsBeforeRestart": server_results_before_restart,
+        "localOutboxBeforeRestart": 1,
+        "localOutboxAfterReplay": 0,
+        "reconnectedRuntimeId": runtime["runtime_id"],
     }
 
 
@@ -319,6 +736,7 @@ async def _evidence(
                     task.task_id,
                     task.status,
                     task.leased_by,
+                    result.result_id,
                     result.runtime_status,
                     result.apply_status,
                     applied.application_outcome,
@@ -337,7 +755,37 @@ async def _evidence(
                         SELECT count(*)
                         FROM public.arena_applied_agent_actions AS applied
                         WHERE applied.task_id = task.task_id
-                    ) AS applied_rows
+                    ) AS applied_rows,
+                    ARRAY(
+                        SELECT DISTINCT
+                            event.safe_metadata ->> 'worker_id'
+                        FROM public.arena_agent_task_events AS event
+                        WHERE event.task_id = task.task_id
+                          AND event.event_type = 'leased'
+                          AND event.safe_metadata ? 'worker_id'
+                        ORDER BY
+                            event.safe_metadata ->> 'worker_id'
+                    ) AS lease_workers,
+                    (
+                        SELECT min(event.created_at)
+                        FROM public.arena_agent_task_events AS event
+                        WHERE event.task_id = task.task_id
+                          AND event.event_type = 'leased'
+                          AND event.safe_metadata ->> 'worker_id'
+                              LIKE 'mcp-%'
+                    ) AS mcp_takeover_at,
+                    (
+                        SELECT max(
+                            (
+                                event.safe_metadata
+                                ->> 'lease_expires_at'
+                            )::timestamptz
+                        )
+                        FROM public.arena_agent_task_events AS event
+                        WHERE event.task_id = task.task_id
+                          AND event.event_type = 'leased'
+                          AND event.safe_metadata ->> 'worker_id' = $2
+                    ) AS orphan_lease_expires_at
                 FROM public.arena_agent_tasks AS task
                 LEFT JOIN public.arena_agent_task_results AS result
                   ON result.task_id = task.task_id
@@ -346,6 +794,7 @@ async def _evidence(
                 WHERE task.task_id = $1
                 """,
                 fault_task_id,
+                ORPHAN_WORKER_ID,
             )
             if fault_task_id is not None
             else None
@@ -453,7 +902,10 @@ async def _evidence(
         else "completed"
     )
     minimum_lease_events = (
-        1 if fault_mode == "disconnect_until_deadline" else 2
+        2
+        if fault_mode
+        in {"restart_during_codex_select", "lease_expiry_takeover"}
+        else 1
     )
     if fault_task_id is not None and (
         fault_task_value is None
@@ -466,6 +918,20 @@ async def _evidence(
             "fault-injected Codex task did not reach its exact-once outcome: "
             f"{fault_task_value!r}"
         )
+    if fault_mode == "lease_expiry_takeover":
+        workers = set(fault_task_value["lease_workers"])
+        if (
+            ORPHAN_WORKER_ID not in workers
+            or not any(worker.startswith("mcp-") for worker in workers)
+            or fault_task_value["orphan_lease_expires_at"] is None
+            or fault_task_value["mcp_takeover_at"] is None
+            or fault_task_value["mcp_takeover_at"]
+            < fault_task_value["orphan_lease_expires_at"]
+        ):
+            raise RuntimeError(
+                "orphan lease was not taken over after expiry: "
+                f"{fault_task_value!r}"
+            )
     evidence = {
         "game": dict(game),
         "participants": participant_values,
@@ -491,6 +957,15 @@ async def main() -> None:
         raise RuntimeError(
             "ADX_MIXED_FALLBACK_E2E_ACTION_TIMEOUT_MS must be between "
             "1000 and 900000"
+        )
+    if FAULT_MODE == "lease_expiry_takeover" and (
+        ORPHAN_LEASE_SECONDS < 1
+        or ORPHAN_LEASE_SECONDS > 30
+        or ACTION_TIMEOUT_MS <= (ORPHAN_LEASE_SECONDS + 5) * 1_000
+    ):
+        raise RuntimeError(
+            "orphan lease must be 1..30 seconds and leave at least five "
+            "seconds before the action deadline"
         )
     invites = json.loads(os.environ["ADX_MIXED_FALLBACK_E2E_INVITES"])
     if isinstance(invites, dict):
@@ -527,6 +1002,25 @@ async def main() -> None:
             users[2],
             device_name="Real Codex mixed fallback seller",
         )
+        proxy: MixedRuntimeFaultProxy | None = None
+        gateway_url = WS_URL
+        if FAULT_MODE in {
+            "lease_expiry_takeover",
+            "replay_terminal_outbox",
+        }:
+            proxy = MixedRuntimeFaultProxy(
+                upstream_origin=API_BASE,
+                orphan_claim_injector=(
+                    _inject_orphan_select_lease
+                    if FAULT_MODE == "lease_expiry_takeover"
+                    else None
+                ),
+            )
+            await proxy.start()
+            gateway_url = (
+                proxy.origin.replace("http://", "ws://", 1)
+                + "/api/connectors/ws"
+            )
         connector = RealConnector(
             kind="codex",
             label="accepting-seller",
@@ -536,6 +1030,7 @@ async def main() -> None:
             temp_root=temp_root,
             codex_shim_root=codex_shim_root,
             run_id=run_id,
+            gateway_url=gateway_url,
         )
         game_id = f"mixed-fallback-{run_id}"
         try:
@@ -626,6 +1121,27 @@ async def main() -> None:
                     connector,
                     game_id,
                 )
+            elif FAULT_MODE == "lease_expiry_takeover":
+                assert proxy is not None
+                task_id = await proxy.wait_for_orphan_lease_injection(
+                    timeout_seconds=360,
+                )
+                leased = await _task_lease_snapshot(task_id)
+                fault_evidence = {
+                    "faultTaskId": task_id,
+                    "leasedBy": leased["leased_by"],
+                    "leaseExpiresAt": leased["lease_expires_at"],
+                    "deadlineAt": leased["deadline_at"],
+                    "orphanLeaseSeconds": ORPHAN_LEASE_SECONDS,
+                    "reconnectedRuntimeId": None,
+                }
+            elif FAULT_MODE == "replay_terminal_outbox":
+                assert proxy is not None
+                fault_evidence = await _replay_terminal_outbox(
+                    proxy,
+                    connector,
+                    game_id,
+                )
             live_connectors = (
                 ()
                 if FAULT_MODE == "disconnect_until_deadline"
@@ -645,6 +1161,17 @@ async def main() -> None:
                 ),
                 fault_mode=FAULT_MODE,
             )
+            if (
+                FAULT_MODE == "replay_terminal_outbox"
+                and not evidence["faultTask"]["result_id"]
+            ):
+                raise RuntimeError(
+                    "Arena did not assign an authoritative Result identity"
+                )
+            if FAULT_MODE == "replay_terminal_outbox":
+                fault_evidence["arenaAuthoritativeResultId"] = evidence[
+                    "faultTask"
+                ]["result_id"]
             print(
                 json.dumps(
                     {
@@ -675,6 +1202,8 @@ async def main() -> None:
             ) from exc
         finally:
             await connector.stop()
+            if proxy is not None:
+                await proxy.stop()
             await asyncio.gather(*(user.client.aclose() for user in users))
 
 

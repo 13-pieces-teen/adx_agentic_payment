@@ -380,8 +380,9 @@ PostgreSQL inbox、Arena Result Sink、Local Agent identity/join、Session 自�
 `task.dispatch` v1 `{session_id, prompt, request_id?}` 继续作为兼容能力。真实
 Codex 已完成 Connector-only、Hosted/Connector mixed、执行中重启恢复和
 deadline default 隔离 E2E；Claude Code 的后续实测仍受其外部 API/证书路径
-阻塞。真实 lease-expiry takeover、terminal Result outbox replay、外部部署与
-payment-enabled Connector E2E 尚未验收，不能把本地证据误报为生产可用证据。
+阻塞。真实 lease-expiry takeover 与 terminal Result outbox replay 也已完成
+隔离故障注入；外部部署与 payment-enabled Connector E2E 尚未验收，不能把
+本地证据误报为生产可用证据。
 
 ### 8.4 Driver 边界
 
@@ -563,8 +564,8 @@ npm run build
 
 ## 14. 后续优先级
 
-1. 补齐真实 lease-expiry takeover、terminal Result outbox replay 和
-   payment-enabled Connector 证据；Claude Code 在外部 API/证书路径健康后补跑。
+1. 补齐 payment-enabled Connector 证据；Claude Code 在外部 API/证书路径
+   健康后补跑。
 2. 完成目标服务器部署和外部 E2E，收集安装到 online 的耗时与失败点。
 3. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
 4. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。

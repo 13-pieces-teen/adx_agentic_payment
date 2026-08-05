@@ -252,6 +252,7 @@ class RealConnector:
         temp_root: Path,
         codex_shim_root: Path,
         run_id: str,
+        gateway_url: str = WS_URL,
     ) -> None:
         self.kind = kind
         self.label = label
@@ -261,16 +262,25 @@ class RealConnector:
         self.temp_root = temp_root
         self.codex_shim_root = codex_shim_root
         self.run_id = run_id
+        self.gateway_url = gateway_url
         self.process: subprocess.Popen[str] | None = None
         self.logs: deque[str] = deque(maxlen=400)
         self.runtime: dict[str, Any] = {}
         self.binding: dict[str, Any] = {}
 
+    @property
+    def state_path(self) -> Path:
+        return (
+            self.temp_root
+            / self.label
+            / f"state-{self.run_id}.json"
+        )
+
     def start(self) -> None:
         environment = os.environ.copy()
         environment["ADX_CONNECTOR_DEVICE_ID"] = self.credential["device_id"]
         environment["ADX_CONNECTOR_TOKEN"] = self.credential["device_token"]
-        environment["ADX_CONNECTOR_GATEWAY_URL"] = WS_URL
+        environment["ADX_CONNECTOR_GATEWAY_URL"] = self.gateway_url
         if self.kind == "codex":
             environment["PATH"] = (
                 f"{self.codex_shim_root}{os.pathsep}" f"{environment.get('PATH', '')}"
@@ -283,12 +293,12 @@ class RealConnector:
             "--server",
             API_BASE,
             "--gateway",
-            WS_URL,
+            self.gateway_url,
             "--task-transport",
             "mcp",
             "--auto-pair=false",
             "--state",
-            str(connector_state_root / f"state-{self.run_id}.json"),
+            str(self.state_path),
             "--allow-root",
             str(ROOT),
             "--heartbeat",

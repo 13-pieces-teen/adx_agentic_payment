@@ -9,8 +9,8 @@
 > provenance. A deterministic three-Hosted-Agent Fake E2E has also completed
 > first-seller rejection and second-seller fallback with durable restart
 > evidence. Hosted + real Codex mixed fallback, in-flight Connector restart,
-> and deadline-default injection are complete. All-real multi-seller fallback,
-> lease-expiry takeover, durable Result-outbox replay injection, and
+> deadline-default injection, lease-expiry takeover, and durable terminal
+> Result-outbox replay are complete. All-real multi-seller fallback and
 > payment-enabled A2A remain incomplete.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
@@ -377,7 +377,7 @@ Phase A alone is not evidence of a playable real-Agent market.
       payment-disabled Deal;
 - [x] run a real Hosted + Codex Connector mixed game and preserve in-flight
       reconnect, deadline-default, and projection-recovery evidence;
-- [ ] preserve real lease-expiry takeover and durable Result-outbox replay
+- [x] preserve real lease-expiry takeover and durable Result-outbox replay
       injection evidence;
 - [ ] rerun Claude Code after its external API/certificate path is healthy;
       this is follow-up evidence and does not block Hosted + Codex acceptance;
@@ -590,8 +590,25 @@ Evidence levels remain separate:
   `defaulted / timed_out / applied / market_timeout`; the second RFQ became
   `expired`, the Game completed with zero Deals, and payment/asset/chain
   counts remained zero. This proves deadline closure while a Connector lease
-  is outstanding. It is not yet evidence of lease-expiry takeover or replay
-  of a terminal Result already persisted in the Connector outbox.
+  is outstanding. That run alone did not prove lease-expiry takeover or replay
+  of a terminal Result already persisted in the Connector outbox; the
+  following runs cover those boundaries.
+- The isolated run `mixed-fallback-8af2ba9c8c` injected a five-second orphan
+  lease immediately before the real MCP claim for the fallback seller's
+  `arena.market.select` Task. The production notifier and claim path waited
+  until expiry, then the binding-scoped MCP worker took over about 42 ms after
+  the recorded expiration. The Task recorded both worker identities and three
+  lease events, but only one Result row and one applied action; negotiation
+  still reached one Deal with zero payment, asset, or chain mutations.
+- The isolated run `mixed-fallback-4f99467b24` rejected the first terminal
+  Result submission for the same real Codex selection Task after the Connector
+  had persisted it locally. Before process restart the local outbox contained
+  one Result while Arena contained zero. Restarting from the same state replayed
+  the outbox, cleared the local entry, and produced exactly one authoritative
+  Arena Result and one applied action. The Connector transport Result ID and
+  Arena's normalized authoritative Result ID are preserved separately; they
+  are not incorrectly treated as one identifier. The Game then completed its
+  Deal with zero SettlementIntents, asset mutations, or chain writes.
 
 The real probes also show why “few trades” cannot be solved by a matcher
 alone: Agents may choose different goods, private price intervals may not
