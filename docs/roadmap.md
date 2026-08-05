@@ -583,6 +583,21 @@ create game
       最大值乘以 `1.25`、向上取整到 5 秒。生产单局默认开赛阈值 10、硬上限
       100，同一时间一局 active Game。每个支持的 Runtime/Task 组合至少保留
       100 个真实端到端样本，并验证合法 Task 的 deadline timeout 不超过 1%。
+- [x] 增加 fail-closed `scripts/calibrate_action_timeout.py`：显式 Game allowlist，
+      从 `arena_runtime_binding → connector_binding → connector_runtime` 解析真实
+      Runtime 身份，以 Arena 的 created/first leased/result received/applied
+      时间戳计算分组合 P50/P95/P99、timeout 和 retry；样本或成功证据不足、
+      timeout 超标时拒绝输出推荐值。2026-08-05 Codex-only pilot 新增
+      `real-runtimes-f65b334bd1`（两个独立 Codex、三回合、6 个 succeeded/applied
+      Intent），与七个无故障 mixed run 合并后五类支持任务仅为
+      `decide=0 / intent=15 / rfq=0 / select=8 / negotiate=8`，已有组均为
+      0 deadline timeout、0 retry，因此本项只完成校准工具和 pilot，不完成上项
+      100 样本/目标负载冻结。
+- [x] 隔离 API `/api/ready` 的 1000 请求串行基线已覆盖并发 25/50/64：
+      P95 分别为 `63.72/107.47/161.51 ms`，错误率 `0/0/0.3%`，通过
+      1%/500ms 门槛。并发 100 超过测试 Compose 的
+      `ADX_API_MAX_CONCURRENCY=64` 并产生入口 503；该结果只描述 HTTP 控制面，
+      不计入 AgentTask timeout 公式。
 - [ ] 100 Agent 场景继续采用 `result_received_at` FCFS，并披露 Provider
       限流和 Worker wave 带来的平台排队偏差；未通过 launch-skew 验收前不把该
       部署称为 Tournament 公平性验证。

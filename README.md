@@ -65,6 +65,25 @@ payment-enabled testnet 仍需显式人工确认。`agent_a2a.v1` 永久固定�
 未来无 partial fill 的有界数量使用新
 协议版本；链上吞吐不足时先并行逐笔，再采用保持逐 Deal transfer 证据的 batch。
 
+`scripts/calibrate_action_timeout.py` 现可从明确列出的 Game 读取 Arena 持久化
+时间戳，并按真实 Connector Runtime 类型和 Task 类型输出 queue age、端到端及
+apply P50/P95/P99、deadline timeout 和 retry。只有每个明确要求的组合达到
+至少 100 个终态样本、合法 Task deadline timeout 不超过 1% 时，工具才按上述
+公式给出推荐值；样本不足以退出码 2 和 `recommendedActionTimeoutMs=null`
+拒绝冻结。2026-08-05 的 Codex-only pilot 包含新鲜
+`real-runtimes-f65b334bd1`（两个独立 Codex、三回合、6 个真实 Intent、0 RFQ、
+0 Deal、0 SettlementIntent/资产变更/链写入）及七个无故障 mixed run。累计
+Codex 样本为 `decide=0 / market.intent=15 / market.rfq=0 /
+market.select=8 / negotiate=8`，已有三组均为 0 deadline timeout、0 retry，
+但仍远低于冻结门槛，所以没有修改当前 timeout 默认值。该局 0 RFQ/0 Deal 是
+两个 Agent 自主动作没有形成交易机会，不是 Arena 撮合故障。
+
+同一隔离 API 的只读 `/api/ready` 控制面基线在 1000 请求下，以并发
+25/50/64 分别得到 P95 `63.72/107.47/161.51 ms` 和错误率
+`0/0/0.3%`；三档均通过 1%/500ms 门槛。并发 100 超过该测试 Compose 明确的
+`ADX_API_MAX_CONCURRENCY=64`，入口限流返回 503；该 HTTP 结果仅用于容量诊断，
+不得代替 AgentTask 端到端校准。
+
 生产配置基础允许一个最多 100 个 Agent 的 Current Game、四个各含 25 个任务槽的
 Hosted Worker 副本，以及四个独立 Facilitator EOA 分片的确定性结算路由。这只是
 已实现的容量基础，不是线上容量结论：当前已验证的本地规模仍为 12 个 Agent，

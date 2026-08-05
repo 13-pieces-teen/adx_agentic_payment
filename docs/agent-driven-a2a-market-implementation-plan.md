@@ -639,3 +639,38 @@ output compatibility defects and external CLI/API failures are tracked
 separately from those economic outcomes. Follow-up work may calibrate Agent
 strategy and common deadlines, but Arena must never choose or relax an
 Agent's economic action.
+
+### Action-timeout calibration pilot (2026-08-05)
+
+- `scripts/calibrate_action_timeout.py` reads only explicitly selected Games
+  and resolves Connector identity through the frozen Arena binding and the
+  authoritative Connector runtime record. It uses persisted Task creation,
+  first lease, Result receipt, and Arena application timestamps; Connector ACK
+  and HTTP request latency are not treated as AgentTask completion.
+- The report groups queue age, successful end-to-end latency, apply latency,
+  deadline timeout, failure, and retry by exact Runtime/task. It emits a
+  recommendation only when every required combination has at least 100
+  terminal samples, no more than 1% valid-task deadline timeout, and successful
+  end-to-end evidence. The recommendation is the maximum required P99 times
+  `1.25`, rounded upward to five seconds. Otherwise it exits non-zero with a
+  null recommendation and concrete blockers.
+- Fresh game `real-runtimes-f65b334bd1` used two independent Codex Connectors,
+  `agent_a2a.v1`, three rounds, and `authorizationMode=none`. All six
+  `arena.market.intent` Tasks succeeded and were applied; the Agents produced
+  no compatible RFQ opportunity, so the correct autonomous outcome was zero
+  Request, Engagement, Deal, SettlementIntent, asset mutation, and chain write.
+- Combining that game with seven accepted, non-fault mixed runs gives Codex
+  terminal counts `arena.decide=0`, `arena.market.intent=15`,
+  `arena.market.rfq=0`, `arena.market.select=8`, and `arena.negotiate=8`.
+  The three observed groups have zero deadline timeout and zero retry. Their
+  observed end-to-end P50/P95/P99 values are respectively
+  `15.223/33.087/33.087 s`, `10.968/31.055/31.055 s`, and
+  `9.400/18.161/18.161 s`. These small nearest-rank tails are pilot
+  observations, not production estimates; all five combinations remain below
+  the required 100 samples and no timeout value is frozen.
+- The separate read-only API control baseline used 1000 `/api/ready` requests.
+  Sequential concurrency 25/50/64 produced P95
+  `63.72/107.47/161.51 ms` and error rates `0/0/0.3%`. Concurrency 100 exceeds
+  the isolated Compose limit `ADX_API_MAX_CONCURRENCY=64` and receives
+  admission 503s. This control-plane result is intentionally excluded from the
+  action-timeout formula.
