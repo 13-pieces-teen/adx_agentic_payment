@@ -251,6 +251,92 @@ def test_worker_prioritizes_arena_tasks_before_validation_jobs() -> None:
     assert repository.claim_order == ["tasks", "validations", "learning"]
 
 
+@pytest.mark.parametrize(
+    ("recovery_disposition", "expected_error"),
+    [
+        ("terminal_unknown", "request_outcome_unknown"),
+        ("terminal_failed", "attempts_exhausted"),
+    ],
+)
+def test_reclaimed_terminal_task_never_replays_provider_request(
+    recovery_disposition: str,
+    expected_error: str,
+) -> None:
+    class _RecoveryRepository:
+        def __init__(self) -> None:
+            self.submitted: list[tuple[AgentTaskResultV1, str | None]] = []
+
+        async def submit_result(
+            self,
+            worker_id: str,
+            result: AgentTaskResultV1,
+            *,
+            error_class: str | None,
+            **_: object,
+        ) -> str:
+            assert worker_id == "worker-recovery"
+            self.submitted.append((result, error_class))
+            return "accepted"
+
+    class _ForbiddenModelFactory:
+        def build(self, **_: object) -> object:
+            raise AssertionError("recovery must not replay the Provider")
+
+    async def scenario() -> None:
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
+        participant = decide_input(deadline=deadline)
+        task = ArenaAgentTaskV1(
+            task_id=f"task-{recovery_disposition}",
+            kind="arena.decide",
+            schema_version=AGENT_TASK_SCHEMA_VERSION_V1,
+            game_id=participant.game_id,
+            round_id=participant.round_id,
+            game_agent_id="game-agent-recovery",
+            deadline_at=deadline,
+            idempotency_key=(
+                f"{participant.game_id}:{participant.round_id}:"
+                "game-agent-recovery:decide"
+            ),
+            input_hash=sha256_identifier(participant),
+            input=participant,
+        )
+        claimed = ClaimedTask(
+            task=task,
+            deadline_at=deadline,
+            provider="official-deepseek",
+            secret_ref="arena402/hosted-model/credential-recovery",
+            runtime_config={
+                "model_id": "deepseek-v4-flash",
+                "thinking_enabled": False,
+                "max_output_tokens": 8192,
+            },
+            attempt_count=1,
+            recovery_disposition=recovery_disposition,
+            first_attempt_number=None,
+        )
+        repository = _RecoveryRepository()
+        worker = DurableHostedWorker(
+            repository=repository,  # type: ignore[arg-type]
+            providers=ProductionProviderBundle(
+                registry=CapabilityRegistry(),
+                adapters={},
+            ),
+            secret_reader=_Reader(),
+            worker_id="worker-recovery",
+            model_factory=_ForbiddenModelFactory(),  # type: ignore[arg-type]
+        )
+
+        await worker._execute_task(claimed)
+
+        assert len(repository.submitted) == 1
+        result, error_class = repository.submitted[0]
+        assert result.status == "failed"
+        assert result.action is None
+        assert error_class == expected_error
+
+    asyncio.run(scenario())
+
+
 def test_postgres_result_sink_receives_candidate_action_as_json_object() -> None:
     class _Pool:
         def __init__(self) -> None:

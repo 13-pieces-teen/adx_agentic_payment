@@ -817,9 +817,13 @@ Game Memory 以 `game_agent_id` 为主键并绑定入局冻结的 `strategy_revi
 ```text
 Agent run -> pending memory patch
 Result Sink/Consumer -> applied | rejected
-applied -> CAS increment memory version
-rejected/defaulted/late -> discard patch
+applied + application_outcome=candidate -> CAS increment memory version
+default_pass/negotiation_timeout/rejected/defaulted/late -> discard patch
 ```
+
+`arena_agent_task_results.apply_status=applied` 只表示 Result 已被 Arena 确定性消费；
+当非法 candidate 被替换为 `default_pass` 时，它不代表模型原动作获采纳。记忆投影
+必须同时校验 `arena_applied_agent_actions.application_outcome=candidate`。
 
 Worker 重启后从 PostgreSQL 恢复；不依赖 Provider conversation id、resume token 或
 cache id。不保存自由消息历史和私有 chain-of-thought。
@@ -1442,7 +1446,7 @@ External:
 | Legacy Agent/matching/ELO API | 已移除 | 不再存在第二套内存业务权威或 Supabase 工厂 |
 | Hosted Agent 创建 UI | 已实现 | `/agents` 同时保留 Local Connector，并提供受 readiness/auth 控制的 Hosted 创建、列表、详情和 Runtime PATCH |
 | Legacy PromptBuilder/DirectModelDriver | 已物理删除 | Attempt 合同已迁入独立模块；Worker 不再存在 scripted/legacy 决策分支 |
-| PydanticAI Hosted Agent Runtime | 核心、Worker、局内记忆与跨局 learner 已接线，本地真实模型比赛闭环已通过 | typed output、只读工具、策略类型和生产 Worker 已实现；真实 DeepSeek BYOK 已完成三策略连续回合直连。迁移 `064` 在全新 PostgreSQL 验证 learning job、candidate 激活、未来局冻结和退化回滚；真实无成交试跑又证明原经济信号门槛过松，因此当前要求多步、candidate、`settled` 交易和非零相对净值。修复后的三回合私有 LiteLLM 1+9 已完成 30/30 decide、4/4 negotiate、两次报价/接受和 10/10 memory v3+；迁移 `065` 修复下一回合抢在 memory patch 投影前加载旧上下文。payment-enabled `settled` 学习、多实例重启和生产验收仍待完成 |
+| PydanticAI Hosted Agent Runtime | 核心、Worker、局内记忆与跨局 learner 已接线，本地真实模型比赛闭环已通过 | typed output、只读工具、策略类型和生产 Worker 已实现；真实 DeepSeek BYOK 已完成三策略连续回合直连。迁移 `064` 在全新 PostgreSQL 验证 learning job、candidate 激活、未来局冻结和退化回滚；真实无成交试跑又证明原经济信号门槛过松，因此当前要求多步、candidate、`settled` 交易和非零相对净值。修复后的三回合私有 LiteLLM 1+9 已完成 30/30 decide、4/4 negotiate、两次报价/接受和 10/10 memory v3+；迁移 `065` 修复下一回合抢在 memory patch 投影前加载旧上下文，迁移 `066` 又保证非法 candidate 的 `default_pass` 不推进模型记忆。真实 PostgreSQL 已通过双 Worker claim、Attempt 崩溃边界、Result CAS/late 和 learner lease 重领；payment-enabled `settled` 学习、外部多进程重启和生产验收仍待完成 |
 | Official Agent model | 已固定，部署待切换 | PydanticAI 使用 `official-deepseek/deepseek-v4-flash`；LiteLLM 上游同样使用非弃用模型名 `deepseek-v4-flash` |
 | 真实 Provider Adapter | 已实现，本地验收 | DeepSeek/OpenAI-compatible HTTPS Adapter 已完成真实五回合与 accepted negotiation；不等于生产服务器验收 |
 | 用户 API Key ingress | 已实现 | write-only ingress、摘要幂等、PostgreSQL control repository 与无回显边界已接线 |
@@ -1529,7 +1533,7 @@ External:
 - [ ] invalid/timeout Negotiate 只产生一次 timeout；
 - [ ] 新 Game 不自动携带上一局自由对话；
 - [ ] 同局每个 Hosted Agent 绑定唯一 Strategy Revision 和单调 Game Memory；
-- [ ] 只有 Arena `applied` 结果可以推进 Game Memory；
+- [ ] 只有 Arena 实际应用原 `candidate` 的结果可以推进 Game Memory；
 - [x] `game.completed` 学习产生的新策略只在后续 Game 生效；
 - [ ] 官方 Agent 的随机抽取可复现、可审计，抽中后整局身份和策略不变；
 - [ ] 公开时间线可看到合法协商和结算状态；

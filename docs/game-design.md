@@ -428,6 +428,11 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 `input` 是 Task 创建事务冻结的最小 participant view。Worker 不得在排队或重试时
 重新读取可变的实时现金、持仓、行情或协商历史。
 
+Hosted Game Memory 只从 Arena 真正采用的原 candidate 推进。Result 被确定性消费
+并不等于 candidate 获采用：非法 decide candidate 会留下安全错误码并应用
+`default_pass`，此时 `application_outcome=default_pass`，对应 pending memory
+patch 必须丢弃；timeout、rejected、defaulted 和 late 同样不得推进 memory version。
+
 ### Decide
 
 输入包含当前公开行情/事件、自己的现金/持仓/谈崩次数、允许货物、精度规则和

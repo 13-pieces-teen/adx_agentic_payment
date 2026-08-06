@@ -1712,9 +1712,16 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
   30/30 decide、4/4 negotiate、warhorse/iron 两次 proposal/accept，10/10
   Game Agent 至少推进到 memory v3；payment-disabled 下 10 个 learning job
   全部因无 `settled` 交易被拒绝，并保持 0 SettlementIntent。
+- 全新 PostgreSQL `002`–`066` fault-injection 使用不同 Worker identity 验证
+  claim 互斥、`created` 前置崩溃重试、`request_sent` 后 unknown/no-replay、
+  Result accepted/duplicate/conflict CAS、late Result 和 learning lease 重领。
+  实验还发现非法 candidate 会以 `default_pass` 被 Arena 确定性消费，不能只凭
+  `apply_status=applied` 推进记忆；迁移 `066` 现在要求
+  `application_outcome=candidate`，并已证明 `good_not_allowed` 对应 patch 被
+  `discarded`、memory version 不变。
 
 这些仍是 payment-disabled 本地隔离证据，不等同于真实 `settled` 跨局收益、
-多实例 Worker 重启或生产部署验收。
+外部多容器进程 kill/restart 或生产部署验收。
 
 #### V2-5 删除与生产验收
 
@@ -1723,7 +1730,10 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
   与 Runtime 合同常量；
 - [x] 官方 Agent 与私有 LiteLLM 上游都固定为 `deepseek-v4-flash`；
 - [x] 完成单玩家 + 九官方 Agent 的三回合 payment-disabled 决策、配对和谈判 E2E；
-- [ ] 完成 payment-enabled 多局、`settled` 策略收益对比和多实例 Worker 重启恢复；
+- [x] 完成真实 PostgreSQL 多 Worker identity、lease expiry、Attempt 恢复与
+  Result CAS/late 的隔离 fault-injection；
+- [ ] 完成 payment-enabled 多局、`settled` 策略收益对比和外部多进程 Worker
+  kill/restart 恢复；
 - [x] 证明不同策略类型和独立 Game Memory；
 - [x] 证明下一局学习、历史 revision 和只影响未来局的自动回滚；
 - [x] 更新 README/Roadmap 的本地隔离证据；部署证据仍待生产切换。
@@ -1734,8 +1744,9 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
 - 不同 Game 的候选顺序发生变化；
 - 抽中后整局 identity/archetype/revision 不变；
 - 同一 Agent 的两场 Game 使用不同 `game_agent_id` 和独立 Game Memory；
-- rejected/defaulted/late result 不推进 memory version；
-- applied result 最多推进一次；
+- default_pass/negotiation_timeout/rejected/defaulted/late result 不推进
+  memory version；
+- 只有 `application_outcome=candidate` 的 applied result 最多推进一次；
 - Worker 重启恢复相同 strategy revision 和 memory version；
 - PydanticAI 在限制内调用只读工具并返回唯一合法 terminal action；
 - raw reasoning、Secret 和不可信公开文本不进入记忆；

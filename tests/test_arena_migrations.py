@@ -222,6 +222,12 @@ HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH = (
     / "migrations"
     / "065_hosted_agent_memory_context_barrier.sql"
 )
+HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "066_hosted_agent_memory_candidate_outcome.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1247,5 +1253,30 @@ def test_hosted_agent_context_projects_prior_applied_memory(
     )
     assert (
         HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_memory_only_learns_applied_candidate_outcomes(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "arena_applied_agent_actions AS application" in sql
+    assert "application.application_outcome" in sql
+    assert "v_patch.application_outcome = 'candidate'" in sql
+    assert "SET status = 'discarded'" in sql
+    assert "project_hosted_agent_memory_patches" in sql
+    assert "project_hosted_agent_memory_for_context" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH
         in migrate_module.migration_files("arena")
     )

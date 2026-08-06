@@ -9,7 +9,8 @@
 - [x] 完成 Strategy Revision、Game Memory、pending patch 与 official pool migration。
 - [x] 完成 PydanticAI Agent、只读工具、typed output 和 allowlisted Model factory。
 - [x] 生产 Durable Hosted Worker 已切换到 bounded PydanticAI run；candidate action
-  仍只进入原 Result Sink，pending patch 只在 `apply_status=applied` 后 CAS 投影。
+  仍只进入原 Result Sink，pending patch 只在 Arena 实际应用原 candidate 后 CAS
+  投影；`default_pass`、timeout、rejected 和 late 都不推进记忆。
 - [x] 经人工确认物理删除 PromptBuilder/DirectModelDriver 及其测试，Attempt
   元数据迁入独立模块，Worker 不再保留 legacy/scripted 比赛分支。
 - [x] 官方 PydanticAI Agent 与私有 LiteLLM 上游统一选择
@@ -52,8 +53,20 @@
   30/30 decide 都携带四货物 `eventImpliedFinal`，10/10 Agent 的 Game Memory
   至少为 v3，所有 learning job 因无 `settled` 交易被确定性拒绝，且保持
   0 SettlementIntent。
-- [ ] 继续验证 rejected/late、并发 CAS、外部多实例 Worker 重启，以及
-  payment-enabled 的真实 `settled` 结果。
+- [x] 在全新 PostgreSQL `002`–`066` 上完成 Hosted fault-injection：两个 Worker
+  并发领取同一 Task 时仅一个成功；`Attempt.created` 后崩溃可由第二 Worker 执行
+  唯一重试；`request_sent` 后崩溃收敛为 `request_outcome_unknown` 且不重放
+  Provider；相同 Result 并发提交得到一条 accepted 和一条 duplicate，不同 hash
+  得到 conflict；Finalizer 获胜后的 Result 为 late；learning lease 到期后由新
+  Worker 以第二次也是最后一次 Attempt 完成。该验收使用不同 Worker identity 和
+  真实 PostgreSQL lease/CAS，但仍不是外部多容器进程 kill 验收。
+- [x] fault-injection 发现 Arena 对非法 candidate 确定性应用 `default_pass` 时，
+  `apply_status=applied` 不能代表原 candidate 获采纳。迁移 `066` 现在联合
+  `arena_applied_agent_actions.application_outcome`，只有 `candidate` 才推进
+  Game Memory；`default_pass` 的 Result 保留 `good_not_allowed` 审计，但对应
+  memory patch 必须 `discarded`。
+- [ ] 继续验证外部多实例 Worker 进程 kill/restart，以及 payment-enabled 的真实
+  `settled` 结果。
 - [ ] 以多局 `settled` 样本校准学习激活和严重退化回滚阈值，并完成
   aggressive/conservative/balanced 的策略收益对比验收。
 
