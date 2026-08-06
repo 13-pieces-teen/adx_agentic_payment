@@ -173,15 +173,30 @@
   idempotency key 重取完全相同的过期任务；`071` 恢复旧 learner 重复拼接造成的
   大 foundation 溢出，`072`–`073` 补齐 SECURITY DEFINER 的最小列级权限并仅
   恢复全部 Result 尚未应用的权限失败 Run。
-- [ ] D4：在无活动 Game 的维护窗口把生产 Official pool 切换到
-  `official-deepseek`，完成 Secret、Worker/Connector/Settlement restart、
-  外部前端投影、发布身份、备份和回滚验收，再切换生产 Current Game。
+- [x] D4 生产切换与恢复验收：生产 Official pool 已在维护窗口切到
+  `official-deepseek`，正式局实际抽取的九个 Hosted 席位全部冻结
+  `deepseek/deepseek-v4-flash`；玩家和九个 Official 席位的
+  owner/allowlist/mint provisioning 全部到达 READY。第一场正式币 FCFS 回归中，
+  Connector 在漏传 `--task-transport mcp` 后按 deadline 安全 default，使用正确
+  MCP 参数重连后后续 Task 恢复；Arena Worker 中途重启后同局继续，Settlement
+  Worker 在 Intent 冻结后、提交前重启仍只产生一个 tx 和一次 inventory commit。
+  随后的整机重启在两局之间执行，Current Game 指针、四个 Hosted Worker 和本地
+  Connector 均恢复；该项不冒充活动局中途整机重启。
+  后端功能发布 `01c13805ad32cbe33765feb6c1b18967d9bd595b`
+  经 GitHub protected production environment 完成，archive SHA-256 为
+  `a338cc09b231c2cd9310fa188a64d3306df1587d53700885d091580cf9065073`，
+  回滚目录为 `/opt/arena402.pre-01c13805ad32-20260806T114506Z`，数据库备份为
+  `/var/backups/adx/adx_20260806T114506Z.sql.gz`；public health、Current Game
+  和 SSE 均通过。外部 Vercel 前端 `a0b33d665de952ec569e38e8e2f4071d3fde6a88`
+  已在同一权威 Game 上验证 Intent 目录、RFQ Engagement、谈判文本、支付四阶段
+  和终场排名；历史 FCFS Game 仍由冻结协议回放。
 - [ ] D5：统一功能正确性通过后，再完成 12/25/50/100 Agent 分档、每 Runtime/
   Task 至少 100 条真实终态样本、4 Facilitator shard 和 timeout/公平性冻结。
-- [ ] Phase D 的完成声明必须来自同一场权威 Game；不能把 FCFS Hosted 支付
-  canary、payment-disabled Codex A2A、历史交易或配置容量拼接为完成证据。
-  当前 mUSDC 八回合混合局是 D2/D3 的中间验收，不替代 `arena402-g`、生产
-  Current Game、公共 Facilitator、外部前端或 100 Agent 证据。
+- [x] Phase D 的统一功能链已由同一场权威 Game
+  `game-20260806-110040-099857d6f841` 完成，不再由 FCFS Hosted 支付 canary、
+  payment-disabled Codex A2A 或历史交易拼接声明。D5 的 12/25/50/100 Agent
+  容量、正式 timeout/公平性冻结，以及公共第三方 Facilitator 仍是独立未完成
+  验收，不属于本次 1+9 功能链完成声明。
 
 ## Product narrative baseline
 
