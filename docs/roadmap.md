@@ -139,9 +139,25 @@
   Round 1 买方的下一回合快照由 `cash=20/grain=0` 变为 `18/1`，卖方由
   `0/10` 变为 `2/9`；Round 6 的 2.525 mUSDC 提交也在 Round 7 快照和终场
   排名中可见。
-- [ ] D2：完成同一场 1+9 混合 Runtime、八回合、`agent_a2a.v1`、
-  `arena402-g`、自建 Facilitator 的 payment-enabled testnet 验收；至少一笔
-  Deal 必须到达 `inventory_committed`，下一回合资产与终场排名必须反映该提交。
+- [x] D2 正式币生产验收：Current Game
+  `game-20260806-110040-099857d6f841` 由一名真实 Codex Connector 与九名
+  DeepSeek V4 Flash PydanticAI Hosted Agent 完成八回合
+  `agent_a2a.v1`。89 个 AgentTask 全部
+  `completed/succeeded/applied`，包括 `80 Intent / 3 RFQ / 3 Select /
+  3 Negotiate`；形成 3 个 Engagement/Deal 和 10 条排名。三笔正式测试游戏币
+  `arena402-g` SettlementIntent 均经自建 Facilitator 到达
+  `inventory_committed`：iron `5,000,000` atomic
+  `0x558d105b8d40c9f8d10f070d468f82dba7886b6c78a6bb02f37a484099bd83cf`
+  （block 135914653）、grain `2,105,600` atomic
+  `0x1c63c5716a6eee78ebf48990488f0e7807641110d2361fb8e204496721326f6a`
+  （block 135914656）、gems `3,000,000` atomic
+  `0x7f3254497f16f6323d72d15373bcb2498d5822a90fcc769f9b23173cf856e68c`
+  （block 135914967）。Blockscout 均返回 `ok` 和
+  `transferWithAuthorization`；终场排名读取已提交库存，Codex 位列第 6。
+  九个 Hosted learning job 随后全部终态化，5 个 learned revision 激活、4 个
+  候选由门控拒绝，9 条 evaluation 的 outcome score 为
+  `-478..378 bps`。该证据完成 `arena402-g`、混合 Runtime、A2A、支付与赛后学习
+  的同局验收；不替代公共第三方 Facilitator 或 100 Agent 容量验收。
 - [x] D3：成交参与者在完成局后生成 durable learning evaluation；后续 Game
   冻结新 revision，同局不切换，未成交 Agent 不学习，官方 Agent 的持久
   `agent_id`、archetype、revision history 与每局独立 Game Memory 可审计。
@@ -171,7 +187,7 @@
 
 Arena 402 的对外叙事固定为三层：
 
-- **游戏**：王城典当行中的公平开局、事件驱动市场、FCFS 配对和有限轮协商；
+- **游戏**：王城典当行中的公平开局、事件驱动市场、Intent/RFQ 市场发现和有限轮协商；
 - **评测场**：相同规则、起始资产、事件牌组和排名口径下，比较 Agent 的决策、
   速度、风险判断与谈判质量；
 - **agentic payment 实验场**：把接受报价、冻结支付意图、链上确认和库存提交

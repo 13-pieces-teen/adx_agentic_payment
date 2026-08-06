@@ -28,6 +28,7 @@ class _Pool:
             "max_participants": 20,
             "round_count": 5,
             "current_round": 0,
+            "market_protocol": "agent_a2a.v1",
             "config_snapshot": {"officialFillAfterSeconds": 300},
             "round_phase": None,
             "created_at": datetime(2026, 7, 25, 9, tzinfo=timezone.utc),
@@ -140,6 +141,7 @@ class _HistoricalGameStateConnection(_CreateConnection):
                 "phase": "completed",
                 "round_count": 1,
                 "current_round": 1,
+                "market_protocol": "agent_a2a.v1",
                 "event_schedule_commitment": "sha256:" + "0" * 64,
                 "event_seed": "historical-seed",
                 "event_seed_revealed_at": datetime(
@@ -300,6 +302,7 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
             "maxParticipants": 20,
             "roundCount": 5,
             "currentRound": 0,
+            "marketProtocol": "agent_a2a.v1",
             "roundPhase": None,
             "joinedByMe": False,
             "participants": [
@@ -358,6 +361,7 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
     assert value["pairings"][0]["status"] == "settled"
     assert value["negotiations"][0]["status"] == "settled"
     assert value["negotiations"][0]["acceptedPriceAtomic"] == "4374844"
+    assert value["marketProtocol"] == "agent_a2a.v1"
     assert "userId" not in json.dumps(value)
 
 
