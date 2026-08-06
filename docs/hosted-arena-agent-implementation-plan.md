@@ -1719,9 +1719,16 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
   `apply_status=applied` 推进记忆；迁移 `066` 现在要求
   `application_outcome=candidate`，并已证明 `good_not_allowed` 对应 patch 被
   `discarded`、memory version 不变。
+- `python tests/hosted_worker_process_recovery_e2e.py run` 进一步构建当前生产
+  镜像、应用全部迁移并 provision 最小权限角色，然后对独立
+  `hosted_agent_runtime.production_worker` 容器执行真实 `SIGKILL`。Attempt
+  前崩溃由新 Worker identity 在 30 秒 lease 到期后完成 Attempt 1；
+  `request_sent` 后崩溃由另一 Worker 收敛为
+  `request_outcome_unknown`，Provider 协议请求保持 1。隔离 AES-GCM 密钥卷和
+  本地 LiteLLM 协议替身随实验清理，支付始终关闭。
 
-这些仍是 payment-disabled 本地隔离证据，不等同于真实 `settled` 跨局收益、
-外部多容器进程 kill/restart 或生产部署验收。
+这些证据已经覆盖外部多容器进程 kill/restart，但仍是 payment-disabled 隔离
+实验，不等同于真实 `settled` 跨局收益或生产部署验收。
 
 #### V2-5 删除与生产验收
 
@@ -1732,8 +1739,8 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
 - [x] 完成单玩家 + 九官方 Agent 的三回合 payment-disabled 决策、配对和谈判 E2E；
 - [x] 完成真实 PostgreSQL 多 Worker identity、lease expiry、Attempt 恢复与
   Result CAS/late 的隔离 fault-injection；
-- [ ] 完成 payment-enabled 多局、`settled` 策略收益对比和外部多进程 Worker
-  kill/restart 恢复；
+- [x] 完成生产 Worker 外部多容器进程 `SIGKILL`/restart 恢复；
+- [ ] 完成 payment-enabled 多局和 `settled` 策略收益对比；
 - [x] 证明不同策略类型和独立 Game Memory；
 - [x] 证明下一局学习、历史 revision 和只影响未来局的自动回滚；
 - [x] 更新 README/Roadmap 的本地隔离证据；部署证据仍待生产切换。

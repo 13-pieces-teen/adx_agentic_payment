@@ -65,8 +65,14 @@
   `arena_applied_agent_actions.application_outcome`，只有 `candidate` 才推进
   Game Memory；`default_pass` 的 Result 保留 `good_not_allowed` 审计，但对应
   memory patch 必须 `discarded`。
-- [ ] 继续验证外部多实例 Worker 进程 kill/restart，以及 payment-enabled 的真实
-  `settled` 结果。
+- [x] 使用 `tests/hosted_worker_process_recovery_e2e.py` 在全新 PostgreSQL 和
+  当前生产镜像上完成外部多容器 `SIGKILL`：Attempt 创建前被杀的 Worker 由新
+  identity 在真实 30 秒 lease 到期后执行 Attempt 1；durable `request_sent`
+  后被杀的 Worker 由另一 identity 收敛为 `request_outcome_unknown`，本地
+  LiteLLM 协议替身的 Provider 请求计数保持 1，证明没有重放。测试使用独立
+  AES-GCM 密钥卷、最小权限 Worker login、迁移 `002`–`066`，且支付关闭。
+- [ ] 继续验证 payment-enabled 的真实 `settled` 结果；外部 Docker 故障注入
+  仍不等于生产服务器发布与运行验收。
 - [ ] 以多局 `settled` 样本校准学习激活和严重退化回滚阈值，并完成
   aggressive/conservative/balanced 的策略收益对比验收。
 
