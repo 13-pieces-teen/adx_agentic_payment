@@ -714,8 +714,10 @@ def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
     class _LearningModelFactory:
         def __init__(self) -> None:
             self.built = _LearningBuiltModel()
+            self.values: dict[str, object] | None = None
 
-        def build(self, **_: object) -> _LearningBuiltModel:
+        def build(self, **values: object) -> _LearningBuiltModel:
+            self.values = values
             return self.built
 
     class _IncompleteLearningRepository(_LearningRepository):
@@ -789,6 +791,11 @@ def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
             repository.completion["instructions"]
         )
         assert model_factory.built.closed is True
+        assert model_factory.values is not None
+        assert (
+            model_factory.values["requested_max_output_tokens"]
+            == 8_192
+        )
         assert reader.resolved is not None
         with pytest.raises(SecretStoreOperationError):
             reader.resolved.reveal_for_worker()

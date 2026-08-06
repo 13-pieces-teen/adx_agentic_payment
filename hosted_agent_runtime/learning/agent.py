@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 
 from .models import HostedLearningEvidence, StrategyLearningProposal
@@ -64,7 +64,7 @@ def inspect_verified_behavior(
 def build_strategy_learning_agent(
     model: Model,
 ) -> Agent[HostedLearningEvidence, StrategyLearningProposal]:
-    agent = Agent(
+    return Agent(
         model,
         deps_type=HostedLearningEvidence,
         output_type=StrategyLearningProposal,
@@ -73,19 +73,6 @@ def build_strategy_learning_agent(
         tools=(inspect_verified_outcome, inspect_verified_behavior),
         end_strategy="exhaustive",
     )
-
-    @agent.output_validator
-    def require_evidence_inspection(
-        ctx: RunContext[HostedLearningEvidence],
-        output: StrategyLearningProposal,
-    ) -> StrategyLearningProposal:
-        if ctx.usage.tool_calls < 2:
-            raise ModelRetry(
-                "inspect_outcome_and_behavior_before_proposing_strategy"
-            )
-        return output
-
-    return agent
 
 
 __all__ = [

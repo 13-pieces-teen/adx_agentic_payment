@@ -1274,7 +1274,7 @@ class DurableHostedWorker:
                 remaining_timeout_ms=remaining_ms,
                 requested_max_output_tokens=min(
                     job.max_output_tokens,
-                    2_048,
+                    8_192,
                 ),
             )
             api_key = ""
@@ -1335,6 +1335,7 @@ class DurableHostedWorker:
                 error_class=error_class,
                 retryable=error_class
                 in {
+                    "invalid_structured_output",
                     "rate_limited",
                     "provider_unavailable",
                     "request_outcome_unknown",

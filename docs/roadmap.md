@@ -71,10 +71,36 @@
   后被杀的 Worker 由另一 identity 收敛为 `request_outcome_unknown`，本地
   LiteLLM 协议替身的 Provider 请求计数保持 1，证明没有重放。测试使用独立
   AES-GCM 密钥卷、最小权限 Worker login、迁移 `002`–`066`，且支付关闭。
-- [ ] 继续验证 payment-enabled 的真实 `settled` 结果；外部 Docker 故障注入
-  仍不等于生产服务器发布与运行验收。
+- [x] 2026-08-06 在隔离 PostgreSQL、私有 LiteLLM、真实 DeepSeek V4 Flash、
+  专用 wallet signer 和自建 Facilitator 上完成两场三回合 1+9
+  payment-enabled canary。四笔 mUSDC Intent 分别以交易
+  `0x5cb511d683f86c5b6348b1f8cac2d90e1bde0082ba272af78a36fdc0ea9414b1`、
+  `0x414f1da2c7025e6b9d00a6288e0a92ecfb1cdba34335f28972c85cbab9bf81db`、
+  `0x47c80cfba90f7c3e4b79758c0ca5bcafc3368b8215fa1ba89da85d41b2546137`
+  和
+  `0x35deed2b2c23295bcd7da85030e4a57dc08005c83b8ea54af8609b30b3f0993e`
+  在 Injective EVM testnet 确认，确认数分别为 3/4/3/2；四个 Intent 均到达
+  `inventory_committed`，对应 Pairing/Negotiation 才进入 `settled`。该证据
+  使用隔离 mUSDC canary，不替代 `arena402-g`、公共 Facilitator 或生产发布验收。
+- [x] 第一局玩家以 owner revision 1、一次本人 settled 交易和排名 1 完成，
+  learner 激活 learned revision 2；第二局的 Game Agent 确实冻结 revision 2，
+  并实际产生 `buy/sell/pass` 各一次，排名 7 且没有本人 settled 交易，因此按
+  门禁不再次学习。这证明跨局 revision 绑定与“无本人结算不学习”，不证明该次
+  learned revision 带来收益提升。
+- [x] 真实 canary 暴露 learner 将 Provider 输出上限再次压到 2048，导致成交方
+  的 DeepSeek typed proposal 在 token limit 前无法完成。当前权威证据会直接
+  注入 learner 上下文，只读工具保留为可选复查；`invalid_structured_output`
+  允许一次 durable retry，安全诊断只记录归一化原因；Provider 输出上限与
+  PydanticAI run budget 统一为 8192。修复后第二局四个真实成交方均在第一次
+  learner Attempt 激活 revision，另外六个无成交方在调用模型前确定性拒绝。
+- [x] 保存两局初始策略收益基线：aggressive/balanced/conservative 各 6 个
+  Game Agent 样本的平均排名为 `5.83/5.83/5.33`，平均净值为
+  `20,123,983 / 20,376,667 / 20,407,683` atomic；custom 玩家两局平均排名
+  `4.00`、平均净值 `21,300,000` atomic。样本仅两局，且模型决策具有随机性，
+  不能据此宣布某个 archetype 更优。
 - [ ] 以多局 `settled` 样本校准学习激活和严重退化回滚阈值，并完成
-  aggressive/conservative/balanced 的策略收益对比验收。
+  aggressive/conservative/balanced 的统计性策略收益对比验收；上述两局只作为
+  初始基线。
 
 ## Product narrative baseline
 

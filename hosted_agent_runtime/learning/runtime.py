@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import time
 from dataclasses import dataclass
 
@@ -20,6 +22,9 @@ from hosted_agent_runtime.providers import ProviderErrorCode, ProviderUsage
 
 from .agent import build_strategy_learning_agent
 from .models import HostedLearningEvidence, StrategyLearningProposal
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,10 +81,38 @@ class HostedStrategyLearningRuntime:
         if timeout_seconds <= 0:
             raise ValueError("learning timeout must be positive")
         started = time.monotonic()
+        verified_evidence = {
+            "gameId": evidence.game_id,
+            "archetype": evidence.archetype.value,
+            "basePolicyProfile": evidence.base_policy_profile.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            "outcome": evidence.outcome.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            "behavior": evidence.behavior.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            "finalPricesAtomic": dict(evidence.final_prices_atomic),
+            "lastGameMemory": dict(evidence.last_game_memory),
+        }
         prompt = (
-            "Study the completed Arena game using both read-only evidence "
-            "tools and propose one bounded policy update. Learning job: "
-            f"{evidence.learning_job_id}"
+            "Study the completed Arena game and propose one bounded policy "
+            "update. The JSON below is the complete authoritative evidence "
+            "snapshot. Do not require an additional tool call before "
+            "returning the typed proposal. The read-only tools remain "
+            "available if you need to re-inspect either evidence section.\n"
+            f"Learning job: {evidence.learning_job_id}\n"
+            "Verified evidence JSON:\n"
+            + json.dumps(
+                verified_evidence,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
         )
         try:
             async with asyncio.timeout(timeout_seconds):
@@ -105,7 +138,11 @@ class HostedStrategyLearningRuntime:
             )
         except UsageLimitExceeded:
             return self._failed(started, error_code="permanent_request")
-        except UnexpectedModelBehavior:
+        except UnexpectedModelBehavior as exc:
+            _LOGGER.warning(
+                "hosted_learning_invalid_structured_output_%s",
+                _unexpected_model_behavior_code(exc.message),
+            )
             return self._failed(
                 started,
                 error_code="invalid_structured_output",
@@ -166,6 +203,19 @@ class HostedStrategyLearningRuntime:
     @staticmethod
     def _latency_ms(started: float) -> int:
         return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _unexpected_model_behavior_code(message: str) -> str:
+    normalized = message.strip().lower()
+    if normalized.startswith("model token limit"):
+        return "token_limit"
+    if normalized.startswith("exceeded maximum output retries"):
+        return "output_retry_exhausted"
+    if normalized.startswith("tool ") and "max retries" in normalized:
+        return "tool_retry_exhausted"
+    if normalized.startswith("invalid response"):
+        return "invalid_response"
+    return "unexpected_model_behavior"
 
 
 __all__ = [

@@ -1679,7 +1679,7 @@ stable_random_key =
 `exploration_bps`。当前 replay gate 验证的是历史动作证据完整性、计数一致性和
 Arena 合同安全，不是离线经济收益模拟；收益阈值仍需用真实多局结果校准。
 
-2026-08-06 隔离验收在全新 PostgreSQL 上执行 `002`–`065`，并证明：
+2026-08-06 隔离验收在全新 PostgreSQL 上执行 `002`–`066`，并证明：
 
 - 胜局 learning job 通过 TestModel 产生并激活 learned revision；
 - 已完成局仍引用原 base revision；
@@ -1730,6 +1730,21 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
 这些证据已经覆盖外部多容器进程 kill/restart，但仍是 payment-disabled 隔离
 实验，不等同于真实 `settled` 跨局收益或生产部署验收。
 
+2026-08-06 又完成两场隔离、payment-enabled 的三回合 1+9 canary。两局共四笔
+mUSDC Intent 均经自建 Facilitator 在 Injective EVM testnet 确认后提交库存，
+Pairing/Negotiation 才进入 `settled`。第一局玩家以 owner revision 1、排名 1
+和一次本人 settled 交易激活 learned revision 2；第二局加入时冻结的正是
+revision 2，并实际产生 `buy/sell/pass` 各一次。第二局玩家没有成为 settled
+配对方，因此保持 revision 2，符合“无本人结算不学习”的 preflight。
+
+该真实链路还发现 learner 虽有 8192 的 PydanticAI run budget，Worker 却把
+Provider 输出再次截成 2048，导致 DeepSeek typed proposal 触发 token limit。
+现在已把已清洗的权威 evidence snapshot 直接放入 learner 上下文，保留只读工具
+供可选复查；结构化输出失败允许一次 durable retry，且 Provider 与 run 的输出
+上限统一为 8192。修复后第二局四个真实成交方的 learning job 均在第一次 Attempt
+激活新 revision，六个无成交方全部在模型调用前拒绝。该 canary 使用隔离 mUSDC，
+不能替代 `arena402-g`、公共 Facilitator、生产部署或统计性收益验收。
+
 #### V2-5 删除与生产验收
 
 - [x] 生产入口显式注入 `PydanticModelFactory`，不再调用 DirectModelDriver；
@@ -1740,7 +1755,8 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
 - [x] 完成真实 PostgreSQL 多 Worker identity、lease expiry、Attempt 恢复与
   Result CAS/late 的隔离 fault-injection；
 - [x] 完成生产 Worker 外部多容器进程 `SIGKILL`/restart 恢复；
-- [ ] 完成 payment-enabled 多局和 `settled` 策略收益对比；
+- [x] 完成两局 payment-enabled、四笔 `settled` 的初始策略收益对比；样本仍
+  不足以校准 archetype 优劣或自动回滚阈值；
 - [x] 证明不同策略类型和独立 Game Memory；
 - [x] 证明下一局学习、历史 revision 和只影响未来局的自动回滚；
 - [x] 更新 README/Roadmap 的本地隔离证据；部署证据仍待生产切换。

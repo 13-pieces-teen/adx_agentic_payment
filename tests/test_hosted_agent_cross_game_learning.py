@@ -18,6 +18,9 @@ from hosted_agent_runtime.learning import (
     evaluate_learning_proposal,
     render_learned_strategy_instructions,
 )
+from hosted_agent_runtime.learning.runtime import (
+    _unexpected_model_behavior_code,
+)
 from hosted_agent_runtime.strategy import StrategyArchetype
 
 
@@ -30,6 +33,21 @@ def test_learning_runtime_default_budget_covers_multi_step_tool_run() -> None:
     assert limits.request_limit == 4
     assert limits.tool_calls_limit == 4
     assert limits.output_tokens_limit == 8_192
+
+
+def test_learning_runtime_classifies_safe_failure_reasons() -> None:
+    assert (
+        _unexpected_model_behavior_code(
+            "Exceeded maximum output retries (1)"
+        )
+        == "output_retry_exhausted"
+    )
+    assert (
+        _unexpected_model_behavior_code(
+            "Model token limit (2048) exceeded before any response"
+        )
+        == "token_limit"
+    )
 
 
 def _evidence(
@@ -305,7 +323,7 @@ def test_learned_instructions_are_bounded_and_keep_archetype() -> None:
     assert len(value) <= 4_000
 
 
-def test_learning_runtime_inspects_tools_and_returns_typed_proposal() -> None:
+def test_learning_runtime_can_inspect_tools_and_return_typed_proposal() -> None:
     proposal = _proposal()
     runtime = HostedStrategyLearningRuntime(
         model=TestModel(
@@ -325,4 +343,28 @@ def test_learning_runtime_inspects_tools_and_returns_typed_proposal() -> None:
     assert execution.proposal == proposal
     assert execution.request_count >= 2
     assert execution.tool_call_count >= 2
+    assert execution.usage.complete is True
+
+
+def test_learning_runtime_accepts_typed_proposal_without_tool_calls() -> None:
+    proposal = _proposal()
+    runtime = HostedStrategyLearningRuntime(
+        model=TestModel(
+            call_tools=[],
+            custom_output_args=proposal.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+        ),
+        actual_model="test-learning-model",
+    )
+
+    execution = asyncio.run(
+        runtime.execute(_evidence(), timeout_seconds=10)
+    )
+
+    assert execution.status == "succeeded"
+    assert execution.proposal == proposal
+    assert execution.request_count == 1
+    assert execution.tool_call_count == 0
     assert execution.usage.complete is True

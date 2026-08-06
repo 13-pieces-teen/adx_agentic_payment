@@ -17,11 +17,13 @@
 - **一个 agentic payment 实验场**：把“Agent 做决定”与“付款最终成功”拆成
   可审计的状态，验证从接受报价、冻结支付意图到链上确认、库存提交的边界。
 
-当前仓库已验证本地开发闭环，并完成一笔经自建 Facilitator 提交的全新 Injective
-EVM testnet 交易、链上确认和库存提交。公网 Provider/Hosted Agent、公共第三方
-Facilitator 兼容性和完整生产联调仍是独立验收项。这里的“上链交易”只指已存在且
-可核对的链上证据，不把数据库中的 `accepted` 或 `pending` 记录提前描述成已完成
-支付。
+当前仓库已验证本地开发闭环。2026-08-06 的隔离 payment-enabled Hosted canary
+又以真实 DeepSeek V4 Flash 完成两场三回合 1+9 比赛，并由自建 Facilitator
+提交四笔 Injective EVM testnet mUSDC 交易；四笔都在确认后提交库存。公网部署的
+Hosted Agent、公共第三方 Facilitator 兼容性和完整生产联调仍是独立验收项。
+这里的“上链交易”只指已存在且可核对的链上证据，不把数据库中的 `accepted` 或
+`pending` 记录提前描述成已完成支付，也不把隔离 mUSDC canary 描述为
+`arena402-g` 生产验收。
 
 ## 当前可运行路径
 
@@ -175,7 +177,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 |------|----------|
 | 王城典当行 Game Core | Current Game 已实现四种货物、20 金初始组合、1–10 回合可配置自动推进、版本化固定/seeded event deck、逐轮事件/快照、PostgreSQL 多池 `fcfs.v1`、组间并发有限协商、冻结终场价格与排名；opt-in `agent_a2a.v1` 已完成 wire contracts、协议状态机、migration `055`–`061`、Hosted/Local Runtime task substrate、可恢复市场投影、Round orchestrator、三 Hosted scripted 顺序 fallback Fake E2E、真实双 Codex payment-disabled Deal E2E，以及两个真实 Codex seller 的顺序 fallback。真实 Deal 保留独立 proposal/acceptance Result provenance，未被描述为已结算交易 |
 | Local Agent Connector | 已实现配对、Runtime discovery、Local Agent 注册与参赛、冻结 `binding_id + epoch`、自动 Connector-owned session、数据库 leased Task dispatcher、typed `arena.decide/negotiate/market.intent/market.rfq/market.select`、durable event/receipt/result outbox、Gateway PostgreSQL inbox 与 Result Sink；默认关闭的 WSS wake + stateless MCP 路径已覆盖 claim/status/submit/release/sync、启动/重连与 Gateway sequence gap 主动恢复，并通过隔离 Docker 的协议 E2E；2026-08-02 以本机真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成 FCFS Connector-only 接受局，2026-08-04 的双 Codex `agent_a2a.v1` 先验证自主拒绝，再由 `real-runtimes-e8c3b2d723` 完成 Intent → RFQ → Engage → `2.550000 / 2.900000 / accept` 并冻结 Deal。2026-08-05 的 `mixed-fallback-87fc3f3217` 又由两个独立真实 Codex seller 完成 Primary counter、buyer reject、Secondary engage/accept 和顺序 fallback Deal；本地 restart、lease-expiry、deadline 与 outbox replay 也已完成隔离注入。所有 payment-disabled 局均为 0 链写入；外部多实例恢复和支付授权 E2E 仍待验收 |
-| Hosted Arena Agent | 生产 Worker 已切换到 bounded PydanticAI Agent run，包含 typed output、只读 Arena 工具、`aggressive/conservative/balanced` 官方策略、冻结 Strategy Revision 和按 `game_agent_id` 隔离的 Game Memory。迁移 `064` 已实现 durable 跨局 learner、五维 bounded policy、只影响未来 Game 的 revision/回滚；真实试跑发现无成交局可能被初始组合收益误导后，preflight 已收紧为多步、真实 candidate、至少一笔 `settled` 交易和非零相对净值。2026-08-06 的私有 LiteLLM + DeepSeek V4 Flash 三回合 1+9 回归 `regression-real-hosted-1plus9-v10` 完成 30/30 decide、4/4 negotiate，形成 warhorse/iron 两次报价与接受；payment-disabled 因而是 0 SettlementIntent，并按设计标记 `settlement_failed`。DeepSeek `max_tokens` 线协议、结构化输出唯一重试和跨回合记忆投影屏障也已修复；10/10 Agent 至少推进到 memory v3。全新 PostgreSQL 已验证迁移 `002`–`066`，并完成双 Worker 竞争领取、请求前/后崩溃边界、Result duplicate/conflict CAS、late Result、learner lease 重领和非法 candidate 的 `default_pass`；迁移 `066` 保证这种默认动作不会把被拒绝 candidate 的 memory patch 学进去。独立 Docker 验收又以真实 `production_worker` 容器分别在 Attempt 前和 durable `request_sent` 后执行 `SIGKILL`：新 Worker identity 能在 lease 到期后接管，后者保持 Provider 请求数为 1 并收敛为 `request_outcome_unknown`。该实验使用本地协议替身且关闭支付，不等于真实 `settled` 跨局收益或生产部署验收。BYOK ciphertext vault 与可选腾讯 SSM 边界保持不变 |
+| Hosted Arena Agent | 生产 Worker 已切换到 bounded PydanticAI Agent run，包含 typed output、只读 Arena 工具、`aggressive/conservative/balanced` 官方策略、冻结 Strategy Revision 和按 `game_agent_id` 隔离的 Game Memory。迁移 `064` 已实现 durable 跨局 learner、五维 bounded policy、只影响未来 Game 的 revision/回滚；preflight 要求多步真实 candidate、本人至少一笔 `settled` 交易和非零相对净值。2026-08-06 的 payment-disabled 1+9 回归完成 30/30 decide、4/4 negotiate；外部 Docker 又验证生产 Worker 在 Attempt 前和 durable `request_sent` 后被 `SIGKILL` 的接管/no-replay。随后两场隔离 payment-enabled 1+9 canary 以真实 DeepSeek V4 Flash 完成四笔 testnet mUSDC 结算；第一局玩家从 owner revision 1 学到 revision 2，第二局加入时冻结并使用 revision 2。真实 canary 发现 learner 的 Provider 输出被错误压到 2048；现已把已清洗 evidence 直接注入上下文、保留可选只读工具、允许一次 durable structured-output retry，并把 Provider/run 上限统一为 8192。修复后第二局四个成交方均一次激活，六个无成交方确定性拒绝。该两局只证明真实 `settled` 学习和跨局冻结，不证明 learned 策略必然增益，也不等于 `arena402-g`、公共 Facilitator 或生产部署验收。BYOK ciphertext vault 与可选腾讯 SSM 边界保持不变 |
 | 统一 Runtime 基础 | Hosted 与 Local Connector 已共用版本化 `AgentTask -> AgentTaskResult`、Result Sink 与独立 Finalizer；Hosted PydanticAI Runtime 仍只提交候选 Result，不直接写 Arena，且记忆补丁绑定具体 Runtime Result digest。已完成的 FCFS Hosted-only、Connector-only 和 Hosted/Connector mixed run 均按冻结 Runtime Binding 分流；`agent_a2a.v1` 新增任务已进入同一任务和超时基础，并完成真实双 Codex Local Connector Deal、Hosted + 真实 Codex 顺序 fallback、两个真实 Codex seller 顺序 fallback，以及断线重启、lease expiry、deadline default、terminal outbox replay 的 payment-disabled 隔离 E2E；外部多实例恢复、P95/P99 负载校准与 payment-enabled A2A E2E 尚未完成 |
 | Injective settlement | `agent-arena/settlement/` 已实现 EIP-3009 授权、项目自建 Facilitator 和 `arena402-g` direct relay；Join 后由隔离 owner worker 完成白名单与初始现金铸币，确认前 Participant 不会 Ready。2026-07-26 的 10 Official Agent 生产 testnet 批次已完成 14 笔 provision 广播和一笔 accepted trade 的 x402 V2 → EIP-3009 → 链上确认 → 库存提交闭环。mUSDC 仅保留为历史/底层测试资产；guest wallet CSV 只用于一次性导入，运行时 signer 通过最小权限 PostgreSQL 函数读取 AES-256-GCM 信封密文，并使用独立宿主机 KEK 解密签名 |
 | 前端边界 | 产品前端已迁移到 [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)，由 Vercel 发布到 `www.arena402.com`；后端默认开放无邀请码的用户名/密码注册，并保留可选 GitHub OAuth + PKCE。两者共用 Session/CSRF Cookie 与内部 `user_id` 业务身份；新账号进入纪念币领取页，已有账号按安全 `return_to` 进入平台。广州公网 API 的未备案访问问题仍需由境外入口或主机迁移解决 |
