@@ -7695,6 +7695,7 @@ class PostgresPawnhouseRepository:
                 pointer.max_participants,
                 g.round_count,
                 g.current_round,
+                g.market_protocol,
                 g.config_snapshot,
                 active_round.phase AS round_phase,
                 g.created_at,
@@ -7875,6 +7876,7 @@ class PostgresPawnhouseRepository:
                 "maxParticipants": int(game["max_participants"]),
                 "roundCount": int(game["round_count"]),
                 "currentRound": int(game["current_round"]),
+                "marketProtocol": str(game["market_protocol"]),
                 "roundPhase": (
                     str(game["round_phase"])
                     if game["round_phase"] is not None
@@ -8301,6 +8303,7 @@ class PostgresPawnhouseRepository:
                 """
                 SELECT
                     game_id, phase, round_count, current_round,
+                    market_protocol,
                     event_schedule_commitment, event_seed,
                     event_seed_revealed_at, started_at, completed_at
                 FROM arena402.games
@@ -8408,6 +8411,7 @@ class PostgresPawnhouseRepository:
             "phase": game["phase"],
             "roundCount": game["round_count"],
             "currentRound": game["current_round"],
+            "marketProtocol": str(game["market_protocol"]),
             "eventScheduleCommitment": game["event_schedule_commitment"],
             "eventSeed": (
                 str(game["event_seed"])
