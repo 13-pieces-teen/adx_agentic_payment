@@ -68,6 +68,12 @@ def _decide_context(*, cash_atomic: int, holdings: dict[str, int]):
             "warhorse": 8_000_000,
             "gems": 3_000_000,
         },
+        "event_implied_final": {
+            "grain": 1_100_000,
+            "iron": 2_300_000,
+            "warhorse": 7_500_000,
+            "gems": 3_400_000,
+        },
         "events": [],
         "market_activity": [],
         "deadline_at": datetime.now(timezone.utc) + timedelta(seconds=5),
@@ -88,6 +94,12 @@ def test_decide_view_only_advertises_actions_backed_by_frozen_assets():
         "warhorse",
         "gems",
     ]
+    assert buyer.model_dump(by_alias=True)["eventImpliedFinal"] == {
+        "grain": "1.100000",
+        "iron": "2.300000",
+        "warhorse": "7.500000",
+        "gems": "3.400000",
+    }
 
     seller = PawnhouseAgentRuntimeCoordinator._decide_view(
         _decide_context(

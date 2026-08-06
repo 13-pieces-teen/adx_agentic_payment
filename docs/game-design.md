@@ -156,6 +156,7 @@ Arena 广播：
 - 当前回合和剩余时间；
 - 各货物公开参考价；
 - 本回合已公开事件；
+- 只基于截至本回合已公开事件计算的各货物 `eventImpliedFinal`；
 - Agent 自己的现金、持仓和 `failedNegotiations`；
 - 本轮允许使用的规则参数。
 
@@ -174,9 +175,10 @@ Factory 在同一数据库事务中冻结 participant view、Game Agent 配置�
 `allowedGoods` 只包含其正持仓货物。Arena 后端仍会独立重复余额、库存与限价
 校验，不能只信任 Prompt 约束。
 
-PydanticAI Hosted Agent instructions 要求 Agent 把 `market` 视为已包含当前
-market-target 事件效果，
-不得重复应用；逐一比较全部允许货物，并按照冻结的私有策略画像计算 `fairValue`、
+PydanticAI Hosted Agent instructions 要求 Agent 把 `market` 视为当前公开参考价，
+把 `eventImpliedFinal` 视为仅由已经揭示的事件推导出的终场价值锚点；不得重复应用
+同一事件，也不得看到或推断未揭示的未来 event deck。Agent 逐一比较全部允许货物，
+并按照冻结的私有策略画像在公开锚点上加入自己的保留价偏移，计算 `fairValue`、
 买卖触发阈值和作为保留价的 `limitPrice`。官方池固定三种一级类型：
 `aggressive`、`conservative`、`balanced`；每种类型下面保留多个数值画像，使用
 不同的现金保留比例、库存目标、商品同分排序和买卖阈值，避免所有官方 Agent 因
@@ -250,6 +252,12 @@ Provider、Model 或 Runtime。结构合法但违反自身 `limitPrice`、确定
 AgentTask、同一冻结输入和 deadline 内触发唯一一次带安全错误码的修正 Attempt；
 第二次仍非法则失败收敛，且 Arena 后端会独立重复相同的限价、协商语义、余额和
 库存校验。
+
+PydanticAI 在一次 bounded run 内因连续未产出合法 terminal output 而耗尽
+`request_limit`，按 `invalid_structured_output` 处理，可使用上述唯一一次同
+Runtime 重试；token/tool 预算耗尽仍是不可重试的预算失败。DeepSeek 的单请求输出
+上限必须按其 OpenAI-compatible `max_tokens` 字段发送，不能误写成
+`max_completion_tokens`。
 
 `failedNegotiations` 是对手可见的模糊信号，不直接扣分、不扣现金，也不改变
 FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。

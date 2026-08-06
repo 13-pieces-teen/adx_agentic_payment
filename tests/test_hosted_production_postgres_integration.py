@@ -83,7 +83,7 @@ class _BuiltTestModel:
     def __init__(self) -> None:
         self.model = TestModel(
             custom_output_args={
-                "action": {"action": "pass"},
+                "action": {"action": "buy", "good": "ruby"},
                 "decision_summary": {
                     "plan": "Wait for a stronger legal opportunity.",
                     "factors": ["The current edge is insufficient."],
@@ -112,6 +112,46 @@ class _BuiltTestModel:
 class _TestModelFactory:
     def build(self, **_: object) -> _BuiltTestModel:
         return _BuiltTestModel()
+
+
+class _BuiltLearningTestModel:
+    def __init__(self) -> None:
+        self.model = TestModel(
+            custom_output_args={
+                "policyProfile": {
+                    "riskBudgetBps": 5300,
+                    "minExpectedEdgeBps": 1000,
+                    "maxInventoryConcentrationBps": 7200,
+                    "negotiationConcessionBps": 1100,
+                    "explorationBps": 1300,
+                },
+                "lessonSummary": (
+                    "Preserve a little more liquidity after this result."
+                ),
+                "adjustments": [
+                    "Preserve slightly more cash before the final event.",
+                    "Require a modestly clearer concentration edge.",
+                ],
+                "expectedEffect": (
+                    "Reduce concentration without abandoning good trades."
+                ),
+                "confidenceBps": 7500,
+            }
+        )
+        self.settings = None
+        self.resolved = SimpleNamespace(
+            provider_id="deepseek",
+            model_id="deepseek-v4-flash",
+            thinking_enabled=False,
+        )
+
+    async def close(self) -> None:
+        return None
+
+
+class _LearningTestModelFactory:
+    def build(self, **_: object) -> _BuiltLearningTestModel:
+        return _BuiltLearningTestModel()
 
 
 def test_create_validate_and_join_survive_process_boundaries() -> None:
@@ -446,30 +486,6 @@ def test_create_validate_and_join_survive_process_boundaries() -> None:
                 result_id=pending[0].result.result_id,
                 server_clock=lambda: datetime.now(timezone.utc),
             )
-            assert (
-                await worker_repository.project_memory_patches(limit=100)
-                == 1
-            )
-
-            learned = await admin.fetchrow(
-                """
-                SELECT
-                    memory.memory_version,
-                    memory.last_applied_task_id,
-                    patch.status AS patch_status
-                FROM hosted_agent_game_memory AS memory
-                JOIN hosted_agent_memory_patches AS patch
-                  ON patch.game_agent_id = memory.game_agent_id
-                WHERE memory.game_agent_id = $1
-                  AND patch.task_id = $2
-                """,
-                joined.game_agent_id,
-                task.task_id,
-            )
-            assert learned is not None
-            assert learned["memory_version"] == 1
-            assert learned["last_applied_task_id"] == task.task_id
-            assert learned["patch_status"] == "applied"
 
             default_deadline = datetime.now(timezone.utc) + timedelta(
                 seconds=30
@@ -527,6 +543,32 @@ def test_create_validate_and_join_survive_process_boundaries() -> None:
                 lease_seconds=600,
             )
             assert len(default_claim) == 1
+            next_context = await worker_repository.load_runtime_context(
+                default_worker_id,
+                default_task.task_id,
+            )
+            assert next_context["memoryVersion"] == 1
+
+            learned = await admin.fetchrow(
+                """
+                SELECT
+                    memory.memory_version,
+                    memory.last_applied_task_id,
+                    patch.status AS patch_status
+                FROM hosted_agent_game_memory AS memory
+                JOIN hosted_agent_memory_patches AS patch
+                  ON patch.game_agent_id = memory.game_agent_id
+                WHERE memory.game_agent_id = $1
+                  AND patch.task_id = $2
+                """,
+                joined.game_agent_id,
+                task.task_id,
+            )
+            assert learned is not None
+            assert learned["memory_version"] == 1
+            assert learned["last_applied_task_id"] == task.task_id
+            assert learned["patch_status"] == "applied"
+
             never_submitted_digest = sha256_text_identifier(
                 f"candidate-never-submitted-{suffix}"
             )
@@ -587,6 +629,449 @@ def test_create_validate_and_join_survive_process_boundaries() -> None:
             assert discarded["memory_version"] == 1
             assert discarded["last_applied_task_id"] == task.task_id
             assert discarded["patch_status"] == "discarded"
+
+            opponent_id = f"opponent-{suffix}"
+            await admin.execute(
+                """
+                INSERT INTO arena402.game_participants (
+                    game_participant_id,
+                    game_id,
+                    user_id,
+                    agent_id,
+                    runtime_binding_id,
+                    runtime_kind,
+                    status,
+                    portfolio_locked_at,
+                    completed_at,
+                    readiness,
+                    ready_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, 'rule', 'completed',
+                    clock_timestamp(), clock_timestamp(), 'ready',
+                    clock_timestamp()
+                )
+                """,
+                opponent_id,
+                game_id,
+                f"opponent-user-{suffix}",
+                f"opponent-agent-{suffix}",
+                f"opponent-binding-{suffix}",
+            )
+            await admin.execute(
+                """
+                INSERT INTO arena402.rounds (
+                    round_id, game_id, round_index, phase,
+                    completed_at
+                )
+                VALUES ($1, $2, 1, 'completed', clock_timestamp())
+                """,
+                round_id,
+                game_id,
+            )
+            buyer_entry_id = f"learning-buyer-entry-{suffix}"
+            seller_entry_id = f"learning-seller-entry-{suffix}"
+            await admin.executemany(
+                """
+                INSERT INTO arena402.pool_entries (
+                    pool_entry_id, game_id, round_id,
+                    game_participant_id, source_result_id,
+                    side, good_id, status, quantity,
+                    limit_price_atomic
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, 'grain',
+                    'paired', 1, 1000000
+                )
+                """,
+                [
+                    (
+                        buyer_entry_id,
+                        game_id,
+                        round_id,
+                        joined.game_agent_id,
+                        f"learning-buyer-result-{suffix}",
+                        "buy",
+                    ),
+                    (
+                        seller_entry_id,
+                        game_id,
+                        round_id,
+                        opponent_id,
+                        f"learning-seller-result-{suffix}",
+                        "sell",
+                    ),
+                ],
+            )
+            await admin.execute(
+                """
+                INSERT INTO arena402.pairings (
+                    pairing_id, game_id, round_id, good_id,
+                    buyer_entry_id, seller_entry_id,
+                    buyer_participant_id, seller_participant_id,
+                    pairing_sequence, status, completed_at, quantity,
+                    buyer_limit_price_atomic,
+                    seller_limit_price_atomic
+                )
+                VALUES (
+                    $1, $2, $3, 'grain', $4, $5, $6, $7,
+                    1, 'settled', clock_timestamp(), 1,
+                    1000000, 1000000
+                )
+                """,
+                f"learning-pairing-{suffix}",
+                game_id,
+                round_id,
+                buyer_entry_id,
+                seller_entry_id,
+                joined.game_agent_id,
+                opponent_id,
+            )
+            await admin.execute(
+                """
+                INSERT INTO arena402.final_settlement_prices (
+                    game_id,
+                    good_id,
+                    price_atomic,
+                    source_round_index
+                )
+                SELECT game_id, good_id, initial_price_atomic, 1
+                FROM arena402.game_goods
+                WHERE game_id = $1
+                """,
+                game_id,
+            )
+            await admin.executemany(
+                """
+                INSERT INTO arena402.rankings (
+                    game_id,
+                    game_participant_id,
+                    rank,
+                    net_worth_atomic,
+                    tier
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                [
+                    (
+                        game_id,
+                        joined.game_agent_id,
+                        1,
+                        21_000_000,
+                        "公爵",
+                    ),
+                    (
+                        game_id,
+                        opponent_id,
+                        2,
+                        19_000_000,
+                        "流浪商贩",
+                    ),
+                ],
+            )
+            await admin.execute(
+                """
+                UPDATE arena402.game_participants
+                SET status = 'completed',
+                    completed_at = COALESCE(
+                        completed_at,
+                        clock_timestamp()
+                    )
+                WHERE game_participant_id = $1
+                """,
+                joined.game_agent_id,
+            )
+            await admin.execute(
+                """
+                UPDATE arena402.games
+                SET phase = 'completed',
+                    completed_at = clock_timestamp()
+                WHERE game_id = $1
+                """,
+                game_id,
+            )
+            await admin.execute(
+                """
+                UPDATE game_agents
+                SET status = 'completed',
+                    completed_at = clock_timestamp()
+                WHERE game_agent_id = $1
+                """,
+                joined.game_agent_id,
+            )
+            await admin.execute(
+                """
+                UPDATE games
+                SET status = 'completed',
+                    completed_at = clock_timestamp()
+                WHERE game_id = $1
+                """,
+                game_id,
+            )
+
+            base_revision_id = str(
+                frozen["hosted_strategy_revision_id"]
+            )
+            learning_worker = DurableHostedWorker(
+                repository=worker_repository,
+                providers=ProductionProviderBundle(
+                    registry=CapabilityRegistry(),
+                    adapters={},
+                ),
+                secret_reader=secrets.reader,
+                worker_id=f"learning-worker-{suffix}",
+                model_factory=_LearningTestModelFactory(),  # type: ignore[arg-type]
+            )
+            assert await learning_worker.run_once() == 1
+
+            learning_state = await admin.fetchrow(
+                """
+                SELECT
+                    job.status AS job_status,
+                    job.candidate_strategy_revision_id,
+                    active.strategy_revision_id AS active_revision_id,
+                    active.source AS active_source,
+                    active.parent_strategy_revision_id,
+                    active.policy_profile,
+                    frozen.hosted_strategy_revision_id
+                        AS frozen_revision_id,
+                    evaluation.outcome_score_bps
+                FROM hosted_agent_learning_jobs AS job
+                JOIN hosted_agent_strategy_revisions AS active
+                  ON active.agent_id = job.agent_id
+                 AND active.status = 'active'
+                JOIN game_agents AS frozen
+                  ON frozen.game_agent_id = job.game_agent_id
+                JOIN hosted_agent_strategy_evaluations AS evaluation
+                  ON evaluation.learning_job_id = job.learning_job_id
+                WHERE job.game_agent_id = $1
+                """,
+                joined.game_agent_id,
+            )
+            assert learning_state is not None
+            assert learning_state["job_status"] == "activated"
+            learned_revision_id = str(
+                learning_state["active_revision_id"]
+            )
+            assert learned_revision_id != base_revision_id
+            assert learning_state["active_source"] == "learned"
+            assert (
+                learning_state["parent_strategy_revision_id"]
+                == base_revision_id
+            )
+            assert (
+                learning_state["frozen_revision_id"]
+                == base_revision_id
+            )
+            assert learning_state["outcome_score_bps"] == 500
+
+            next_game_id = f"game-next-{suffix}"
+            await admin.execute(
+                """
+                INSERT INTO arena402.games (
+                    game_id,
+                    round_count,
+                    action_timeout_ms,
+                    min_participants,
+                    max_participants,
+                    config_snapshot,
+                    event_seed,
+                    event_schedule_commitment,
+                    market_protocol
+                )
+                VALUES (
+                    $1, 1, 30000, 2, 2,
+                    '{"initial_cash_atomic":1000000,'
+                    '"initial_inventory":{"grain":1,"iron":1,'
+                    '"warhorse":1,"gems":1},'
+                    '"marketProtocol":"fcfs.v1"}'::jsonb,
+                    'integration-next-event-seed',
+                    $2,
+                    'fcfs.v1'
+                )
+                """,
+                next_game_id,
+                sha256_text_identifier(
+                    f"integration-next-event-seed:{next_game_id}"
+                ),
+            )
+            await admin.execute(
+                """
+                INSERT INTO arena402.game_goods (
+                    game_id,
+                    good_id,
+                    display_name,
+                    initial_price_atomic,
+                    price_decimal_places
+                )
+                SELECT $1, good_id, display_name, initial_price, 6
+                FROM (
+                    VALUES
+                        ('grain', 'Grain', 1000000::NUMERIC),
+                        ('iron', 'Iron', 2000000::NUMERIC),
+                        ('warhorse', 'Warhorse', 3000000::NUMERIC),
+                        ('gems', 'Gems', 4000000::NUMERIC)
+                ) AS goods(good_id, display_name, initial_price)
+                """,
+                next_game_id,
+            )
+            await admin.execute(
+                """
+                INSERT INTO games (
+                    game_id,
+                    status,
+                    action_timeout_ms,
+                    config_snapshot
+                )
+                VALUES (
+                    $1, 'open', 30000,
+                    '{"initial_cash_atomic":1000000,'
+                    '"initial_inventory":{"grain":1,"iron":1,'
+                    '"warhorse":1,"gems":1}}'::jsonb
+                )
+                """,
+                next_game_id,
+            )
+            next_joined = await participation.join(
+                owner_user_id=owner_id,
+                game_id=next_game_id,
+                agent_id=created.agent_id,
+                key_digest=sha256_text_identifier(
+                    f"join-next-{suffix}"
+                ),
+                request_digest=sha256_identifier(
+                    {
+                        "agentId": created.agent_id,
+                        "gameId": next_game_id,
+                    }
+                ),
+            )
+            next_frozen = await admin.fetchrow(
+                """
+                SELECT
+                    hosted_strategy_revision_id,
+                    config_snapshot ->> 'strategy_revision_id'
+                        AS snapshot_revision_id,
+                    config_snapshot ->> 'strategy_instructions'
+                        AS snapshot_instructions
+                FROM game_agents
+                WHERE game_agent_id = $1
+                """,
+                next_joined.game_agent_id,
+            )
+            assert next_frozen is not None
+            assert (
+                next_frozen["hosted_strategy_revision_id"]
+                == learned_revision_id
+            )
+            assert (
+                next_frozen["snapshot_revision_id"]
+                == learned_revision_id
+            )
+            assert "Learned bounded policy" in str(
+                next_frozen["snapshot_instructions"]
+            )
+
+            await admin.execute(
+                """
+                UPDATE game_agents
+                SET status = 'completed',
+                    completed_at = clock_timestamp()
+                WHERE game_agent_id = $1
+                """,
+                next_joined.game_agent_id,
+            )
+            await admin.execute(
+                """
+                UPDATE games
+                SET status = 'completed',
+                    completed_at = clock_timestamp()
+                WHERE game_id = $1
+                """,
+                next_game_id,
+            )
+            rollback_jobs = await worker_repository.claim_learning_jobs(
+                f"rollback-worker-{suffix}",
+                limit=1,
+                lease_seconds=600,
+            )
+            assert len(rollback_jobs) == 1
+            rollback_result = await worker_repository.complete_learning_job(
+                f"rollback-worker-{suffix}",
+                rollback_jobs[0],
+                evidence_hash=sha256_identifier(
+                    {"gameId": next_game_id, "outcome": "severe-regression"}
+                ),
+                outcome_score_bps=-5000,
+                source_config_hash=sha256_identifier(
+                    {"learningJobId": rollback_jobs[0].learning_job_id}
+                ),
+                policy_profile={
+                    "riskBudgetBps": 5200,
+                    "minExpectedEdgeBps": 1000,
+                    "maxInventoryConcentrationBps": 7200,
+                    "negotiationConcessionBps": 1100,
+                    "explorationBps": 1200,
+                },
+                instructions="A valid bounded rollback candidate.",
+                proposal={
+                    "policyProfile": {
+                        "riskBudgetBps": 5200,
+                        "minExpectedEdgeBps": 1000,
+                        "maxInventoryConcentrationBps": 7200,
+                        "negotiationConcessionBps": 1100,
+                        "explorationBps": 1200,
+                    },
+                    "lessonSummary": "Regression evidence.",
+                },
+                gate_summary={
+                    "schemaVersion": "arena.hosted-learning-gate.v1",
+                    "outcomeScoreBps": -5000,
+                    "checks": {"allPassed": True},
+                },
+                gate_passed=True,
+                gate_reason="passed",
+            )
+            assert rollback_result["disposition"] == "rolled_back"
+            assert (
+                rollback_result["strategyRevisionId"]
+                == base_revision_id
+            )
+            rollback_state = await admin.fetchrow(
+                """
+                SELECT
+                    job.status AS job_status,
+                    active.strategy_revision_id AS active_revision_id,
+                    regressed.status AS regressed_revision_status,
+                    frozen.hosted_strategy_revision_id
+                        AS frozen_revision_id
+                FROM hosted_agent_learning_jobs AS job
+                JOIN hosted_agent_strategy_revisions AS active
+                  ON active.agent_id = job.agent_id
+                 AND active.status = 'active'
+                JOIN hosted_agent_strategy_revisions AS regressed
+                  ON regressed.strategy_revision_id =
+                     job.base_strategy_revision_id
+                JOIN game_agents AS frozen
+                  ON frozen.game_agent_id = job.game_agent_id
+                WHERE job.game_agent_id = $1
+                """,
+                next_joined.game_agent_id,
+            )
+            assert rollback_state is not None
+            assert rollback_state["job_status"] == "rolled_back"
+            assert (
+                rollback_state["active_revision_id"]
+                == base_revision_id
+            )
+            assert (
+                rollback_state["regressed_revision_status"]
+                == "rejected"
+            )
+            assert (
+                rollback_state["frozen_revision_id"]
+                == learned_revision_id
+            )
         finally:
             await core.close()
             await participation.close()

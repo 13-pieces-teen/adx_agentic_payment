@@ -210,6 +210,18 @@ HOSTED_AGENT_RUNTIME_V2_SQL_PATH = (
     / "migrations"
     / "063_hosted_agent_runtime_v2.sql"
 )
+HOSTED_AGENT_CROSS_GAME_LEARNING_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "064_hosted_agent_cross_game_learning.sql"
+)
+HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "065_hosted_agent_memory_context_barrier.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1177,4 +1189,63 @@ def test_hosted_agent_runtime_v2_persists_strategy_and_applied_memory(
     )
     assert HOSTED_AGENT_RUNTIME_V2_SQL_PATH in migrate_module.migration_files(
         "arena"
+    )
+
+
+def test_hosted_agent_cross_game_learning_is_durable_and_gated(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_CROSS_GAME_LEARNING_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "hosted_agent_learning_jobs" in sql
+    assert "hosted_agent_strategy_evaluations" in sql
+    assert "arena_game_completed_hosted_learning" in sql
+    assert "claim_hosted_agent_learning_jobs" in sql
+    assert "load_hosted_agent_learning_evidence" in sql
+    assert "complete_hosted_agent_learning_job" in sql
+    assert "release_hosted_agent_learning_job" in sql
+    assert "status = 'superseded'" in sql
+    assert "status = 'rolled_back'" in sql
+    assert "automatic_regression_rollback" in sql
+    assert "(v_net_worth - v_average_net_worth)" in sql
+    assert "/ v_average_net_worth" in sql
+    assert "v_average_net_worth <= 0" in sql
+    assert "v_base_evaluation_count >= 1" in sql
+    assert "v_base_average <= v_parent_average - 2000" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_CROSS_GAME_LEARNING_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_context_projects_prior_applied_memory(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "project_hosted_agent_memory_for_context" in sql
+    assert "patch.game_agent_id = p_game_agent_id" in sql
+    assert "result.apply_status IN ('applied', 'rejected')" in sql
+    assert "memory_version = v_patch.expected_memory_version" in sql
+    assert "PERFORM public.project_hosted_agent_memory_for_context" in sql
+    assert "load_hosted_agent_runtime_context" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH
+        in migrate_module.migration_files("arena")
     )

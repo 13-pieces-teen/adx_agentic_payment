@@ -36,6 +36,8 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
     assert len(set(first_cycle)) == 10
     assert second_cycle == first_cycle
     assert all("fairValue" in strategy for strategy in first_cycle)
+    assert all("eventImpliedFinal" in strategy for strategy in first_cycle)
+    assert all("private reservation" in strategy for strategy in first_cycle)
     assert all("public archetype" in strategy for strategy in first_cycle)
     assert len(
         {official_strategy_archetype(index) for index in range(1, 11)}
@@ -58,10 +60,10 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
 
 
 def test_official_strategy_refresh_has_a_versioned_stable_idempotency_key() -> None:
-    assert STRATEGY_VERSION == "pydantic-agent-v1"
+    assert STRATEGY_VERSION == "pydantic-agent-v3"
     assert (
         _update_idempotency_key("agent-official-001")
-        == "official-strategy-pydantic-agent-v1-agent-official-001"
+        == "official-strategy-pydantic-agent-v3-agent-official-001"
     )
 
 

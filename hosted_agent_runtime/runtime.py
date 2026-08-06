@@ -18,6 +18,7 @@ from pydantic_ai.exceptions import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import RunUsage
 
 from arena_agent_contracts import (
     AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
@@ -37,16 +38,19 @@ from .providers import ProviderErrorCode, ProviderUsage
 class HostedAgentRuntimeLimits:
     request_limit: int = 4
     tool_calls_limit: int = 6
-    output_tokens_limit: int = 2_048
+    # PydanticAI applies this limit to the whole multi-request Agent run.
+    # Individual provider requests remain clamped by
+    # arena_action_output_token_budget() in the worker.
+    output_tokens_limit: int = 65_536
 
     def __post_init__(self) -> None:
         if not 1 <= self.request_limit <= 8:
             raise ValueError("request_limit must be between 1 and 8")
         if not 1 <= self.tool_calls_limit <= 16:
             raise ValueError("tool_calls_limit must be between 1 and 16")
-        if not 64 <= self.output_tokens_limit <= 16_384:
+        if not 64 <= self.output_tokens_limit <= 65_536:
             raise ValueError(
-                "output_tokens_limit must be between 64 and 16384"
+                "output_tokens_limit must be between 64 and 65536"
             )
 
 
@@ -129,6 +133,7 @@ class HostedArenaAgentRuntime:
             )
         )
         started = time.monotonic()
+        run_usage = RunUsage()
         try:
             async with asyncio.timeout(remaining):
                 run = await self._agent.run(
@@ -140,6 +145,7 @@ class HostedArenaAgentRuntime:
                         tool_calls_limit=self._limits.tool_calls_limit,
                         output_tokens_limit=self._limits.output_tokens_limit,
                     ),
+                    usage=run_usage,
                 )
         except TimeoutError:
             return self._failed_execution(
@@ -153,17 +159,19 @@ class HostedArenaAgentRuntime:
                 started=started,
                 error_code=self._http_error_code(exc.status_code),
             )
-        except UsageLimitExceeded:
+        except UsageLimitExceeded as exc:
             return self._failed_execution(
                 task_snapshot,
                 started=started,
-                error_code="permanent_request",
+                error_code=self._usage_limit_error_code(exc),
+                run_usage=run_usage,
             )
         except UnexpectedModelBehavior:
             return self._failed_execution(
                 task_snapshot,
                 started=started,
                 error_code="invalid_structured_output",
+                run_usage=run_usage,
             )
         except AgentRunError:
             return self._failed_execution(
@@ -215,16 +223,30 @@ class HostedArenaAgentRuntime:
         started: float | None = None,
         error_code: ProviderErrorCode | None = None,
         timed_out: bool = False,
+        run_usage: RunUsage | None = None,
     ) -> HostedAgentExecution:
+        usage = (
+            ProviderUsage.incomplete()
+            if run_usage is None
+            else ProviderUsage(
+                input_tokens=run_usage.input_tokens,
+                output_tokens=run_usage.output_tokens,
+                cached_input_tokens=run_usage.cache_read_tokens,
+                reasoning_tokens=int(
+                    run_usage.details.get("reasoning_tokens", 0)
+                ),
+                complete=True,
+            )
+        )
         return HostedAgentExecution(
             result=self._result(
                 task,
                 status="timed_out" if timed_out else "failed",
             ),
             agent_output=None,
-            usage=ProviderUsage.incomplete(),
-            request_count=0,
-            tool_call_count=0,
+            usage=usage,
+            request_count=0 if run_usage is None else run_usage.requests,
+            tool_call_count=0 if run_usage is None else run_usage.tool_calls,
             latency_ms=0 if started is None else self._latency_ms(started),
             actual_model=self._actual_model,
             error_code=error_code,
@@ -238,6 +260,20 @@ class HostedArenaAgentRuntime:
             return "rate_limited"
         if status_code >= 500:
             return "provider_unavailable"
+        return "permanent_request"
+
+    @staticmethod
+    def _usage_limit_error_code(
+        exc: UsageLimitExceeded,
+    ) -> ProviderErrorCode:
+        if str(exc).startswith(
+            "The next request would exceed the request_limit"
+        ):
+            # Reaching the request cap after the provider returned responses
+            # means the bounded Agent run never produced a valid terminal
+            # output. The task worker may use its one allowed same-runtime
+            # retry while the Arena deadline still has room.
+            return "invalid_structured_output"
         return "permanent_request"
 
     @staticmethod

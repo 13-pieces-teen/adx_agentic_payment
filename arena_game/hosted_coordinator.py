@@ -675,6 +675,12 @@ class PawnhouseAgentRuntimeCoordinator:
                 str(good): _gold_decimal(int(price))
                 for good, price in dict(context["market"]).items()
             },
+            event_implied_final={
+                str(good): _gold_decimal(int(price))
+                for good, price in dict(
+                    context.get("event_implied_final", {})
+                ).items()
+            },
             events=_public_events(list(context["events"])),
             reputation=ArenaReputationV1(failed_negotiations=0),
             limits=ArenaDecideLimitsV1(

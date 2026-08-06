@@ -199,6 +199,10 @@ class ArenaDecideInputV1(_StrictWireModel):
     cash: NonNegativeFixedDecimal
     holdings: dict[GoodId, NonNegativeInt]
     market: dict[GoodId, NonNegativeFixedDecimal]
+    event_implied_final: dict[
+        GoodId,
+        NonNegativeFixedDecimal,
+    ] = Field(default_factory=dict)
     events: list[ArenaPublicEventV1] = Field(default_factory=list)
     reputation: ArenaReputationV1
     limits: ArenaDecideLimitsV1 = Field(default_factory=ArenaDecideLimitsV1)
@@ -213,6 +217,13 @@ class ArenaDecideInputV1(_StrictWireModel):
         good_ids = [item.good for item in self.goods]
         if len(good_ids) != len(set(good_ids)):
             raise ValueError("goods must not contain duplicate good identifiers")
+        if (
+            self.event_implied_final
+            and set(self.event_implied_final) != set(self.market)
+        ):
+            raise ValueError(
+                "eventImpliedFinal must cover the same goods as market"
+            )
         return self
 
 

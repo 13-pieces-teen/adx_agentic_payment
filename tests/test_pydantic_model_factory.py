@@ -51,6 +51,12 @@ def test_factory_builds_only_allowlisted_official_model() -> None:
             built.model.profile["openai_chat_send_back_thinking_parts"]
             == "field"
         )
+        assert (
+            built.model.profile[
+                "openai_chat_supports_max_completion_tokens"
+            ]
+            is False
+        )
         assert built.model.profile["openai_system_prompt_role"] == "system"
         assert isinstance(built.model, _DeepSeekOpenAIChatModel)
         tools, tool_choice = built.model._get_tool_choice(

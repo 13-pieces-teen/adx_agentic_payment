@@ -202,6 +202,10 @@ class PydanticModelFactory:
             supports_thinking=True,
             openai_chat_thinking_field="reasoning_content",
             openai_chat_send_back_thinking_parts="field",
+            # DeepSeek's OpenAI-compatible endpoint accepts `max_tokens`.
+            # PydanticAI otherwise defaults this setting to OpenAI's
+            # `max_completion_tokens`, which DeepSeek/LiteLLM may ignore.
+            openai_chat_supports_max_completion_tokens=False,
             openai_supports_tool_choice_required=False,
             openai_system_prompt_role="system",
         )

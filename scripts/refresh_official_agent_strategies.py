@@ -20,7 +20,7 @@ from hosted_agent_runtime.production_providers import (
 from scripts.bootstrap_official_agent_pool import _strategy
 
 
-STRATEGY_VERSION = "pydantic-agent-v1"
+STRATEGY_VERSION = "pydantic-agent-v3"
 
 
 def _required_environment(name: str) -> str:

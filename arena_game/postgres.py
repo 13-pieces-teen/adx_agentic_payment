@@ -939,7 +939,7 @@ class PostgresPawnhouseRepository:
                         hc.provider,
                         hc.model,
                         hc.thinking_enabled,
-                        hc.strategy_instructions,
+                        strategy.instructions AS strategy_instructions,
                         hc.max_output_tokens,
                         hc.prompt_version,
                         hc.task_schema_version,
@@ -2502,7 +2502,10 @@ class PostgresPawnhouseRepository:
                 raise PawnhouseRepositoryError("round_not_in_decide")
             market_rows = await connection.fetch(
                 """
-                SELECT good_id, market_price_atomic
+                SELECT
+                    good_id,
+                    market_price_atomic,
+                    final_price_atomic
                 FROM arena402.price_snapshots
                 WHERE game_id = $1
                   AND round_index = (
@@ -2642,6 +2645,12 @@ class PostgresPawnhouseRepository:
                         "market": {
                             row["good_id"]: int(
                                 row["market_price_atomic"]
+                            )
+                            for row in market_rows
+                        },
+                        "event_implied_final": {
+                            row["good_id"]: int(
+                                row["final_price_atomic"]
                             )
                             for row in market_rows
                         },

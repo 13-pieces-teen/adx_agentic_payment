@@ -19,11 +19,43 @@
   request/tool 安全计数已进入 Attempt 元数据。
 - [x] 使用真实 DeepSeek V4 Flash BYOK 直连验证 Thinking + tools + typed
   terminal action；三种官方策略各连续执行两个 `arena.decide` 回合，六次任务均
-  succeeded，且每个 Agent 的 Game Memory 从 v0 单调推进至 v2。该证据不等同于
-  私有 LiteLLM、单玩家 + 九官方 Agent 或生产部署验收。
-- [ ] 继续验证 rejected/late、并发 CAS 和 Worker 重启恢复。
-- [ ] 完成 `game.completed` 跨比赛学习、revision gate 和历史回退。
-- [ ] 完成单玩家 + 九官方 Hosted Agent 的多局、重启和策略对比验收。
+  succeeded，且每个 Agent 的 Game Memory 从 v0 单调推进至 v2。该证据是独立的
+  直连验证，不等同于生产部署验收。
+- [x] 完成 `game.completed` 跨比赛学习闭环：完成局会幂等创建 durable learning
+  job，只读取可验证的排名、净值、终场价格、动作、成交、失败和 usage 汇总；
+  bounded PydanticAI learner 生成五维 policy candidate，经严格 schema、策略类型
+  envelope、单局每维最多 1000 bps 变化和历史动作计数回放后生成新 Strategy
+  Revision；模型自报 confidence 只保存为审计信号。新 revision 只供后续 Game
+  冻结；严重退化时自动恢复 parent revision，同样不改写已开始 Game。
+- [x] 在 2026-08-05 的全新隔离 PostgreSQL 上从 `002` 迁移至 `064`，验证胜局
+  candidate 激活、旧局继续冻结 base revision、下一局冻结 learned revision，以及
+  learned revision 相对 parent 下降至少 2000 bps 后仅对未来局回滚。该证据使用
+  PydanticAI TestModel，不等同于私有 LiteLLM 或真实比赛收益证明。
+- [x] 使用私有 LiteLLM + DeepSeek V4 Flash 完成真实 learner 调用，模型实际执行
+  3 个 request、2 个只读 tool call。随后发现最初 payment-disabled 单回合 1+9
+  试跑把“无成交但因初始组合获利”误当成学习信号；该次 learned revision 的验收
+  结论已撤回。当前 preflight 要求至少两个 task、一个真实 candidate action、一笔
+  `settled` 交易和非零相对净值，在调用模型前拒绝单步、default-only、无成交和
+  随机组合收益。
+- [x] 2026-08-06 的三回合真实 1+9 回归先暴露并修复三类运行时问题：
+  `eventImpliedFinal` 缺失导致同向决策、PydanticAI 将 DeepSeek 输出上限误发为
+  `max_completion_tokens`、以及 `request_limit` 耗尽被误归类为不可重试。
+  DeepSeek 现在接收 `max_tokens`，非 thinking/thinking 单请求分别限制为
+  8192/16384，Agent-run 累计限制为 65536；合法 retry 会保留第一 Attempt usage。
+- [x] `regression-real-hosted-1plus9-v7` 完成 30/30 decide 和 2/2 negotiate，
+  形成 iron 配对、模型报价 `5.880600` 后由对手接受；payment-disabled 按设计
+  收敛为 `settlement_failed`，0 SettlementIntent。该局还暴露两个跨回合 memory
+  patch 因投影时序变为 stale；迁移 `065` 已在下一 task 加载上下文前投影同一
+  Game Agent 的已应用 patch，并在全新 PostgreSQL 集成测试通过。
+- [x] 修复后的 `regression-real-hosted-1plus9-v10` 以退出码 0 完成 30/30
+  decide、4/4 negotiate、warhorse/iron 两次报价与接受；34/34 task 均完成，
+  30/30 decide 都携带四货物 `eventImpliedFinal`，10/10 Agent 的 Game Memory
+  至少为 v3，所有 learning job 因无 `settled` 交易被确定性拒绝，且保持
+  0 SettlementIntent。
+- [ ] 继续验证 rejected/late、并发 CAS、外部多实例 Worker 重启，以及
+  payment-enabled 的真实 `settled` 结果。
+- [ ] 以多局 `settled` 样本校准学习激活和严重退化回滚阈值，并完成
+  aggressive/conservative/balanced 的策略收益对比验收。
 
 ## Product narrative baseline
 
@@ -656,8 +688,8 @@ create game
       Current Game 可安全轮换到新牌组，已有参与者的冻结赛程不被迁移修改。
 - [x] 为无自定义策略的 Hosted Agent 提供受限市场默认策略，把官方池升级为十种
       带现金保留、库存目标、商品排序和买卖阈值的数值画像，并将 Arena 动作输出
-      预算限制为非 thinking 256、thinking 2048 Token；生产可在不重新接触
-      Provider key 的情况下以 `market-v4` 刷新并重新验证官方配置。
+      预算按真实 DeepSeek tool loop 校准为非 thinking 8192、thinking 16384 Token；
+      生产可在不重新接触 Provider key 的情况下刷新并重新验证官方配置。
 - [x] 历史 Game 公共投影返回冻结优先的 `displayName + agentId`，独立前端结果页
       以 Agent 名称为主、短 ID 为辅，不再把 UUID-like `agentId` 当作名称。
 - [x] FCFS 改为价格兼容订单内配对；Hosted Prompt 明确事件不得重复计价、

@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -17,6 +17,15 @@ from arena_core.public_output_policy import PublicOutputPolicy
 
 from .attempts import AttemptCompletion, AttemptCreated, AttemptRecorder
 from .context import HostedArenaAgentContext
+from .learning import (
+    HostedLearningEvidence,
+    HostedStrategyLearningRuntime,
+    LearningGateDecision,
+    StrategyLearningProposal,
+    evaluate_learning_evidence,
+    evaluate_learning_proposal,
+    render_learned_strategy_instructions,
+)
 from .memory import HostedGameMemory
 from .model_factory import PydanticModelFactory
 from .production_providers import ProductionProviderBundle
@@ -35,8 +44,8 @@ from .strategy import StrategyArchetype
 
 
 _LOGGER = logging.getLogger(__name__)
-_ARENA_VISIBLE_OUTPUT_TOKENS = 256
-_ARENA_THINKING_OUTPUT_TOKENS = 2_048
+_ARENA_VISIBLE_OUTPUT_TOKENS = 8_192
+_ARENA_THINKING_OUTPUT_TOKENS = 16_384
 
 
 def arena_action_output_token_budget(
@@ -93,6 +102,22 @@ class ClaimedTask:
     attempt_count: int
     recovery_disposition: str
     first_attempt_number: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedLearningJob:
+    learning_job_id: str
+    game_id: str
+    game_agent_id: str
+    agent_id: str
+    base_strategy_revision_id: str
+    provider: str
+    model: str
+    thinking_enabled: bool
+    max_output_tokens: int
+    secret_ref: str
+    attempt_count: int
+    lease_expires_at: datetime
 
 
 class PostgresHostedWorkerRepository:
@@ -347,6 +372,112 @@ class PostgresHostedWorkerRepository:
             )
         )
 
+    async def claim_learning_jobs(
+        self,
+        worker_id: str,
+        *,
+        limit: int,
+        lease_seconds: int,
+    ) -> tuple[ClaimedLearningJob, ...]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT *
+            FROM claim_hosted_agent_learning_jobs($1, $2, $3)
+            """,
+            worker_id,
+            limit,
+            lease_seconds,
+        )
+        return tuple(
+            ClaimedLearningJob(
+                learning_job_id=str(row["learning_job_id"]),
+                game_id=str(row["game_id"]),
+                game_agent_id=str(row["game_agent_id"]),
+                agent_id=str(row["agent_id"]),
+                base_strategy_revision_id=str(
+                    row["base_strategy_revision_id"]
+                ),
+                provider=str(row["provider"]),
+                model=str(row["model"]),
+                thinking_enabled=bool(row["thinking_enabled"]),
+                max_output_tokens=int(row["max_output_tokens"]),
+                secret_ref=str(row["secret_ref"]),
+                attempt_count=int(row["attempt_count"]),
+                lease_expires_at=row["lease_expires_at"],
+            )
+            for row in rows
+        )
+
+    async def load_learning_evidence(
+        self,
+        worker_id: str,
+        learning_job_id: str,
+    ) -> dict[str, Any]:
+        value = await self._require_pool().fetchval(
+            "SELECT load_hosted_agent_learning_evidence($1, $2)",
+            learning_job_id,
+            worker_id,
+        )
+        return _json_object(value)
+
+    async def complete_learning_job(
+        self,
+        worker_id: str,
+        job: ClaimedLearningJob,
+        *,
+        evidence_hash: str,
+        outcome_score_bps: int,
+        source_config_hash: str,
+        policy_profile: Mapping[str, object],
+        instructions: str,
+        proposal: Mapping[str, object],
+        gate_summary: Mapping[str, object],
+        gate_passed: bool,
+        gate_reason: str,
+    ) -> dict[str, Any]:
+        value = await self._require_pool().fetchval(
+            """
+            SELECT complete_hosted_agent_learning_job(
+                $1, $2, $3, $4, $5, $6::jsonb, $7,
+                $8::jsonb, $9::jsonb, $10, $11
+            )
+            """,
+            job.learning_job_id,
+            worker_id,
+            evidence_hash,
+            outcome_score_bps,
+            source_config_hash,
+            dict(policy_profile),
+            instructions,
+            dict(proposal),
+            dict(gate_summary),
+            gate_passed,
+            gate_reason,
+        )
+        return _json_object(value)
+
+    async def release_learning_job(
+        self,
+        worker_id: str,
+        job: ClaimedLearningJob,
+        *,
+        error_class: str,
+        retryable: bool,
+    ) -> str:
+        return str(
+            await self._require_pool().fetchval(
+                """
+                SELECT release_hosted_agent_learning_job(
+                    $1, $2, $3, $4
+                )
+                """,
+                job.learning_job_id,
+                worker_id,
+                error_class,
+                retryable,
+            )
+        )
+
     async def start_attempt(
         self,
         worker_id: str,
@@ -535,6 +666,14 @@ class DurableHostedWorker:
                 )
             processed += 1
         processed += await self._repository.project_memory_patches(limit=100)
+        learning_jobs = await self._repository.claim_learning_jobs(
+            self._worker_id,
+            limit=1,
+            lease_seconds=self._lease_seconds,
+        )
+        for learning_job in learning_jobs:
+            await self._execute_learning_safely(learning_job)
+            processed += 1
         return processed
 
     async def _execute_task_safely(self, task: ClaimedTask) -> None:
@@ -550,6 +689,33 @@ class DurableHostedWorker:
                 type(exc).__name__,
                 extra={"task_id": task.task.task_id},
             )
+
+    async def _execute_learning_safely(
+        self,
+        job: ClaimedLearningJob,
+    ) -> None:
+        try:
+            await self._execute_learning(job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _LOGGER.error(
+                "hosted_learning_processing_failed_%s",
+                type(exc).__name__,
+                extra={"learning_job_id": job.learning_job_id},
+            )
+            try:
+                await self._repository.release_learning_job(
+                    self._worker_id,
+                    job,
+                    error_class="internal_learning_failure",
+                    retryable=True,
+                )
+            except Exception:
+                _LOGGER.error(
+                    "hosted_learning_release_failed",
+                    extra={"learning_job_id": job.learning_job_id},
+                )
 
     async def run_forever(self, poll_seconds: float = 1.0) -> None:
         while not self._stopping.is_set():
@@ -655,7 +821,17 @@ class DurableHostedWorker:
             )
             return
         except ProviderInvocationError as exc:
-            transient = exc.retryable or exc.outcome_unknown
+            # A malformed availability-probe response does not prove that the
+            # credential or model is invalid. DeepSeek can occasionally spend
+            # the small validation budget without emitting the exact JSON
+            # object, so let the durable job use its existing bounded retry.
+            # Authentication and other deterministic request failures remain
+            # permanent.
+            transient = (
+                exc.retryable
+                or exc.outcome_unknown
+                or exc.code == "invalid_structured_output"
+            )
             await self._repository.complete_validation(
                 self._worker_id,
                 job,
@@ -929,6 +1105,31 @@ class DurableHostedWorker:
                     extra={"task_id": claimed.task.task_id},
                 )
 
+        retry_remaining_ms = max(
+            0,
+            int(
+                (
+                    min(claimed.deadline_at, claimed.task.deadline_at)
+                    - datetime.now(timezone.utc)
+                ).total_seconds()
+                * 1000
+            ),
+        )
+        if (
+            execution.error_code == "invalid_structured_output"
+            and attempt_number < 2
+            and retry_remaining_ms >= 5_000
+        ):
+            await self._execute_pydantic_task(
+                replace(
+                    claimed,
+                    attempt_count=attempt_number,
+                    recovery_disposition="execute",
+                    first_attempt_number=attempt_number + 1,
+                )
+            )
+            return
+
         result, replaced, policy_version = self._sanitize_result(
             claimed,
             execution.result,
@@ -979,6 +1180,225 @@ class DurableHostedWorker:
                     or "runtime_failed"
                 )
             ),
+        )
+
+    async def _execute_learning(self, job: ClaimedLearningJob) -> None:
+        if self._model_factory is None:
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class="adapter_mismatch",
+                retryable=False,
+            )
+            return
+
+        try:
+            evidence = HostedLearningEvidence.model_validate(
+                await self._repository.load_learning_evidence(
+                    self._worker_id,
+                    job.learning_job_id,
+                )
+            )
+        except (ValueError, KeyError):
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class="invalid_learning_evidence",
+                retryable=False,
+            )
+            return
+
+        evidence_decision = evaluate_learning_evidence(evidence)
+        if not evidence_decision.passed:
+            proposal = StrategyLearningProposal(
+                policy_profile=evidence.base_policy_profile,
+                lesson_summary=(
+                    "No strategy candidate was generated because verified "
+                    "action evidence was incomplete."
+                ),
+                adjustments=[
+                    "Keep the current bounded policy until complete applied "
+                    "action evidence is available."
+                ],
+                expected_effect=(
+                    "Avoid learning from defaulted or incomplete runtime "
+                    "evidence."
+                ),
+                confidence_bps=0,
+            )
+            await self._complete_learning_proposal(
+                job,
+                evidence,
+                proposal,
+                evaluate_learning_proposal(evidence, proposal),
+            )
+            return
+
+        remaining_ms = max(
+            0,
+            min(
+                180_000,
+                int(
+                    (
+                        job.lease_expires_at
+                        - datetime.now(timezone.utc)
+                    ).total_seconds()
+                    * 1000
+                ),
+            ),
+        )
+        if remaining_ms <= 0:
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class="deadline_exceeded",
+                retryable=True,
+            )
+            return
+
+        secret = None
+        built_model = None
+        try:
+            secret = await asyncio.wait_for(
+                self._secret_reader.resolve_for_worker(
+                    SecretReference(job.secret_ref)
+                ),
+                timeout=remaining_ms / 1000,
+            )
+            api_key = secret.reveal_for_worker()
+            built_model = self._model_factory.build(
+                provider_id=job.provider,
+                model_id=job.model,
+                api_key=api_key,
+                thinking_enabled=job.thinking_enabled,
+                remaining_timeout_ms=remaining_ms,
+                requested_max_output_tokens=min(
+                    job.max_output_tokens,
+                    2_048,
+                ),
+            )
+            api_key = ""
+        except TimeoutError:
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class="deadline_exceeded",
+                retryable=True,
+            )
+            return
+        except SecretStoreError:
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class="provider_unavailable",
+                retryable=True,
+            )
+            return
+        except (ValueError, KeyError):
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class="adapter_mismatch",
+                retryable=False,
+            )
+            return
+        finally:
+            if secret is not None:
+                secret.close()
+
+        try:
+            execution = await HostedStrategyLearningRuntime(
+                model=built_model.model,
+                model_settings=built_model.settings,
+                actual_model=built_model.resolved.model_id,
+            ).execute(
+                evidence,
+                timeout_seconds=remaining_ms / 1000,
+            )
+        finally:
+            try:
+                await built_model.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _LOGGER.error(
+                    "hosted_learning_model_close_failed_%s",
+                    type(exc).__name__,
+                    extra={"learning_job_id": job.learning_job_id},
+                )
+
+        if execution.proposal is None:
+            error_class = execution.error_code or "runtime_failed"
+            await self._repository.release_learning_job(
+                self._worker_id,
+                job,
+                error_class=error_class,
+                retryable=error_class
+                in {
+                    "rate_limited",
+                    "provider_unavailable",
+                    "request_outcome_unknown",
+                },
+            )
+            return
+
+        proposal = execution.proposal
+        gate = evaluate_learning_proposal(evidence, proposal)
+        await self._complete_learning_proposal(
+            job,
+            evidence,
+            proposal,
+            gate,
+        )
+
+    async def _complete_learning_proposal(
+        self,
+        job: ClaimedLearningJob,
+        evidence: HostedLearningEvidence,
+        proposal: StrategyLearningProposal,
+        gate: LearningGateDecision,
+    ) -> None:
+        instructions = render_learned_strategy_instructions(
+            archetype=evidence.archetype,
+            profile=proposal.policy_profile,
+            adjustments=proposal.adjustments,
+        )
+        evidence_payload = evidence.model_dump(
+            mode="json",
+            by_alias=True,
+        )
+        proposal_payload = proposal.model_dump(
+            mode="json",
+            by_alias=True,
+        )
+        evidence_hash = sha256_identifier(evidence_payload)
+        source_config_hash = sha256_identifier(
+            {
+                "agentId": evidence.agent_id,
+                "baseStrategyRevisionId": (
+                    evidence.base_strategy_revision_id
+                ),
+                "learningJobId": evidence.learning_job_id,
+                "evidenceHash": evidence_hash,
+                "policyProfile": proposal_payload["policyProfile"],
+                "instructions": instructions,
+            }
+        )
+        await self._repository.complete_learning_job(
+            self._worker_id,
+            job,
+            evidence_hash=evidence_hash,
+            outcome_score_bps=evidence.outcome.outcome_score_bps,
+            source_config_hash=source_config_hash,
+            policy_profile=proposal.policy_profile.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            instructions=instructions,
+            proposal=proposal_payload,
+            gate_summary=gate.evidence_summary,
+            gate_passed=gate.passed,
+            gate_reason=gate.reason,
         )
 
     async def _submit_runtime_failure(

@@ -208,7 +208,7 @@ class PostgresArenaParticipationRepository:
                         hc.provider,
                         hc.model,
                         hc.thinking_enabled,
-                        hc.strategy_instructions,
+                        strategy.instructions AS strategy_instructions,
                         hc.prompt_version,
                         hc.task_schema_version,
                         hc.action_schema_version,

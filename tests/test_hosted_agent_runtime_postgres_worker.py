@@ -18,6 +18,7 @@ from arena_agent_contracts import (
 from arena_core.hashing import sha256_identifier
 from hosted_agent_runtime.capabilities import CapabilityRegistry
 from hosted_agent_runtime.postgres_worker import (
+    ClaimedLearningJob,
     ClaimedTask,
     ClaimedValidation,
     DurableHostedWorker,
@@ -58,11 +59,11 @@ def test_arena_action_output_budget_is_small_and_thinking_aware() -> None:
     assert arena_action_output_token_budget(
         configured_tokens=16_384,
         thinking_enabled=False,
-    ) == 256
+    ) == 8_192
     assert arena_action_output_token_budget(
         configured_tokens=16_384,
         thinking_enabled=True,
-    ) == 2_048
+    ) == 16_384
     assert arena_action_output_token_budget(
         configured_tokens=128,
         thinking_enabled=False,
@@ -107,6 +108,14 @@ class _Repository:
     async def project_memory_patches(self, *, limit: int) -> int:
         assert limit == 100
         return 0
+
+    async def claim_learning_jobs(
+        self,
+        *_: object,
+        **__: object,
+    ) -> tuple[()]:
+        self.claim_order.append("learning")
+        return ()
 
 
 class _Reader:
@@ -204,6 +213,23 @@ def test_validation_authentication_failure_is_permanent() -> None:
     ]
 
 
+def test_validation_invalid_output_uses_bounded_job_retry() -> None:
+    repository = _Repository()
+    worker = _worker(
+        repository,
+        _Reader(),
+        _Adapter("invalid_structured_output"),
+    )
+
+    asyncio.run(worker._validate(_job()))
+
+    assert len(repository.completions) == 1
+    completion = repository.completions[0]
+    assert completion["outcome"] == "transient_failure"
+    assert completion["error_class"] == "invalid_structured_output"
+    assert isinstance(completion["retry_at"], datetime)
+
+
 def test_validation_secret_outage_is_durable_transient_failure() -> None:
     repository = _Repository()
     worker = _worker(repository, _Reader(fails=True), _Adapter())
@@ -222,7 +248,7 @@ def test_worker_prioritizes_arena_tasks_before_validation_jobs() -> None:
     worker = _worker(repository, _Reader(), _Adapter())
 
     assert asyncio.run(worker.run_once()) == 0
-    assert repository.claim_order == ["tasks", "validations"]
+    assert repository.claim_order == ["tasks", "validations", "learning"]
 
 
 def test_postgres_result_sink_receives_candidate_action_as_json_object() -> None:
@@ -268,7 +294,7 @@ def test_postgres_result_sink_receives_candidate_action_as_json_object() -> None
     asyncio.run(scenario())
 
 
-def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
+def test_worker_retries_invalid_pydantic_output_and_stages_winner_memory() -> None:
     class _AgentRepository:
         def __init__(self) -> None:
             self.attempts: list[object] = []
@@ -307,7 +333,7 @@ def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
         ) -> int:
             assert worker_id == "worker-pydantic"
             self.attempts.append(attempt)
-            return 1
+            return len(self.attempts)
 
         async def mark_attempt_sent(
             self,
@@ -325,8 +351,9 @@ def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
             **counts: object,
         ) -> bool:
             assert worker_id == "worker-pydantic"
-            assert int(counts["request_count"]) >= 2
-            assert int(counts["tool_call_count"]) >= 1
+            if completion.status == "succeeded":
+                assert int(counts["request_count"]) >= 2
+                assert int(counts["tool_call_count"]) >= 1
             self.completions.append(completion)
             return True
 
@@ -352,10 +379,10 @@ def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
             return "accepted"
 
     class _BuiltModel:
-        def __init__(self) -> None:
+        def __init__(self, action: dict[str, object]) -> None:
             self.model = TestModel(
                 custom_output_args={
-                    "action": {"action": "pass"},
+                    "action": action,
                     "decision_summary": {
                         "plan": "Wait for a stronger bounded opportunity.",
                         "factors": ["Current edge is insufficient."],
@@ -383,12 +410,23 @@ def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
 
     class _ModelFactory:
         def __init__(self) -> None:
-            self.built = _BuiltModel()
-            self.values: dict[str, object] | None = None
+            self.built: list[_BuiltModel] = []
+            self.values: list[dict[str, object]] = []
 
         def build(self, **values: object) -> _BuiltModel:
-            self.values = values
-            return self.built
+            self.values.append(values)
+            action = (
+                {
+                    "action": "buy",
+                    "good": "iron",
+                    "limitPrice": "1.000000",
+                }
+                if not self.built
+                else {"action": "pass"}
+            )
+            built = _BuiltModel(action)
+            self.built.append(built)
+            return built
 
     async def scenario() -> None:
         deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
@@ -436,9 +474,14 @@ def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
 
         await worker._execute_task(claimed)
 
-        assert len(repository.attempts) == 1
-        assert len(repository.completions) == 1
-        assert repository.completions[0].status == "succeeded"
+        assert len(repository.attempts) == 2
+        assert len(repository.completions) == 2
+        assert repository.completions[0].status == "failed"
+        assert (
+            repository.completions[0].error_code
+            == "invalid_structured_output"
+        )
+        assert repository.completions[1].status == "succeeded"
         assert repository.staged[0]["expected_memory_version"] == 4
         assert str(
             repository.staged[0]["runtime_result_id_digest"]
@@ -446,11 +489,246 @@ def test_worker_executes_pydantic_agent_and_stages_memory_patch() -> None:
         assert repository.results[0].status == "succeeded"
         assert repository.results[0].action is not None
         assert repository.results[0].action.action == "pass"
-        assert model_factory.values is not None
-        assert model_factory.values["api_key"] == "test-provider-key"
+        assert len(model_factory.values) == 2
+        assert all(
+            values["api_key"] == "test-provider-key"
+            for values in model_factory.values
+        )
+        assert all(built.closed for built in model_factory.built)
+        assert reader.resolved is not None
+        with pytest.raises(SecretStoreOperationError):
+            reader.resolved.reveal_for_worker()
+
+    asyncio.run(scenario())
+
+
+def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
+    class _LearningRepository:
+        def __init__(self) -> None:
+            self.completion: dict[str, object] | None = None
+            self.releases: list[dict[str, object]] = []
+
+        async def load_learning_evidence(
+            self,
+            worker_id: str,
+            learning_job_id: str,
+        ) -> dict[str, object]:
+            assert worker_id == "worker-learning"
+            assert learning_job_id == "learning:test-1"
+            return {
+                "schemaVersion": "arena.hosted-learning-evidence.v1",
+                "learningJobId": learning_job_id,
+                "gameId": "game-1",
+                "gameAgentId": "game-agent-1",
+                "agentId": "agent-1",
+                "baseStrategyRevisionId": "strategy:test-1",
+                "baseStrategyRevisionNo": 1,
+                "archetype": "balanced",
+                "catalogVersion": "arena.hosted-strategy.v1",
+                "basePolicyProfile": {
+                    "riskBudgetBps": 5000,
+                    "minExpectedEdgeBps": 900,
+                    "maxInventoryConcentrationBps": 7500,
+                    "negotiationConcessionBps": 1200,
+                    "explorationBps": 1200,
+                },
+                "outcome": {
+                    "rank": 2,
+                    "participantCount": 10,
+                    "netWorthAtomic": "21000000",
+                    "averageNetWorthAtomic": "20000000",
+                    "outcomeScoreBps": 3889,
+                },
+                "behavior": {
+                    "taskCount": 12,
+                    "candidateActionCount": 10,
+                    "defaultedTaskCount": 2,
+                    "rejectedResultCount": 0,
+                    "settledTradeCount": 2,
+                    "settlementFailureCount": 0,
+                    "appliedActionCounts": {
+                        "buy": 3,
+                        "sell": 2,
+                        "pass": 7,
+                    },
+                    "inputTokens": 4000,
+                    "outputTokens": 900,
+                    "reasoningTokens": 400,
+                },
+                "finalPricesAtomic": {
+                    "grain": "2000000",
+                    "iron": "5000000",
+                    "warhorse": "8000000",
+                    "gems": "3000000",
+                },
+                "lastGameMemory": {
+                    "schemaVersion": "arena.hosted-game-memory.v1"
+                },
+            }
+
+        async def complete_learning_job(
+            self,
+            worker_id: str,
+            job: ClaimedLearningJob,
+            **values: object,
+        ) -> dict[str, object]:
+            assert worker_id == "worker-learning"
+            assert job.learning_job_id == "learning:test-1"
+            self.completion = values
+            return {
+                "disposition": "activated",
+                "strategyRevisionId": "strategy:learned:test",
+            }
+
+        async def release_learning_job(
+            self,
+            worker_id: str,
+            job: ClaimedLearningJob,
+            **values: object,
+        ) -> str:
+            del worker_id, job
+            self.releases.append(values)
+            return "failed"
+
+    class _LearningBuiltModel:
+        def __init__(self) -> None:
+            self.model = TestModel(
+                custom_output_args={
+                    "policyProfile": {
+                        "riskBudgetBps": 5300,
+                        "minExpectedEdgeBps": 1000,
+                        "maxInventoryConcentrationBps": 7200,
+                        "negotiationConcessionBps": 1100,
+                        "explorationBps": 1300,
+                    },
+                    "lessonSummary": (
+                        "Preserve a little more liquidity after this result."
+                    ),
+                    "adjustments": [
+                        "Preserve slightly more cash before the final event.",
+                        "Require a modestly clearer concentration edge.",
+                    ],
+                    "expectedEffect": (
+                        "Reduce concentration without abandoning good trades."
+                    ),
+                    "confidenceBps": 7500,
+                }
+            )
+            self.settings = None
+            self.resolved = SimpleNamespace(
+                provider_id="official-deepseek",
+                model_id="deepseek-v4-flash",
+                thinking_enabled=True,
+            )
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _LearningModelFactory:
+        def __init__(self) -> None:
+            self.built = _LearningBuiltModel()
+
+        def build(self, **_: object) -> _LearningBuiltModel:
+            return self.built
+
+    class _IncompleteLearningRepository(_LearningRepository):
+        async def load_learning_evidence(
+            self,
+            worker_id: str,
+            learning_job_id: str,
+        ) -> dict[str, object]:
+            payload = await super().load_learning_evidence(
+                worker_id,
+                learning_job_id,
+            )
+            behavior = dict(payload["behavior"])  # type: ignore[arg-type]
+            behavior.update(
+                {
+                    "candidateActionCount": 0,
+                    "defaultedTaskCount": 12,
+                    "appliedActionCounts": {},
+                }
+            )
+            payload["behavior"] = behavior
+            return payload
+
+    class _UnusedLearningModelFactory:
+        def build(self, **_: object) -> object:
+            raise AssertionError(
+                "incomplete evidence must not invoke a model"
+            )
+
+    async def scenario() -> None:
+        repository = _LearningRepository()
+        reader = _Reader()
+        model_factory = _LearningModelFactory()
+        worker = DurableHostedWorker(
+            repository=repository,  # type: ignore[arg-type]
+            providers=ProductionProviderBundle(
+                registry=CapabilityRegistry(),
+                adapters={},
+            ),
+            secret_reader=reader,
+            worker_id="worker-learning",
+            model_factory=model_factory,  # type: ignore[arg-type]
+        )
+        job = ClaimedLearningJob(
+            learning_job_id="learning:test-1",
+            game_id="game-1",
+            game_agent_id="game-agent-1",
+            agent_id="agent-1",
+            base_strategy_revision_id="strategy:test-1",
+            provider="official-deepseek",
+            model="deepseek-v4-flash",
+            thinking_enabled=True,
+            max_output_tokens=16_384,
+            secret_ref="arena402/hosted-model/credential-1",
+            attempt_count=1,
+            lease_expires_at=(
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ),
+        )
+
+        await worker._execute_learning(job)
+
+        assert repository.releases == []
+        assert repository.completion is not None
+        assert repository.completion["gate_passed"] is True
+        assert repository.completion["gate_reason"] == "passed"
+        assert str(repository.completion["evidence_hash"]).startswith(
+            "sha256:"
+        )
+        assert "public archetype balanced" in str(
+            repository.completion["instructions"]
+        )
         assert model_factory.built.closed is True
         assert reader.resolved is not None
         with pytest.raises(SecretStoreOperationError):
             reader.resolved.reveal_for_worker()
+
+        incomplete_repository = _IncompleteLearningRepository()
+        unused_reader = _Reader()
+        preflight_worker = DurableHostedWorker(
+            repository=incomplete_repository,  # type: ignore[arg-type]
+            providers=ProductionProviderBundle(
+                registry=CapabilityRegistry(),
+                adapters={},
+            ),
+            secret_reader=unused_reader,
+            worker_id="worker-learning",
+            model_factory=_UnusedLearningModelFactory(),  # type: ignore[arg-type]
+        )
+
+        await preflight_worker._execute_learning(job)
+
+        assert incomplete_repository.releases == []
+        assert incomplete_repository.completion is not None
+        assert incomplete_repository.completion["gate_passed"] is False
+        assert (
+            incomplete_repository.completion["gate_reason"]
+            == "incomplete_verified_evidence"
+        )
+        assert unused_reader.resolved is None
 
     asyncio.run(scenario())

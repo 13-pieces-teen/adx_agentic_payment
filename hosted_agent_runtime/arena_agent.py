@@ -67,13 +67,18 @@ _TASK_INSTRUCTIONS = {
         "This is an arena.decide task. Return only buy, sell, or pass. For "
         "buy/sell use quantity 1, an allowed good, and an optional private "
         "limitPrice. Omit publicPrice and message because decide actions are "
-        "not public market listings."
+        "not public market listings. Use eventImpliedFinal as the fair-value "
+        "anchor derived only from already revealed public events. Compare it "
+        "with market for every allowed good; do not apply event effects twice "
+        "or assume unrevealed future events."
     ),
     "arena.market.intent": (
         "This is an arena.market.intent task. Return only buy, sell, or pass. "
         "A buy/sell must include quantity 1, an allowed good, publicPrice, "
         "and private limitPrice; buyer publicPrice cannot exceed limitPrice, "
-        "and seller publicPrice cannot be below limitPrice."
+        "and seller publicPrice cannot be below limitPrice. Use "
+        "eventImpliedFinal as the fair-value anchor derived only from already "
+        "revealed events, and compare every allowed good."
     ),
     "arena.market.rfq": (
         "This is an arena.market.rfq task. Return request_negotiations for "

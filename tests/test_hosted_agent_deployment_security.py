@@ -3,8 +3,34 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_litellm_vault_import_does_not_require_pydantic_ai() -> None:
+    guarded_import = """
+import builtins
+real_import = builtins.__import__
+def guard(name, *args, **kwargs):
+    if name == "pydantic_ai" or name.startswith("pydantic_ai."):
+        raise RuntimeError("pydantic_ai must stay outside the vault bootstrap")
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = guard
+from hosted_agent_runtime.production_secrets import configured_backend
+assert callable(configured_backend)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", guarded_import],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_edge_access_logs_never_emit_oauth_urls_or_query_values() -> None:

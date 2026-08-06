@@ -33,6 +33,10 @@ def inspect_portfolio(
             good: format(price, "f")
             for good, price in task_input.market.items()
         }
+        value["eventImpliedFinal"] = {
+            good: format(price, "f")
+            for good, price in task_input.event_implied_final.items()
+        }
         value["allowedActions"] = list(task_input.limits.allowed_actions)
         value["allowedGoods"] = list(task_input.limits.allowed_goods)
     return value

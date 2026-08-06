@@ -1661,11 +1661,60 @@ stable_random_key =
 
 #### V2-4 跨比赛学习
 
-- [ ] `game.completed` 创建幂等 learning job；
-- [ ] 只读取可验证的行动、成交、价格、净值和排名；
-- [ ] 生成 candidate Strategy Revision 和安全证据摘要；
-- [ ] schema/replay gate 通过后只对下一场 Game 激活；
-- [ ] 保存历史 revision 并支持自动回退到上一 active 版本。
+- [x] `game.completed` 创建幂等 durable learning job；
+- [x] 只读取可验证的行动、成交、价格、净值、排名、失败和 usage 汇总；
+- [x] bounded PydanticAI learner 生成 candidate Strategy Revision 和安全证据
+  摘要，不持久化 raw messages 或 reasoning；
+- [x] learner 调用前要求至少两个 task、至少一个真实 candidate action、至少一笔
+  `settled` 交易和非零相对净值结果；单步、default-only、无成交或纯随机组合收益
+  不进入策略学习；
+- [x] 严格 schema、策略类型 envelope、单局每维最多 1000 bps 变化和历史动作
+  计数回放全部通过后，只对下一场 Game 激活；模型自报 confidence 仅作审计信号，
+  不作为安全权威；
+- [x] 保存完整 revision/evaluation 历史；已学习版本相对 parent 的平均结果分数
+  严重下降至少 2000 bps 时自动恢复 parent，只影响之后加入的 Game。
+
+首版 policy surface 固定为 `risk_budget_bps`、`min_expected_edge_bps`、
+`max_inventory_concentration_bps`、`negotiation_concession_bps` 和
+`exploration_bps`。当前 replay gate 验证的是历史动作证据完整性、计数一致性和
+Arena 合同安全，不是离线经济收益模拟；收益阈值仍需用真实多局结果校准。
+
+2026-08-06 隔离验收在全新 PostgreSQL 上执行 `002`–`065`，并证明：
+
+- 胜局 learning job 通过 TestModel 产生并激活 learned revision；
+- 已完成局仍引用原 base revision；
+- 下一局加入时冻结 learned revision 和渲染后的 bounded instructions；
+- 下一局严重退化时恢复 parent revision，而该局已冻结的 learned revision 不变。
+
+这份证据验证持久化、最小权限函数、Worker 编排和跨局版本边界，不等同于私有
+LiteLLM 真实调用、真实策略收益或生产部署验收。
+
+私有 LiteLLM + DeepSeek V4 Flash 的隔离真实模型验收同时发现并关闭了
+“看似成功但证据不足”的边界：
+
+- learner 实际执行 3 个 request 和 2 个只读 tool call，typed candidate 经过
+  确定性 gate；模型自报 confidence 仅作审计；
+- 首次 payment-disabled 单回合 1+9 虽然 10/10 决策成功，但从无成交局激活
+  learned revision 的结论被后续审计撤回；净值差来自初始组合和事件价格，不能
+  证明策略行动有效。当前所有此类 job 会在模型调用前拒绝；
+- 三回合 `regression-real-hosted-1plus9-v7` 完成 30/30 decide、2/2
+  negotiate，形成 iron 配对、`5.880600` 报价和 accept；支付关闭后按设计进入
+  `settlement_failed`，没有 SettlementIntent；
+- PydanticAI 的 DeepSeek profile 现在把上限发送为 `max_tokens`，而不是错误的
+  `max_completion_tokens`；非 thinking/thinking 单请求上限为 8192/16384，
+  Agent-run 累计上限 65536。`request_limit` 耗尽作为结构化输出失败允许同
+  Runtime 唯一重试，并保存已经产生的 usage；
+- v7 暴露下一回合可能在上一 applied memory patch 投影前加载旧版本；迁移 `065`
+  在加载新 task context 前按同一 `game_agent_id` 投影全部已终态 patch。全新
+  PostgreSQL 集成测试已证明第二个 task 读取 memory v1，而不是再次从 v0 生成
+  会变 stale 的补丁。
+- 修复后的 `regression-real-hosted-1plus9-v10` 以退出码 0 完成 34/34 task：
+  30/30 decide、4/4 negotiate、warhorse/iron 两次 proposal/accept，10/10
+  Game Agent 至少推进到 memory v3；payment-disabled 下 10 个 learning job
+  全部因无 `settled` 交易被拒绝，并保持 0 SettlementIntent。
+
+这些仍是 payment-disabled 本地隔离证据，不等同于真实 `settled` 跨局收益、
+多实例 Worker 重启或生产部署验收。
 
 #### V2-5 删除与生产验收
 
@@ -1673,9 +1722,11 @@ stable_random_key =
 - [x] 人工确认后物理删除 legacy Driver/Prompt 实现及对应测试，并迁出 Attempt
   与 Runtime 合同常量；
 - [x] 官方 Agent 与私有 LiteLLM 上游都固定为 `deepseek-v4-flash`；
-- [ ] 完成单玩家 + 九官方 Agent 的多局 E2E；
-- [ ] 证明不同策略类型、独立记忆、重启恢复和下一局学习；
-- [ ] 更新 README/Roadmap/部署证据。
+- [x] 完成单玩家 + 九官方 Agent 的三回合 payment-disabled 决策、配对和谈判 E2E；
+- [ ] 完成 payment-enabled 多局、`settled` 策略收益对比和多实例 Worker 重启恢复；
+- [x] 证明不同策略类型和独立 Game Memory；
+- [x] 证明下一局学习、历史 revision 和只影响未来局的自动回滚；
+- [x] 更新 README/Roadmap 的本地隔离证据；部署证据仍待生产切换。
 
 ### 22.5 必须通过的行为测试
 
@@ -1689,3 +1740,4 @@ stable_random_key =
 - PydanticAI 在限制内调用只读工具并返回唯一合法 terminal action；
 - raw reasoning、Secret 和不可信公开文本不进入记忆；
 - 新 revision 不影响正在进行的 Game。
+- learning job 重试、stale-base 拒绝和自动回滚都不会改写已冻结的 Game Agent。
