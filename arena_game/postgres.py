@@ -27,6 +27,11 @@ from arena_agent_contracts import (
     SellAction,
 )
 from arena_core.hashing import sha256_identifier, sha256_text_identifier
+from arena_core.candidate_validation import (
+    market_intent_candidate_violation,
+    market_rfq_candidate_violation,
+    market_select_candidate_violation,
+)
 from arena_core.models import AppliedArenaAction
 from db_pool_config import api_pool_max_size
 
@@ -240,6 +245,7 @@ class PostgresPawnhouseRepository:
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
         official_fill_after_seconds: int = 300,
         settlement_config: SettlementConfig | None = None,
+        market_protocol: str = "fcfs.v1",
     ) -> dict[str, object]:
         """Atomically keep one joinable/running product Game authoritative."""
 
@@ -257,6 +263,8 @@ class PostgresPawnhouseRepository:
             raise PawnhouseRepositoryError(
                 "invalid_official_fill_after_seconds"
             )
+        if market_protocol not in {"fcfs.v1", "agent_a2a.v1"}:
+            raise PawnhouseRepositoryError("invalid_market_protocol")
 
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
@@ -284,7 +292,7 @@ class PostgresPawnhouseRepository:
                 "gems": 0,
             },
             "fixedTradeQuantity": 1,
-            "marketProtocol": "fcfs.v1",
+            "marketProtocol": market_protocol,
             "goldScale": 1_000_000,
             "settlement": resolved_settlement.to_snapshot(),
             "currentGameManaged": True,
@@ -333,7 +341,7 @@ class PostgresPawnhouseRepository:
                     max_negotiation_turns=max_negotiation_turns,
                     min_participants=start_threshold,
                     max_participants=max_participants,
-                    market_protocol="fcfs.v1",
+                    market_protocol=market_protocol,
                     config=config,
                     operator_user_id=None,
                     claim_current=False,
@@ -3919,6 +3927,24 @@ class PostgresPawnhouseRepository:
                             dict(applied_action),
                             strict=True,
                         )
+                        violation = market_intent_candidate_violation(
+                            task_input,
+                            action,
+                        )
+                        if violation is not None:
+                            projection = {
+                                "taskId": str(row["task_id"]),
+                                "resultId": str(row["result_id"]),
+                                "kind": str(row["task_kind"]),
+                                "outcome": "default_pass",
+                                "projected": False,
+                                "rejectionReason": violation,
+                            }
+                            await self._record_market_projection_locked(
+                                connection,
+                                row=row,
+                            )
+                            return projection
                         projection = await self._project_market_intent_locked(
                             connection,
                             row=row,
@@ -3933,6 +3959,24 @@ class PostgresPawnhouseRepository:
                             dict(applied_action),
                             strict=True,
                         )
+                        violation = market_rfq_candidate_violation(
+                            task_input,
+                            action,
+                        )
+                        if violation is not None:
+                            projection = {
+                                "taskId": str(row["task_id"]),
+                                "resultId": str(row["result_id"]),
+                                "kind": str(row["task_kind"]),
+                                "outcome": "market_timeout",
+                                "projected": False,
+                                "rejectionReason": violation,
+                            }
+                            await self._record_market_projection_locked(
+                                connection,
+                                row=row,
+                            )
+                            return projection
                         projection = await self._project_market_rfq_locked(
                             connection,
                             row=row,
@@ -3949,6 +3993,24 @@ class PostgresPawnhouseRepository:
                                 strict=True,
                             )
                         )
+                        violation = market_select_candidate_violation(
+                            task_input,
+                            action,
+                        )
+                        if violation is not None:
+                            projection = {
+                                "taskId": str(row["task_id"]),
+                                "resultId": str(row["result_id"]),
+                                "kind": str(row["task_kind"]),
+                                "outcome": "market_timeout",
+                                "projected": False,
+                                "rejectionReason": violation,
+                            }
+                            await self._record_market_projection_locked(
+                                connection,
+                                row=row,
+                            )
+                            return projection
                         projection = (
                             await self._project_market_selection_locked(
                                 connection,

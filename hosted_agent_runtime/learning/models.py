@@ -16,7 +16,6 @@ from pydantic import (
 from hosted_agent_runtime.strategy import (
     STRATEGY_CATALOG_VERSION_V1,
     StrategyArchetype,
-    strategy_preset,
 )
 
 
@@ -162,7 +161,7 @@ class LearningBehaviorSummary(_LearningModel):
 
 
 class HostedLearningEvidence(_LearningModel):
-    schema_version: str = "arena.hosted-learning-evidence.v1"
+    schema_version: str = "arena.hosted-learning-evidence.v2"
     learning_job_id: SafeLearningText
     game_id: SafeLearningText
     game_agent_id: SafeLearningText
@@ -171,6 +170,10 @@ class HostedLearningEvidence(_LearningModel):
     base_strategy_revision_no: int = Field(ge=1)
     archetype: StrategyArchetype
     catalog_version: SafeLearningText
+    base_strategy_instructions: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=4_000, strip_whitespace=True),
+    ]
     base_policy_profile: StrategyPolicyProfile
     outcome: LearningOutcome
     behavior: LearningBehaviorSummary
@@ -213,18 +216,24 @@ class StrategyLearningProposal(_LearningModel):
 def render_learned_strategy_instructions(
     *,
     archetype: StrategyArchetype,
+    base_strategy_instructions: str,
     profile: StrategyPolicyProfile,
     adjustments: list[str],
 ) -> str:
-    preset = strategy_preset(archetype)
-    lessons = " ".join(
-        f"Lesson {index}: {value.strip()}"
-        for index, value in enumerate(adjustments, start=1)
-    )
-    rendered = (
-        f"Strategy catalog {STRATEGY_CATALOG_VERSION_V1}; public archetype "
-        f"{archetype.value}. {preset.instructions} "
-        "Learned bounded policy: "
+    if (
+        type(base_strategy_instructions) is not str
+        or not base_strategy_instructions.strip()
+    ):
+        raise ValueError("base strategy instructions must be non-empty")
+    if not adjustments:
+        raise ValueError("at least one learned adjustment is required")
+
+    foundation = base_strategy_instructions.strip()
+    header = (
+        f"{foundation} "
+        "Learned bounded policy; "
+        f"public archetype {archetype.value}; "
+        f"catalog {STRATEGY_CATALOG_VERSION_V1}: "
         f"risk budget {profile.risk_budget_bps} bps; "
         f"minimum expected edge {profile.min_expected_edge_bps} bps; "
         "maximum marked inventory concentration "
@@ -232,14 +241,30 @@ def render_learned_strategy_instructions(
         "total negotiation concession budget "
         f"{profile.negotiation_concession_bps} bps; "
         f"exploration budget {profile.exploration_bps} bps. "
-        f"{lessons} "
+    )
+    guard = (
         "Treat every value as a private preference, never as permission to "
         "violate Arena cash, inventory, price, deadline, settlement, privacy, "
         "or typed-action constraints."
     )
-    if len(rendered) > 4_000:
+    selected_lessons: list[str] = []
+    for index, value in enumerate(adjustments, start=1):
+        candidate_lessons = [
+            *selected_lessons,
+            f"Lesson {index}: {value.strip()}",
+        ]
+        candidate = (
+            header
+            + " ".join(candidate_lessons)
+            + " "
+            + guard
+        )
+        if len(candidate) > 4_000:
+            break
+        selected_lessons = candidate_lessons
+    if not selected_lessons:
         raise ValueError("learned strategy instructions exceed the limit")
-    return rendered
+    return header + " ".join(selected_lessons) + " " + guard
 
 
 __all__ = [

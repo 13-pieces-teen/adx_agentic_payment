@@ -22,7 +22,10 @@ from arena_agent_contracts import (
 from .hashing import sha256_identifier
 from .ingress_security import secure_config_snapshot
 from .models import ArenaTaskRecord
-from .repository import ArenaCoreRepository
+from .repository import (
+    ArenaCoreRepository,
+    ArenaIdempotencyConflictError,
+)
 
 
 class ArenaTaskFactory:
@@ -181,8 +184,6 @@ class ArenaTaskFactory:
         now = self._clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("Arena Task Factory clock must return an aware datetime")
-        if participant_view.deadline_at <= now:
-            raise ValueError("Arena task deadline must be in the future")
 
         participant_snapshot = participant_view.model_copy(deep=True)
         # Public Arena snapshots are also a durable boundary. Re-scan every
@@ -198,6 +199,24 @@ class ArenaTaskFactory:
         config_snapshot_copy = secure_config_snapshot(config_snapshot)
         input_hash = sha256_identifier(participant_snapshot)
         config_hash = sha256_identifier(config_snapshot_copy)
+        if participant_snapshot.deadline_at <= now:
+            existing = await self._repository.get_task_by_idempotency(
+                game_agent_id=game_agent_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing is None:
+                raise ValueError("Arena task deadline must be in the future")
+            if (
+                existing.task.kind != kind
+                or existing.task.input_hash != input_hash
+                or existing.config_hash != config_hash
+            ):
+                raise ArenaIdempotencyConflictError(
+                    "Elapsed Arena task recovery conflicts with its "
+                    "frozen snapshot"
+                )
+            return existing
+
         task = ArenaAgentTaskV1(
             task_id=self._task_id_factory(),
             kind=kind,

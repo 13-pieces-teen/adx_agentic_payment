@@ -602,7 +602,7 @@ def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
             assert worker_id == "worker-learning"
             assert learning_job_id == "learning:test-1"
             return {
-                "schemaVersion": "arena.hosted-learning-evidence.v1",
+                "schemaVersion": "arena.hosted-learning-evidence.v2",
                 "learningJobId": learning_job_id,
                 "gameId": "game-1",
                 "gameAgentId": "game-agent-1",
@@ -611,6 +611,10 @@ def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
                 "baseStrategyRevisionNo": 1,
                 "archetype": "balanced",
                 "catalogVersion": "arena.hosted-strategy.v1",
+                "baseStrategyInstructions": (
+                    "Stable numeric strategy: buy grain at or below "
+                    "2.100000 and sell excess grain at or above 1.900000."
+                ),
                 "basePolicyProfile": {
                     "riskBudgetBps": 5000,
                     "minExpectedEdgeBps": 900,
@@ -790,6 +794,9 @@ def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
         assert "public archetype balanced" in str(
             repository.completion["instructions"]
         )
+        assert "sell excess grain at or above 1.900000" in str(
+            repository.completion["instructions"]
+        )
         assert model_factory.built.closed is True
         assert model_factory.values is not None
         assert (
@@ -825,3 +832,32 @@ def test_worker_learns_completed_game_and_submits_gated_revision() -> None:
         assert unused_reader.resolved is None
 
     asyncio.run(scenario())
+
+
+def test_learning_repository_loads_foundation_aware_evidence() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.query = ""
+
+        async def fetchval(self, query: str, *args: object) -> object:
+            self.query = query
+            assert args == ("learning:test-1", "worker-learning")
+            return {
+                "schemaVersion": "arena.hosted-learning-evidence.v2",
+                "baseStrategyInstructions": "Stable strategy foundation.",
+            }
+
+    pool = _Pool()
+    repository = PostgresHostedWorkerRepository("", pool=pool)
+
+    payload = asyncio.run(
+        repository.load_learning_evidence(
+            "worker-learning",
+            "learning:test-1",
+        )
+    )
+
+    assert "load_hosted_agent_learning_evidence_v2" in pool.query
+    assert payload["baseStrategyInstructions"] == (
+        "Stable strategy foundation."
+    )

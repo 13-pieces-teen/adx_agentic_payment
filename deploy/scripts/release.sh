@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "Usage: $0 --archive PATH --commit SHA --checksum SHA256 --release-dir PATH --current-game-round-count N [--refresh-official-strategies true|false] [--expected-public-ip IPv4]" >&2
+  echo "Usage: $0 --archive PATH --commit SHA --checksum SHA256 --release-dir PATH --current-game-round-count N --current-game-market-protocol fcfs.v1|agent_a2a.v1 [--refresh-official-strategies true|false] [--expected-public-ip IPv4]" >&2
   exit 2
 }
 
@@ -12,6 +12,7 @@ checksum=
 release_dir=
 expected_public_ip=
 current_game_round_count=
+current_game_market_protocol=
 refresh_official_strategies=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -43,6 +44,11 @@ while [ "$#" -gt 0 ]; do
     --current-game-round-count)
       [ "$#" -ge 2 ] || usage
       current_game_round_count=$2
+      shift 2
+      ;;
+    --current-game-market-protocol)
+      [ "$#" -ge 2 ] || usage
+      current_game_market_protocol=$2
       shift 2
       ;;
     --refresh-official-strategies)
@@ -77,6 +83,13 @@ if [ "${current_game_round_count}" -lt 1 ] \
   echo "Current Game round count must be between 1 and 10." >&2
   exit 1
 fi
+case "${current_game_market_protocol}" in
+  fcfs.v1|agent_a2a.v1) ;;
+  *)
+    echo "Current Game market protocol must be fcfs.v1 or agent_a2a.v1." >&2
+    exit 1
+    ;;
+esac
 case "${refresh_official_strategies}" in
   true|false) ;;
   *)
@@ -237,6 +250,7 @@ cp -p -- "${release_dir}/deploy/.env" "${staging_dir}/deploy/.env"
   # shellcheck source=deploy/scripts/lib.sh
   . "${staging_dir}/deploy/scripts/lib.sh"
   set_env_value ADX_CURRENT_GAME_ROUND_COUNT "${current_game_round_count}"
+  set_env_value ADX_CURRENT_GAME_MARKET_PROTOCOL "${current_game_market_protocol}"
 )
 for runtime_dir in artifacts secrets official-litellm; do
   if [ -d "${release_dir}/deploy/${runtime_dir}" ]; then

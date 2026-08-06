@@ -305,6 +305,52 @@ def test_intent_projection_persists_private_limit_but_never_emits_it() -> None:
     asyncio.run(scenario())
 
 
+def test_legacy_overprecise_intent_candidate_is_receipted_as_noop() -> None:
+    async def scenario() -> None:
+        result_id = "runtime:" + ("7" * 64)
+        connection = _ProjectionConnection(
+            _row(
+                "arena.market.intent",
+                result_id,
+                _intent_input(),
+                {
+                    "action": "buy",
+                    "good": "grain",
+                    "publicPrice": "1.8000001",
+                    "limitPrice": "2.0000001",
+                    "message": "希望买入粮草。",
+                },
+            )
+        )
+        repository = PostgresPawnhouseRepository(
+            "",
+            pool=_Pool(connection),
+        )
+
+        receipt = await repository.project_agent_market_application(
+            _application("arena.market.intent", result_id)
+        )
+
+        assert receipt == {
+            "taskId": "task:arena.market.intent",
+            "resultId": result_id,
+            "kind": "arena.market.intent",
+            "outcome": "default_pass",
+            "projected": False,
+            "rejectionReason": "price_precision_exceeded",
+        }
+        assert not any(
+            "INSERT INTO arena402.market_intents" in call[1]
+            for call in connection.calls
+        )
+        assert any(
+            "INSERT INTO arena402.market_projection_receipts" in call[1]
+            for call in connection.calls
+        )
+
+    asyncio.run(scenario())
+
+
 def test_one_rfq_result_projects_one_durable_attempt() -> None:
     async def scenario() -> None:
         result_id = "runtime:" + ("2" * 64)

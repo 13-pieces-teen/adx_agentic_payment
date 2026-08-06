@@ -8,7 +8,12 @@
 > 经自建 Facilitator 的新鲜 Injective EVM testnet 交易、链上确认和库存提交已完成；
 > 十个独立 Codex Connector 已完成八回合 `agent_a2a.v1` 完整比赛；Claude Code
 > 因其外部 API/证书连接问题不作为该阶段阻塞。公共第三方 Facilitator 兼容、
-> payment-enabled A2A 完整比赛和完整生产验收尚未完成。
+> 2026-08-06 的 Phase D 中间验收已由一名真实 Codex Connector 和九名
+> PydanticAI Hosted Agent 完成八回合 `agent_a2a.v1`，三笔隔离 mUSDC testnet
+> 支付均在确认后提交库存，并产生终场排名和后续 Game 冻结的 learned revision。
+> 该局不是 `arena402-g` 或生产 Current Game；公共第三方 Facilitator、正式
+> payment-enabled Current Game 和完整生产验收尚未完成。Native A2A Endpoint
+> 顺延至 Phase E。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 第一次参赛见 [`player-guide.md`](player-guide.md)。本文维护游戏规则、跨模块状态

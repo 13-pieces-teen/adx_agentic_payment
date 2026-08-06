@@ -297,6 +297,9 @@ async def main() -> None:
         max_negotiation_turns=int(
             os.getenv("ADX_CURRENT_GAME_MAX_NEGOTIATION_TURNS", "3")
         ),
+        market_protocol=os.getenv(
+            "ADX_CURRENT_GAME_MARKET_PROTOCOL", "fcfs.v1"
+        ),
     )
     official_agent_filler = OfficialAgentFiller(repository=pawnhouse)
     agent_market_projection = AgentDrivenMarketProjectionWorker(pawnhouse)

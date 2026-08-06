@@ -127,6 +127,25 @@ def test_release_applies_the_frozen_current_game_round_count() -> None:
     assert preserve_index < configure_index < backup_index
 
 
+def test_release_applies_an_allowlisted_current_game_market_protocol() -> None:
+    assert "PROD_CURRENT_GAME_MARKET_PROTOCOL" in WORKFLOW
+    assert "--current-game-market-protocol" in WORKFLOW
+    assert "--current-game-market-protocol" in RELEASE
+    assert (
+        'set_env_value ADX_CURRENT_GAME_MARKET_PROTOCOL '
+        '"${current_game_market_protocol}"'
+    ) in RELEASE
+    assert 'fcfs.v1|agent_a2a.v1) ;;' in RELEASE
+    preserve_index = RELEASE.index(
+        'cp -p -- "${release_dir}/deploy/.env"'
+    )
+    configure_index = RELEASE.index(
+        "set_env_value ADX_CURRENT_GAME_MARKET_PROTOCOL"
+    )
+    backup_index = RELEASE.index("sh deploy/scripts/backup.sh")
+    assert preserve_index < configure_index < backup_index
+
+
 def test_release_refreshes_official_strategies_after_runtime_deploy() -> None:
     assert "--refresh-official-strategies" in WORKFLOW
     assert "--refresh-official-strategies" in RELEASE

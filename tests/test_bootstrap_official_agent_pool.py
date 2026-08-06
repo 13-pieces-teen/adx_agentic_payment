@@ -13,6 +13,8 @@ from scripts.bootstrap_official_agent_pool import (
 )
 from scripts.refresh_official_agent_strategies import (
     STRATEGY_VERSION,
+    _parser as _refresh_parser,
+    _select_official_rows,
     _update_idempotency_key,
 )
 
@@ -54,17 +56,60 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
     assert all("zero-holding good" in strategy for strategy in first_cycle)
     assert all("next legal good" in strategy for strategy in first_cycle)
     assert all(
+        "Strategy release pydantic-agent-v4" in strategy
+        for strategy in first_cycle
+    )
+    assert all(
+        "excess-inventory sell is a qualifying rebalancing action"
+        in strategy
+        for strategy in first_cycle
+    )
+    assert all(
+        "must not pass while a legal numeric or rebalancing action qualifies"
+        in strategy
+        for strategy in first_cycle
+    )
+    assert all(
         len(strategy.encode("utf-8")) <= MAX_STRATEGY_BYTES
         for strategy in first_cycle
     )
 
 
 def test_official_strategy_refresh_has_a_versioned_stable_idempotency_key() -> None:
-    assert STRATEGY_VERSION == "pydantic-agent-v3"
+    assert STRATEGY_VERSION == "pydantic-agent-v4"
     assert (
         _update_idempotency_key("agent-official-001")
-        == "official-strategy-pydantic-agent-v3-agent-official-001"
+        == "official-strategy-pydantic-agent-v4-agent-official-001"
     )
+
+
+def test_official_strategy_refresh_can_select_specific_priorities() -> None:
+    rows = [
+        {"agent_id": "agent-1", "priority": 1},
+        {"agent_id": "agent-3", "priority": 3},
+        {"agent_id": "agent-4", "priority": 4},
+    ]
+
+    selected = _select_official_rows(rows, priorities=(3, 4))
+
+    assert [row["agent_id"] for row in selected] == [
+        "agent-3",
+        "agent-4",
+    ]
+
+    with pytest.raises(RuntimeError, match="not enabled"):
+        _select_official_rows(rows, priorities=(2,))
+
+    with pytest.raises(RuntimeError, match="unique"):
+        _select_official_rows(rows, priorities=(3, 3))
+
+
+def test_official_strategy_refresh_cli_accepts_repeatable_priority() -> None:
+    args = _refresh_parser().parse_args(
+        ["--priority", "3", "--priority", "4"]
+    )
+
+    assert args.priority == [3, 4]
 
 
 @pytest.mark.parametrize("contents", ["", "two words", "line1\nline2"])

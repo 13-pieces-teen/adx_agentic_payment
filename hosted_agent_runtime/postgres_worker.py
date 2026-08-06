@@ -414,7 +414,7 @@ class PostgresHostedWorkerRepository:
         learning_job_id: str,
     ) -> dict[str, Any]:
         value = await self._require_pool().fetchval(
-            "SELECT load_hosted_agent_learning_evidence($1, $2)",
+            "SELECT load_hosted_agent_learning_evidence_v2($1, $2)",
             learning_job_id,
             worker_id,
         )
@@ -1361,6 +1361,9 @@ class DurableHostedWorker:
     ) -> None:
         instructions = render_learned_strategy_instructions(
             archetype=evidence.archetype,
+            base_strategy_instructions=(
+                evidence.base_strategy_instructions
+            ),
             profile=proposal.policy_profile,
             adjustments=proposal.adjustments,
         )

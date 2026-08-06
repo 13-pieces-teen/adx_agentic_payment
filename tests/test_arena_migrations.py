@@ -228,6 +228,48 @@ HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH = (
     / "migrations"
     / "066_hosted_agent_memory_candidate_outcome.sql"
 )
+HOSTED_AGENT_STRATEGY_FOUNDATION_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "067_hosted_agent_strategy_foundation.sql"
+)
+ARENA_MONEY_PRECISION_POLICY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "068_arena_money_precision_policy.sql"
+)
+ARENA_MONEY_PRECISION_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "069_arena_money_precision_run_recovery.sql"
+)
+ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "070_arena_elapsed_task_run_recovery.sql"
+)
+HOSTED_LARGE_FOUNDATION_LEARNING_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "071_hosted_agent_large_foundation_learning_recovery.sql"
+)
+ARENA_MONEY_PRECISION_PRIVILEGES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "072_arena_money_precision_function_privileges.sql"
+)
+ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "073_arena_precision_privilege_run_recovery.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1278,5 +1320,179 @@ def test_hosted_agent_memory_only_learns_applied_candidate_outcomes(
     )
     assert (
         HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_learning_preserves_strategy_foundation(monkeypatch):
+    sql = HOSTED_AGENT_STRATEGY_FOUNDATION_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "load_hosted_agent_learning_evidence_v2" in sql
+    assert "WITH RECURSIVE strategy_lineage" in sql
+    assert "baseStrategyInstructions" in sql
+    assert "arena.hosted-learning-evidence.v2" in sql
+    assert "source <> 'learned'" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_STRATEGY_FOUNDATION_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_arena_money_precision_policy_wraps_apply_and_repairs_unprojected(
+    monkeypatch,
+):
+    sql = ARENA_MONEY_PRECISION_POLICY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "price_precision_exceeded" in sql
+    assert "apply_arena_agent_task_result_pre_precision_v1" in sql
+    assert (
+        "CREATE OR REPLACE FUNCTION public.apply_arena_agent_task_result("
+        in sql
+    )
+    assert "market_projection_receipts" in sql
+    assert "'default_pass'" in sql
+    assert "'market_timeout'" in sql
+    assert "'negotiation_timeout'" in sql
+    assert "GRANT EXECUTE ON FUNCTION" in sql
+    assert "public.apply_arena_agent_task_result(TEXT)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MONEY_PRECISION_POLICY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_arena_money_precision_recovery_only_requeues_proven_fixed_runs(
+    monkeypatch,
+):
+    sql = ARENA_MONEY_PRECISION_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_moneyerror'" in sql
+    assert "result.error_class = 'price_precision_exceeded'" in sql
+    assert "market_projection_receipts" in sql
+    assert "receipt.result_id IS NULL" in sql
+    assert "SET status = 'queued'" in sql
+    assert "safe_error_code = NULL" in sql
+    assert "completed_at = NULL" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MONEY_PRECISION_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_elapsed_task_recovery_only_requeues_proven_precision_followup(
+    monkeypatch,
+):
+    sql = ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_valueerror'" in sql
+    assert "result.error_class = 'price_precision_exceeded'" in sql
+    assert "task.deadline_at <= clock_timestamp()" in sql
+    assert "market_projection_receipts" in sql
+    assert "receipt.result_id IS NULL" in sql
+    assert "SET status = 'queued'" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_large_foundation_learning_recovery_is_narrow_and_one_time(
+    monkeypatch,
+):
+    sql = HOSTED_LARGE_FOUNDATION_LEARNING_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "WITH RECURSIVE strategy_lineage" in sql
+    assert "job.error_class = 'internal_learning_failure'" in sql
+    assert "foundation.source <> 'learned'" in sql
+    assert "char_length(foundation.instructions) > 3000" in sql
+    assert "job.candidate_strategy_revision_id IS NULL" in sql
+    assert "SET status = 'pending'" in sql
+    assert "attempt_count = 0" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_LARGE_FOUNDATION_LEARNING_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_money_precision_function_owner_receives_only_required_updates(
+    monkeypatch,
+):
+    sql = ARENA_MONEY_PRECISION_PRIVILEGES_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "UPDATE (" in sql
+    assert "application_outcome" in sql
+    assert "applied_action" in sql
+    assert "authoritative_entered_at" in sql
+    assert "UPDATE (safe_metadata)" in sql
+    assert "TO adx_arena_function_owner" in sql
+    assert "GRANT UPDATE ON" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MONEY_PRECISION_PRIVILEGES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_precision_privilege_recovery_requires_all_results_unapplied(
+    monkeypatch,
+):
+    sql = ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_insufficientprivilegeerror'" in sql
+    assert "result.apply_status <> 'pending'" in sql
+    assert "arena_applied_agent_actions" in sql
+    assert "applied.result_id IS NOT NULL" in sql
+    assert "SET status = 'queued'" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH
         in migrate_module.migration_files("arena")
     )

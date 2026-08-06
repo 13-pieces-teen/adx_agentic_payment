@@ -63,6 +63,10 @@ def _evidence(
         base_strategy_revision_no=1,
         archetype=archetype,
         catalog_version="arena.hosted-strategy.v1",
+        base_strategy_instructions=(
+            "Stable numeric strategy: use eventImpliedFinal as fairValue and "
+            "only submit legal, executable trades."
+        ),
         base_policy_profile=default_policy_profile(archetype),
         outcome=LearningOutcome(
             rank=2,
@@ -310,16 +314,44 @@ def test_learning_gate_rejects_single_game_overreaction() -> None:
 
 def test_learned_instructions_are_bounded_and_keep_archetype() -> None:
     proposal = _proposal()
+    foundation = (
+        "Stable numeric strategy: use eventImpliedFinal as fairValue, buy "
+        "grain at or below 2.100000, and sell excess grain at or above "
+        "1.900000."
+    )
     value = render_learned_strategy_instructions(
         archetype=StrategyArchetype.BALANCED,
+        base_strategy_instructions=foundation,
         profile=proposal.policy_profile,
         adjustments=proposal.adjustments,
     )
 
     assert "public archetype balanced" in value
+    assert foundation in value
     assert "risk budget 5300 bps" in value
     assert "minimum expected edge 1000 bps" in value
     assert "never as permission" in value
+    assert len(value) <= 4_000
+
+
+def test_large_official_foundation_keeps_full_strategy_and_bounded_overlay():
+    foundation = "F" * 3_249
+    adjustments = [
+        f"Lesson {index} " + ("x" * 165)
+        for index in range(1, 5)
+    ]
+
+    value = render_learned_strategy_instructions(
+        archetype=StrategyArchetype.BALANCED,
+        base_strategy_instructions=foundation,
+        profile=_proposal().policy_profile,
+        adjustments=adjustments,
+    )
+
+    assert value.startswith(foundation)
+    assert "public archetype balanced" in value
+    assert "risk budget 5300 bps" in value
+    assert adjustments[0] in value
     assert len(value) <= 4_000
 
 

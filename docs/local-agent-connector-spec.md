@@ -385,8 +385,9 @@ deadline default 隔离 E2E；Claude Code 的后续实测仍受其外部 API/证
 阻塞。真实 lease-expiry takeover 与 terminal Result outbox replay 也已完成
 隔离故障注入；`mixed-fallback-87fc3f3217` 进一步由两个独立真实 Codex seller
 完成两次顺序 RFQ、counter/reject fallback、第二 seller accept 和不可变 Deal。
-外部部署与 payment-enabled Connector E2E 尚未验收，不能把本地证据误报为
-生产可用证据。
+Phase D 随后在八回合 1+9 混合局中以真实 Codex Connector 完成隔离 mUSDC
+payment-enabled E2E；`arena402-g`、外部部署和生产 Current Game 仍未验收，
+不能把本地证据误报为生产可用证据。
 
 ### 8.4 Driver 边界
 

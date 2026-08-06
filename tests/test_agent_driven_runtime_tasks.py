@@ -313,3 +313,52 @@ def test_invalid_or_timed_out_market_result_fails_closed() -> None:
         assert applied.action is None
 
     asyncio.run(scenario())
+
+
+def test_market_price_beyond_atomic_scale_converges_to_default_pass() -> None:
+    async def scenario() -> None:
+        repository = MemoryArenaCoreRepository()
+        task = await ArenaTaskFactory(
+            repository,
+            clock=lambda: NOW,
+        ).create_market_intent_task(
+            game_agent_id="buyer-game-agent",
+            participant_view=_intent_input(),
+            config_snapshot={"provider": "fake"},
+        )
+        await repository.submit_result(
+            result=AgentTaskResultV1.model_validate(
+                {
+                    "resultId": "runtime-market-overprecise",
+                    "taskId": task.task.task_id,
+                    "schemaVersion": AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                    "status": "succeeded",
+                    "action": {
+                        "action": "buy",
+                        "good": "grain",
+                        "publicPrice": "1.8000001",
+                        "limitPrice": "2.0000001",
+                        "message": "希望买入粮草。",
+                    },
+                }
+            ),
+            server_clock=lambda: NOW + timedelta(seconds=1),
+            message_replaced=False,
+            public_output_policy_version="public-output.v1",
+        )
+        record = await repository.get_result_for_task(task.task.task_id)
+        assert record is not None
+
+        applied = await ArenaResultConsumer(
+            repository,
+            clock=lambda: NOW + timedelta(seconds=2),
+        ).consume(record)
+        stored = await repository.get_result_for_task(task.task.task_id)
+
+        assert applied is not None
+        assert applied.outcome == "default_pass"
+        assert applied.action == {"action": "pass"}
+        assert stored is not None
+        assert stored.rejection_reason == "price_precision_exceeded"
+
+    asyncio.run(scenario())

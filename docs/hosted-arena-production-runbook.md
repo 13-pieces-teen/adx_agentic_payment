@@ -1,6 +1,7 @@
 # Arena 402 Hosted 上线部署与实现方案
 
-> 状态：2026-07-25 批准的 Hosted testnet 上线目标。
+> 状态：2026-07-25 批准的 Hosted testnet 上线目标；2026-08-06 开始接入
+> Phase D 版本化 `agent_a2a.v1` Current Game。当前生产默认仍为 `fcfs.v1`。
 >
 > 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排，
 > 并已把生产 Current Game 硬上限配置为 100、Hosted Worker 配置为
@@ -34,7 +35,9 @@
 生产配置目标：
 
 - Current Game 默认开赛阈值 10 个 Hosted Agent，硬上限 100；
-- 固定展示 5 回合；代码继续支持 1–10 回合，但不作为首发容量承诺；
+- Current Game 默认 8 回合；代码继续支持 1–10 回合；
+- `ADX_CURRENT_GAME_MARKET_PROTOCOL` 只允许 `fcfs.v1 | agent_a2a.v1`；部署值只在
+  创建下一局时冻结，不能改写活动或历史 Game；
 - Decide Task 同批创建，Hosted Worker 以 4 副本 × 25 task slot 起步；
 - 同一组协商严格顺序执行，不同 pairing 可并发，但仍受 Provider 配额和数据库
   barrier 约束；
@@ -640,9 +643,11 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
    timestamped rollback directory，继承服务器本地 `deploy/.env`、
    `deploy/secrets/` 和已验证 Connector artifacts，最后调用
    `deploy.sh`。
-5. release wrapper 将受保护变量 `PROD_CURRENT_GAME_ROUND_COUNT`（默认 8）
-   写入新 release 的 server-only `.env`，并在 Runtime 启动后幂等刷新
-   `market-v5` 官方策略；不重新读取 Provider key，也不广播链上交易。
+5. release wrapper 将受保护变量 `PROD_CURRENT_GAME_ROUND_COUNT`（默认 8）和
+   `PROD_CURRENT_GAME_MARKET_PROTOCOL`（默认 `fcfs.v1`，只允许
+   `fcfs.v1 | agent_a2a.v1`）写入新 release 的 server-only `.env`，并在
+   Runtime 启动后幂等刷新 `market-v5` 官方策略；不重新读取 Provider key，也
+   不广播链上交易。协议变更只影响发布后创建的下一局。
 6. migration checksum、Connector artifact、预期容器、公开 `/api/health`、
    未认证受保护接口 `401`、Current Game 与可用时的 SSE content type 全部
    通过后，才写 `DEPLOYED_GIT_SHA` 和 `DEPLOYED_ARCHIVE_SHA256`。
@@ -663,6 +668,7 @@ PROD_SSH_PORT=22
 PROD_RELEASE_DIR=/home/ubuntu/adx_agentic_payment
 PROD_EXPECTED_PUBLIC_IP=<optional expected IPv4>
 PROD_CURRENT_GAME_ROUND_COUNT=8
+PROD_CURRENT_GAME_MARKET_PROTOCOL=fcfs.v1
 ```
 
 `PROD_SSH_KNOWN_HOSTS` 必须从独立可信通道核对服务器 host key；workflow
@@ -682,7 +688,7 @@ schema 兼容性，再决定只回滚代码还是按备份恢复数据。
 ### 8.1 必须通过
 
 - 10/12 Agent 回归通过后，25/50/100 个 Hosted Agent 在重新定容的生产机完成
-  5 回合；
+  8 回合；
 - 浏览器关闭后 Game 继续；
 - 同一轮 100 个 Decide Task 均在统一 deadline 内终态，并记录实际 Provider
   wave 与 launch skew；

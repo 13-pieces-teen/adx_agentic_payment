@@ -102,6 +102,71 @@
   aggressive/conservative/balanced 的统计性策略收益对比验收；上述两局只作为
   初始基线。
 
+## Phase D：统一自主交易比赛
+
+> 2026-08-06 已批准并开始实施。Phase D 不再新增一套认知 Runtime，而是把已经
+> 分别成立的 PydanticAI Hosted Agent、Codex Local Connector、`agent_a2a.v1`、
+> Injective testnet 结算与跨局 Strategy Revision 收敛到同一个 Current Game。
+> 原计划中的 Native A2A Endpoint 顺延为 Phase E/Post-MVP。
+
+- [x] 冻结目标拓扑：一名真实 Codex Connector 玩家与九名从官方池稳定随机抽取的
+  PydanticAI Hosted Agent，完成八回合 `agent_a2a.v1` Current Game。
+- [x] 冻结支付与学习验收链：
+  `Intent → RFQ → Select → Negotiate → Deal → SettlementIntent →
+  PaymentMandate → Injective confirmation → InventoryCommit → ranking →
+  learning job → next-game revision`。
+- [x] D1：为 Current Game 增加 allowlisted、版本化 `market_protocol` 部署配置；
+  新 Game 冻结 `fcfs.v1 | agent_a2a.v1`，活动和历史 Game 不被改义，并保留只影响
+  下一局的 `fcfs.v1` 回滚。生产 Worker、Compose、env generator、release wrapper
+  和 GitHub Environment variable 已贯通，定向生命周期/发布测试通过。
+- [x] D2 前置：payment-enabled Hosted canary 不再写死三回合 `fcfs.v1`；
+  `CANARY_MARKET_PROTOCOL` 严格限制为两个已知版本，`CANARY_ROUND_COUNT` 严格限制
+  为 1–10，并把冻结协议和回合数纳入验收摘要。该 harness 能运行八回合
+  Hosted-only A2A canary，但不等同于下一项混合 Runtime 证据。
+- [x] D2 中间验收：`phase-d-mixed-musdc-v4-c30a038913` 以一名真实 Codex
+  Connector CLI 0.146.0 和九名 DeepSeek V4 Flash PydanticAI Hosted Agent
+  完成八回合 `agent_a2a.v1`。92 个 Task 全部 applied，其中 91 completed、
+  1 defaulted；共产生 65 Intent、6 RFQ、3 Engagement、3 Deal、3 个
+  `inventory_committed` SettlementIntent 和 10 条排名。三笔自建 Facilitator
+  mUSDC testnet 交易为
+  `0x1d76b460ea120e723c9eb5c3851d0fddbfc01449784739c157d0e95517919a18`
+  （block 135896825，2,000,000 atomic）、
+  `0xe45b8c816d0e6c8245ef18eb8835e7ccfba5241e9fed1439f4f10dde35d5db10`
+  （block 135896994，2,000,000 atomic）和
+  `0x5a9b8ce5a5306c1ec4c682baa111e15eff064668002e1a0687913886d560b5a2`
+  （block 135897417，2,525,000 atomic）。Blockscout 均返回 `ok` 和
+  `transferWithAuthorization`；Arena 均保存 3 confirmations 后提交库存。
+  Round 1 买方的下一回合快照由 `cash=20/grain=0` 变为 `18/1`，卖方由
+  `0/10` 变为 `2/9`；Round 6 的 2.525 mUSDC 提交也在 Round 7 快照和终场
+  排名中可见。
+- [ ] D2：完成同一场 1+9 混合 Runtime、八回合、`agent_a2a.v1`、
+  `arena402-g`、自建 Facilitator 的 payment-enabled testnet 验收；至少一笔
+  Deal 必须到达 `inventory_committed`，下一回合资产与终场排名必须反映该提交。
+- [x] D3：成交参与者在完成局后生成 durable learning evaluation；后续 Game
+  冻结新 revision，同局不切换，未成交 Agent 不学习，官方 Agent 的持久
+  `agent_id`、archetype、revision history 与每局独立 Game Memory 可审计。
+  上述八回合局的九个 Hosted learning job 中，成交的 priority 3/5 Agent
+  分别激活 revision 9/8；六个无本人经济信号的 Agent 在模型前确定性拒绝，
+  一个成交方因 DeepSeek 连续两次无效结构化输出按两次上限失败。
+  `phase-d-revision-freeze-v1-df1bea4ee0` 随后以新的 1+9 payment-disabled
+  Game 冻结并实际使用 priority 3 revision 9 与 priority 5 revision 8，
+  完成 14 Task、1 Deal、0 SettlementIntent 和 10 条排名。
+- [x] 修复真实恢复边界：migration `067` 保留 learned revision 的非 learned
+  策略 foundation；`068` 在权威 apply 与旧投影处拒绝超过六位小数，
+  `069`–`070` 只恢复已证明的精度/过期任务失败 Run，Task Factory 只允许按原
+  idempotency key 重取完全相同的过期任务；`071` 恢复旧 learner 重复拼接造成的
+  大 foundation 溢出，`072`–`073` 补齐 SECURITY DEFINER 的最小列级权限并仅
+  恢复全部 Result 尚未应用的权限失败 Run。
+- [ ] D4：在无活动 Game 的维护窗口把生产 Official pool 切换到
+  `official-deepseek`，完成 Secret、Worker/Connector/Settlement restart、
+  外部前端投影、发布身份、备份和回滚验收，再切换生产 Current Game。
+- [ ] D5：统一功能正确性通过后，再完成 12/25/50/100 Agent 分档、每 Runtime/
+  Task 至少 100 条真实终态样本、4 Facilitator shard 和 timeout/公平性冻结。
+- [ ] Phase D 的完成声明必须来自同一场权威 Game；不能把 FCFS Hosted 支付
+  canary、payment-disabled Codex A2A、历史交易或配置容量拼接为完成证据。
+  当前 mUSDC 八回合混合局是 D2/D3 的中间验收，不替代 `arena402-g`、生产
+  Current Game、公共 Facilitator、外部前端或 100 Agent 证据。
+
 ## Product narrative baseline
 
 Arena 402 的对外叙事固定为三层：
@@ -750,7 +815,8 @@ create game
       [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)
       将中心 `fcfs.v1` 迁移为版本化 `agent_a2a.v1`：Agent 自主发布 Intent、
       发现市场、发送 RFQ、选择请求和协商；Arena 只负责 Gateway、校验、并发占位、
-      Deal 冻结与 Settlement handoff。
+      Deal 冻结与 Settlement handoff。该切换现在属于上文 Phase D，不再等待
+      Native A2A。
 - [x] Phase A foundation：已加入严格的 Intent/RFQ/Engage wire contracts、
       无策略协议状态机、`055_arena_agent_driven_a2a_market.sql` 持久化约束和
       不变量测试；它只证明协议、所有权、跨动作 Result 幂等、私有限价与
@@ -859,7 +925,7 @@ create game
 - [ ] Future `agent_a2a.v2`：增加正整数有界数量、精确全量成交、无 partial
       fill 的新 schema 与 reservation/mandate/settlement/inventory 不变量；
       `agent_a2a.v1` 永久保持 `quantity=1`。
-- [ ] Phase D 实现标准 Native A2A Endpoint Adapter，并完成
+- [ ] Phase E 实现标准 Native A2A Endpoint Adapter，并完成
       Hosted/Connector/Native A2A 混合局；内部 WSS 或 Fake 状态机不得称为标准
       Native A2A。
 - 100 Agent 单局与 4 Facilitator shard 的生产配置基础已落地；容量、故障恢复和

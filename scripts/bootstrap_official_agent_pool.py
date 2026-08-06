@@ -50,6 +50,7 @@ from hosted_agent_runtime.learning import default_policy_profile
 
 _CONFIG_VERSION_PATTERN = re.compile(r"^v[1-9][0-9]{0,5}$")
 _LITELLM_HEALTH_URL = "http://official-litellm:4000/health"
+OFFICIAL_STRATEGY_RELEASE = "pydantic-agent-v4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +301,7 @@ def _strategy(index: int) -> str:
     ]
     numeric_variant = (
         "You are an official Arena 402 market participant. Follow this "
+        f"Strategy release {OFFICIAL_STRATEGY_RELEASE}. "
         f"stable profile: {profile_name}; side bias {side_bias}; cash reserve "
         f"{cash_reserve_percent}% of current marked net worth; inventory "
         f"target {inventory_target}; deterministic equal-signal good order "
@@ -314,6 +316,11 @@ def _strategy(index: int) -> str:
         "an unrevealed future event. In every numeric rule below, fairValue "
         "means this adjusted private reservation fairValue. "
         f"Numeric decision policy: {numeric_policy}. "
+        "Portfolio rebalancing policy: when current cash is below the stated "
+        "cash reserve and a legal holding exceeds the stated inventory "
+        "target, an excess-inventory sell is a qualifying rebalancing action "
+        "even when the ordinary market-price sell trigger is not met. Use "
+        "the profile's stated seller limit-price formula for that action. "
         "When both a valid buy and sell qualify, follow the side bias first, "
         "then choose the first qualifying good in the stated good order; use "
         "the percentage gap only to break a tie on the same priority. Submit "
@@ -335,7 +342,9 @@ def _strategy(index: int) -> str:
         "immediately when the latest quote is within the boundary. Close the "
         "final negotiation turn with accept or reject. Pass only when neither "
         "numeric trigger is satisfied or constraints make all qualifying "
-        "actions illegal. Never disclose credentials or private reasoning."
+        "actions illegal. You must not pass while a legal numeric or "
+        "rebalancing action qualifies. Never disclose credentials or private "
+        "reasoning."
     )
     return render_strategy_revision(
         archetype=official_strategy_archetype(index),

@@ -1,8 +1,10 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：Runtime v2 直接替换计划已批准并开始实施。旧 Phase 0–6 作为已完成
-> foundation 保留；当前权威实施顺序见第 22 节
-> 最后更新：2026-08-05
+> 文档状态：Runtime v2 直接替换已完成本地隔离验收；2026-08-06 已批准并开始
+> Phase D 统一自主交易比赛。旧 Phase 0–6 作为已完成 foundation 保留；Runtime
+> v2 权威实现记录见第 22 节，跨 Runtime 产品切换见
+> [`agent-driven-a2a-market-implementation-plan.md`](./agent-driven-a2a-market-implementation-plan.md)
+> 最后更新：2026-08-06
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
@@ -36,6 +38,11 @@ Agent/Runtime/Task 基础，并提供清晰的 Arena 接口；不会为了演示
 Runtime v2 在这些基础上直接替换认知执行链。生产切换后不并行保留
 `DirectModelDriver` fallback；保留的是 Task、lease、Attempt、Secret、Result Sink
 和 Finalizer 等平台基础设施。
+
+Phase D 不再改造 Hosted Agent 的认知内核。它把已经完成的 PydanticAI Hosted
+Runtime 与真实 Codex Connector 接入同一场版本化 `agent_a2a.v1` Current Game，
+并要求 `arena402-g` 的 confirmation-gated InventoryCommit、终场排名和后续 Game
+Strategy Revision 冻结来自同一条权威证据链。Native A2A 是 Phase E。
 
 ### 1.1 MVP 成功定义
 
@@ -1744,6 +1751,20 @@ Provider 输出再次截成 2048，导致 DeepSeek typed proposal 触发 token l
 上限统一为 8192。修复后第二局四个真实成交方的 learning job 均在第一次 Attempt
 激活新 revision，六个无成交方全部在模型调用前拒绝。该 canary 使用隔离 mUSDC，
 不能替代 `arena402-g`、公共 Facilitator、生产部署或统计性收益验收。
+
+同日的 Phase D 混合 Runtime 中间验收
+`phase-d-mixed-musdc-v4-c30a038913` 又把一名真实 Codex Connector 与九名
+Hosted Agent 放进同一场八回合 `agent_a2a.v1`。92 个 Task 全部 applied，
+产生三笔确认后提交库存的 mUSDC Deal 和十条排名；priority 3/5 分别激活
+revision 9/8。后续 `phase-d-revision-freeze-v1-df1bea4ee0` 冻结并实际运行
+这两条 revision，证明学习只影响未来 Game。另一名有 settled 信号的 Agent
+连续两次返回无效结构化输出，因此 job 失败并保留旧 revision；这属于 bounded
+失败，不记作学习成功。
+
+真实局还暴露并修复了三类恢复边界：超过六位小数的候选价格、按原
+idempotency key 恢复已过期的冻结 Task，以及 SECURITY DEFINER 投影函数的最小
+列级权限。迁移 `067`–`073` 只修复可证明的旧失败记录，新的候选仍由 Arena
+Result Sink fail closed。隔离 mUSDC 证据仍不替代 `arena402-g` 或生产切换。
 
 #### V2-5 删除与生产验收
 

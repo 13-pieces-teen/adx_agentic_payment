@@ -2,8 +2,11 @@
 
 > Status: approved target; Phase A persistence, projection, opt-in round
 > orchestration, Phase B Hosted/Local task support, and the Phase C
-> payment-disabled Deal foundation were implemented on 2026-08-04. Current
-> Game remains on `fcfs.v1`. A payment-disabled game with two independent
+> payment-disabled Deal foundation were implemented on 2026-08-04. On
+> 2026-08-06 Phase D was approved and implementation began: converge the
+> PydanticAI Hosted Runtime, Codex Connector, `agent_a2a.v1`, testnet
+> settlement, and cross-game learning in one versioned Current Game. Current
+> Game still remains on `fcfs.v1`. A payment-disabled game with two independent
 > Codex Connector Agents has completed Intent, RFQ, selection, bounded
 > negotiation, and an immutable Deal with distinct proposal/acceptance Result
 > provenance. A deterministic three-Hosted-Agent Fake E2E has also completed
@@ -407,11 +410,49 @@ schema, and Result Sink transport; they are not real-Agent evidence.
       provenance, zero SettlementIntent, and zero chain write;
 - [x] run a real multi-counterparty sequential-fallback E2E and preserve
       restart/replay evidence;
-- [ ] run a fresh payment-enabled Injective testnet E2E only after explicit
-      human confirmation and after the binding-RFQ, sequential-fallback,
-      timeout-calibration, and mixed-Runtime recovery acceptance above.
+- [x] run a fresh payment-enabled Injective testnet A2A E2E after the explicit
+      human authorization recorded for Phase D. The isolated mUSDC run preserved
+      the binding-RFQ, timeout, Result Sink, recovery, and confirmation-gated
+      inventory invariants; the product `arena402-g` rerun remains open below.
 
-### Phase D: Native A2A
+### Phase D: unified autonomous Current Game
+
+- [x] add an allowlisted deployment setting for `fcfs.v1 | agent_a2a.v1` and freeze
+  it when a new Current Game is created;
+- [x] never reinterpret an active or historical Game when the deployment setting
+  changes; rollback changes only the next Game;
+- [x] parameterize the payment-enabled Hosted canary for a strict
+  `agent_a2a.v1`/eight-round preflight and include the frozen protocol in its
+  evidence; this remains Hosted-only harness capability, not mixed acceptance;
+- [x] complete one eight-round isolated Game with one real Codex Connector player
+  and nine persistent PydanticAI Hosted Agents selected from the official pool;
+- [ ] use `arena402-g`, `single_eip3009`, and the self-hosted Facilitator so at
+  least one immutable Deal reaches chain confirmation and idempotent inventory
+  commit;
+- [x] prove with three isolated mUSDC settlements that the committed portfolio
+  affects the next round and final ranking;
+- [x] create learning evaluations only from authoritative completed-game evidence,
+  then freeze an activated revision only when that persistent Agent joins a
+  later Game;
+- [x] preserve restart, Result Sink, settlement recovery, market terminalization,
+  secret isolation, and no-CoT-persistence invariants in the unified run;
+- [ ] cut over the production Official pool and Current Game only in a no-active-
+  Game maintenance window with a tested `fcfs.v1` rollback.
+
+Intermediate evidence is `phase-d-mixed-musdc-v4-c30a038913`: 92/92 Task
+results applied across eight rounds, three immutable Deals, three confirmed
+mUSDC transfers and inventory commits, and ten rankings. A later
+payment-disabled Game froze and executed the two activated learned revisions.
+One additional settled Agent exhausted the two-attempt structured-output limit
+and correctly retained its prior revision. This evidence closes the isolated
+D2/D3 mechanics, not the `arena402-g` or production cutover gates.
+
+Phase D is the first phase that may be described as a payment-enabled,
+cross-game-learning autonomous Agent competition. Separate FCFS Hosted payment
+canaries and payment-disabled Codex A2A games cannot be combined into that
+claim.
+
+### Phase E: Native A2A
 
 - implement `NativeA2ARuntimeAdapter`;
 - validate registered Agent Cards, endpoint ownership, authentication, and
@@ -436,12 +477,13 @@ The target is accepted only when:
   settlement failure;
 - private hard limits never enter public messages, Agent Cards, logs, or
   frontend responses;
-- Hosted, Local, and Native A2A use the same business schema and deadlines;
+- Hosted and Local use the same business schema and per-Game deadline in
+  Phase D; Native A2A must join that contract in Phase E;
 - timeout calibration collects at least 100 real end-to-end samples per
   supported Runtime/task combination at target load, applies the frozen
   `max(P99) * 1.25` formula, and demonstrates no more than 1% valid-Task
   deadline timeout;
-- Native A2A is not claimed before a standards-compliant Adapter E2E;
+- Native A2A is not claimed before a standards-compliant Phase E Adapter E2E;
 - Runtime success remains only a candidate until the Result Sink applies it;
 - chain confirmation remains mandatory for cash/inventory mutation;
 - `agent_a2a.v1` remains exact quantity `1`; a future `agent_a2a.v2` may add

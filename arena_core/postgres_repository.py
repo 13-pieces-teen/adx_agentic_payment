@@ -554,6 +554,25 @@ class PostgresArenaCoreRepository:
         )
         return None if row is None else _task_record(row)
 
+    async def get_task_by_idempotency(
+        self,
+        *,
+        game_agent_id: str,
+        idempotency_key: str,
+    ) -> ArenaTaskRecord | None:
+        pool = self._require_pool()
+        row = await pool.fetchrow(
+            f"""
+            SELECT {_TASK_COLUMNS}
+            FROM arena_agent_tasks
+            WHERE game_agent_id = $1
+              AND idempotency_key = $2
+            """,
+            game_agent_id,
+            idempotency_key,
+        )
+        return None if row is None else _task_record(row)
+
     async def claim_connector_tasks(
         self,
         *,

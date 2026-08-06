@@ -7,6 +7,7 @@ when it projects a persisted result.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal, TypeAlias
 
 from arena_agent_contracts import (
@@ -35,6 +36,7 @@ DecideCandidateViolation: TypeAlias = Literal[
     "good_not_allowed",
     "insufficient_inventory",
     "insufficient_cash",
+    "price_precision_exceeded",
     "public_price_not_allowed",
 ]
 MarketIntentCandidateViolation: TypeAlias = Literal[
@@ -44,11 +46,13 @@ MarketIntentCandidateViolation: TypeAlias = Literal[
     "insufficient_cash",
     "market_price_required",
     "market_price_boundary_violation",
+    "price_precision_exceeded",
 ]
 MarketRfqCandidateViolation: TypeAlias = Literal[
     "rfq_budget_exceeded",
     "rfq_target_not_visible",
     "limit_price_violation",
+    "price_precision_exceeded",
 ]
 MarketSelectCandidateViolation: TypeAlias = Literal[
     "request_not_visible",
@@ -59,6 +63,7 @@ NegotiationCandidateViolation: TypeAlias = Literal[
     "counterparty_proposal_required",
     "final_turn_must_close",
     "limit_price_violation",
+    "price_precision_exceeded",
 ]
 CandidateViolation: TypeAlias = (
     DecideCandidateViolation
@@ -67,6 +72,14 @@ CandidateViolation: TypeAlias = (
     | MarketRfqCandidateViolation
     | MarketSelectCandidateViolation
 )
+
+
+_ARENA_MONEY_SCALE = Decimal(1_000_000)
+
+
+def _has_arena_money_precision(value: Decimal) -> bool:
+    atomic = value * _ARENA_MONEY_SCALE
+    return atomic == atomic.to_integral_value()
 
 
 def decide_candidate_violation(
@@ -84,6 +97,11 @@ def decide_candidate_violation(
         raise TypeError("action must be a decide action")
     if action.public_price is not None or action.message is not None:
         return "public_price_not_allowed"
+    if (
+        action.limit_price is not None
+        and not _has_arena_money_precision(action.limit_price)
+    ):
+        return "price_precision_exceeded"
     if limits.allowed_goods and action.good not in limits.allowed_goods:
         return "good_not_allowed"
     if (
@@ -117,6 +135,10 @@ def market_intent_candidate_violation(
         return "good_not_allowed"
     if action.public_price is None or action.limit_price is None:
         return "market_price_required"
+    if not _has_arena_money_precision(
+        action.public_price
+    ) or not _has_arena_money_precision(action.limit_price):
+        return "price_precision_exceeded"
     if isinstance(action, BuyAction):
         if action.public_price > action.limit_price:
             return "market_price_boundary_violation"
@@ -146,6 +168,8 @@ def market_rfq_candidate_violation(
     for request in action.requests:
         if request.target_intent_id not in visible:
             return "rfq_target_not_visible"
+        if not _has_arena_money_precision(request.opening_price):
+            return "price_precision_exceeded"
         if request.opening_price > task_input.limit_price:
             return "limit_price_violation"
     return None
@@ -184,6 +208,10 @@ def negotiation_candidate_violation(
         return "counterparty_proposal_required"
     if task_input.remaining_turns <= 1 and isinstance(action, ProposeAction):
         return "final_turn_must_close"
+    if isinstance(action, ProposeAction) and not _has_arena_money_precision(
+        action.price
+    ):
+        return "price_precision_exceeded"
 
     limit_price = task_input.limit_price
     if isinstance(action, ProposeAction) and limit_price is not None:

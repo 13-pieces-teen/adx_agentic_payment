@@ -62,6 +62,19 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     assert len(call["events"]) == 8  # type: ignore[arg-type]
 
 
+def test_lifecycle_freezes_configured_agent_a2a_protocol_for_new_game() -> None:
+    repository = _Repository()
+    worker = CurrentGameLifecycleWorker(
+        repository=repository,  # type: ignore[arg-type]
+        settlement_config=SettlementConfig(),
+        market_protocol="agent_a2a.v1",
+    )
+
+    asyncio.run(worker.run_once())
+
+    assert repository.calls[0]["market_protocol"] == "agent_a2a.v1"
+
+
 def test_lifecycle_activates_only_confirmed_gamecoin_seats() -> None:
     repository = _Repository()
     worker = CurrentGameLifecycleWorker(
@@ -95,6 +108,29 @@ def test_production_current_game_defaults_to_eight_rounds_everywhere() -> None:
     )
     assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in example
     assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in generator
+
+
+def test_production_current_game_defaults_to_fcfs_with_versioned_switch() -> None:
+    worker = (ROOT / "arena_game" / "production_worker.py").read_text(
+        encoding="utf-8"
+    )
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    example = (ROOT / "deploy" / "env.production.example").read_text(
+        encoding="utf-8"
+    )
+    generator = (ROOT / "deploy" / "scripts" / "generate-env.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"ADX_CURRENT_GAME_MARKET_PROTOCOL", "fcfs.v1"' in worker
+    assert (
+        "ADX_CURRENT_GAME_MARKET_PROTOCOL: "
+        "${ADX_CURRENT_GAME_MARKET_PROTOCOL:-fcfs.v1}"
+    ) in compose
+    assert "ADX_CURRENT_GAME_MARKET_PROTOCOL=fcfs.v1" in example
+    assert "ADX_CURRENT_GAME_MARKET_PROTOCOL=fcfs.v1" in generator
 
 
 def test_lifecycle_rejects_capacity_below_start_threshold() -> None:
@@ -141,3 +177,18 @@ def test_lifecycle_rejects_non_positive_official_fill_delay() -> None:
         assert "official_fill_after_seconds" in str(exc)
     else:
         raise AssertionError("fill delay must be positive")
+
+
+def test_lifecycle_rejects_unsupported_market_protocol() -> None:
+    repository = _Repository()
+
+    try:
+        CurrentGameLifecycleWorker(
+            repository=repository,  # type: ignore[arg-type]
+            settlement_config=SettlementConfig(),
+            market_protocol="agent_a2a.latest",
+        )
+    except ValueError as exc:
+        assert "market_protocol" in str(exc)
+    else:
+        raise AssertionError("unsupported market protocol must be rejected")
