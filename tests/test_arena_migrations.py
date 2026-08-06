@@ -270,6 +270,12 @@ ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH = (
     / "migrations"
     / "073_arena_precision_privilege_run_recovery.sql"
 )
+ARENA_PHASE_D_EMPTY_CURRENT_GAME_CUTOVER_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "074_arena_phase_d_empty_current_game_cutover.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1494,5 +1500,29 @@ def test_precision_privilege_recovery_requires_all_results_unapplied(
     )
     assert (
         ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_phase_d_cutover_retires_only_empty_waiting_fcfs_current_game(
+    monkeypatch,
+):
+    sql = ARENA_PHASE_D_EMPTY_CURRENT_GAME_CUTOVER_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "game.phase = 'registration'" in sql
+    assert "game.market_protocol = 'fcfs.v1'" in sql
+    assert "NOT EXISTS" in sql
+    assert "arena402.game_participants" in sql
+    assert "SET phase = 'cancelled'" in sql
+    assert "DELETE FROM arena402.current_game" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_PHASE_D_EMPTY_CURRENT_GAME_CUTOVER_SQL_PATH
         in migrate_module.migration_files("arena")
     )
