@@ -156,6 +156,120 @@ FIXED_TRADE_QUANTITY_SQL_PATH = (
     / "migrations"
     / "054_arena_fixed_trade_quantity.sql"
 )
+AGENT_DRIVEN_A2A_MARKET_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "055_arena_agent_driven_a2a_market.sql"
+)
+AGENT_DRIVEN_RUNTIME_TASKS_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "056_arena_agent_driven_runtime_tasks.sql"
+)
+AGENT_DRIVEN_ROUND_PROTOCOL_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "057_arena_agent_driven_round_protocol.sql"
+)
+AGENT_MARKET_PROJECTION_PRIVILEGES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "058_arena_agent_market_projection_privileges.sql"
+)
+AGENT_NEGOTIATION_AUTONOMY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "059_arena_agent_negotiation_autonomy.sql"
+)
+BINDING_RFQ_FALLBACK_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "060_arena_binding_rfq_and_sequential_fallback.sql"
+)
+A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "061_arena_a2a_engagement_pool_entries.sql"
+)
+AGENT_MARKET_TERMINALIZATION_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "062_arena_agent_market_terminalization.sql"
+)
+HOSTED_AGENT_RUNTIME_V2_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "063_hosted_agent_runtime_v2.sql"
+)
+HOSTED_AGENT_CROSS_GAME_LEARNING_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "064_hosted_agent_cross_game_learning.sql"
+)
+HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "065_hosted_agent_memory_context_barrier.sql"
+)
+HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "066_hosted_agent_memory_candidate_outcome.sql"
+)
+HOSTED_AGENT_STRATEGY_FOUNDATION_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "067_hosted_agent_strategy_foundation.sql"
+)
+ARENA_MONEY_PRECISION_POLICY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "068_arena_money_precision_policy.sql"
+)
+ARENA_MONEY_PRECISION_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "069_arena_money_precision_run_recovery.sql"
+)
+ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "070_arena_elapsed_task_run_recovery.sql"
+)
+HOSTED_LARGE_FOUNDATION_LEARNING_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "071_hosted_agent_large_foundation_learning_recovery.sql"
+)
+ARENA_MONEY_PRECISION_PRIVILEGES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "072_arena_money_precision_function_privileges.sql"
+)
+ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "073_arena_precision_privilege_run_recovery.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -818,4 +932,567 @@ def test_fixed_trade_quantity_migration_is_forward_only_and_selected(
     )
     assert FIXED_TRADE_QUANTITY_SQL_PATH in migrate_module.migration_files(
         "arena"
+    )
+
+
+def test_agent_driven_a2a_market_requires_agent_result_provenance_and_privacy(
+    monkeypatch,
+):
+    sql = AGENT_DRIVEN_A2A_MARKET_SQL_PATH.read_text(encoding="utf-8")
+
+    for relation in (
+        "CREATE TABLE arena402.market_result_applications",
+        "CREATE TABLE arena402.market_projection_receipts",
+        "CREATE TABLE arena402.market_intents",
+        "CREATE TABLE arena402.market_negotiation_requests",
+        "CREATE TABLE arena402.market_engagements",
+        "CREATE TABLE arena402.participant_round_slots",
+        "CREATE TABLE arena402.market_deals",
+    ):
+        assert relation in sql
+    assert (
+        "result_id TEXT PRIMARY KEY\n"
+        "        REFERENCES public.arena_agent_task_results(result_id)"
+    ) in sql
+    for action_kind in (
+        "'intent'",
+        "'rfq'",
+        "'engage'",
+        "'proposal'",
+        "'acceptance'",
+    ):
+        assert f"CHECK (source_action_kind = {action_kind})" in sql or (
+            f"CHECK (selection_action_kind = {action_kind})" in sql
+            or f"CHECK (latest_proposal_action_kind = {action_kind})" in sql
+            or f"CHECK (acceptance_action_kind = {action_kind})" in sql
+        )
+    assert sql.count(
+        "REFERENCES arena402.market_result_applications("
+    ) >= 6
+    assert "selection_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "latest_proposal_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "acceptance_result_id TEXT NOT NULL UNIQUE" in sql
+    assert "latest_proposal_result_id <> acceptance_result_id" in sql
+    assert "quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity = 1)" in sql
+    assert "CREATE VIEW arena402.market_directory_public" in sql
+    public_view = sql.split(
+        "CREATE VIEW arena402.market_directory_public",
+        maxsplit=1,
+    )[1].split("REVOKE ALL ON TABLE", maxsplit=1)[0]
+    assert "limit_price_atomic" not in public_view
+    api_grants = sql.split(
+        "REVOKE ALL ON TABLE",
+        maxsplit=1,
+    )[1]
+    assert (
+        "GRANT SELECT ON TABLE arena402.market_directory_public TO"
+        in api_grants
+    )
+    assert "market_intents TO adx_arena_api" not in api_grants
+    intent_table = sql.split(
+        "CREATE TABLE arena402.market_intents",
+        maxsplit=1,
+    )[1].split(
+        "CREATE TABLE arena402.market_negotiation_requests",
+        maxsplit=1,
+    )[0]
+    request_table = sql.split(
+        "CREATE TABLE arena402.market_negotiation_requests",
+        maxsplit=1,
+    )[1].split(
+        "CREATE TABLE arena402.market_engagements",
+        maxsplit=1,
+    )[0]
+    assert "source_result_id TEXT NOT NULL UNIQUE" in intent_table
+    assert "source_result_id TEXT NOT NULL," in request_table
+    assert "source_result_id TEXT NOT NULL UNIQUE" not in request_table
+    assert "UNIQUE (source_result_id, seller_intent_id)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert AGENT_DRIVEN_A2A_MARKET_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
+
+
+def test_agent_driven_runtime_task_kinds_preserve_fcfs_and_fail_closed(
+    monkeypatch,
+):
+    sql = AGENT_DRIVEN_RUNTIME_TASKS_SQL_PATH.read_text(encoding="utf-8")
+
+    assert (
+        "RENAME TO apply_arena_agent_task_result_fcfs_v1"
+        in sql
+    )
+    assert (
+        "RETURN public.apply_arena_agent_task_result_fcfs_v1(p_result_id)"
+        in sql
+    )
+    for task_kind in (
+        "arena.market.intent",
+        "arena.market.rfq",
+        "arena.market.select",
+    ):
+        assert task_kind in sql
+    for violation in (
+        "market_price_required",
+        "market_price_boundary_violation",
+        "rfq_target_not_visible",
+        "request_not_visible",
+        "insufficient_inventory",
+    ):
+        assert violation in sql
+    assert "'market_timeout'" in sql
+    assert (
+        "GRANT EXECUTE ON FUNCTION apply_arena_agent_task_result(TEXT)"
+        in sql
+    )
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_DRIVEN_RUNTIME_TASKS_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_agent_driven_round_protocol_is_opt_in_and_keeps_fcfs_default(
+    monkeypatch,
+):
+    sql = AGENT_DRIVEN_ROUND_PROTOCOL_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert "DEFAULT 'fcfs.v1'" in sql
+    assert "'agent_a2a.v1'" in sql
+    assert "games_market_protocol_snapshot_check" in sql
+    assert "UPDATE public.games" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_DRIVEN_ROUND_PROTOCOL_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_agent_market_projection_receives_read_only_authority(
+    monkeypatch,
+):
+    sql = AGENT_MARKET_PROJECTION_PRIVILEGES_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert "GRANT SELECT ON TABLE" in sql
+    assert "public.arena_agent_tasks" in sql
+    assert "public.arena_agent_task_results" in sql
+    assert "public.arena_applied_agent_actions" in sql
+    assert "TO adx_arena_core" in sql
+    assert "GRANT INSERT" not in sql
+    assert "GRANT UPDATE" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_MARKET_PROJECTION_PRIVILEGES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_agent_negotiation_policy_validates_bounds_without_choosing_strategy(
+    monkeypatch,
+):
+    sql = AGENT_NEGOTIATION_AUTONOMY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "CREATE OR REPLACE FUNCTION "
+        "apply_arena_agent_task_result_fcfs_v1" in sql
+    )
+    assert "buyer_opening_proposal_required" in sql
+    assert "counterparty_proposal_required" in sql
+    assert "final_turn_must_close" in sql
+    assert "limit_price_violation" in sql
+    assert "in_bound_quote_must_accept" not in sql
+    assert "out_of_bound_quote_must_counter" not in sql
+    assert "counter_must_equal_limit" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_NEGOTIATION_AUTONOMY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_binding_rfq_and_sequential_fallback_are_durable(
+    monkeypatch,
+):
+    sql = BINDING_RFQ_FALLBACK_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN attempt_sequence INTEGER" in sql
+    assert "ALTER COLUMN attempt_sequence SET NOT NULL" in sql
+    assert "attempt_sequence BETWEEN 1 AND 3" in sql
+    assert "market_requests_one_active_buyer_rfq_uidx" in sql
+    assert "status IN ('pending', 'engaged')" in sql
+    assert "latest_proposal_request_id TEXT" in sql
+    assert "latest_proposal_action_kind IN ('rfq', 'proposal')" in sql
+    assert "latest_proposal_request_id = request_id" in sql
+    assert "CREATE TABLE arena402.market_rfq_sessions" in sql
+    assert "frozen_directory JSONB NOT NULL" in sql
+    assert "market_engagements_terminal_status_check" in sql
+    assert "'timed_out'" in sql
+    assert "TO adx_arena_core" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert BINDING_RFQ_FALLBACK_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
+
+
+def test_a2a_engagement_entries_preserve_fcfs_participant_uniqueness(
+    monkeypatch,
+):
+    sql = A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN market_engagement_id TEXT" in sql
+    assert "DROP CONSTRAINT pool_entries_round_id_game_participant_id_key" in sql
+    assert "pool_entries_fcfs_participant_uidx" in sql
+    assert "WHERE market_engagement_id IS NULL" in sql
+    assert "pool_entries_a2a_engagement_participant_uidx" in sql
+    assert "WHERE market_engagement_id IS NOT NULL" in sql
+    assert "REFERENCES arena402.market_engagements(engagement_id)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        A2A_ENGAGEMENT_POOL_ENTRIES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_completed_round_market_state_is_backfilled_to_terminal(
+    monkeypatch,
+):
+    sql = AGENT_MARKET_TERMINALIZATION_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "UPDATE arena402.market_rfq_sessions" in sql
+    assert "SET status = 'expired'" in sql
+    assert "UPDATE arena402.market_negotiation_requests" in sql
+    assert "UPDATE arena402.participant_round_slots" in sql
+    assert "SET status = 'available'" in sql
+    assert "UPDATE arena402.market_intents" in sql
+    assert "status IN ('open', 'reserved')" in sql
+    assert "expires_at = LEAST" in sql
+    assert "round_row.phase IN ('completed', 'cancelled')" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        AGENT_MARKET_TERMINALIZATION_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_runtime_v2_persists_strategy_and_applied_memory(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_RUNTIME_V2_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "strategy_archetype" in sql
+    assert "hosted_agent_strategy_revisions" in sql
+    assert "hosted_agent_game_memory" in sql
+    assert "hosted_agent_memory_patches" in sql
+    assert "hosted_strategy_revision_id" in sql
+    assert "load_hosted_agent_runtime_context" in sql
+    assert "stage_hosted_agent_memory_patch" in sql
+    assert "project_hosted_agent_memory_patches" in sql
+    assert "complete_pydantic_agent_task_attempt" in sql
+    assert "agent_request_count" in sql
+    assert "agent_tool_call_count" in sql
+    assert "patch.runtime_result_id_digest" in sql
+    assert "result.runtime_result_id_digest =" in sql
+    assert "v_patch.apply_status = 'applied'" in sql
+    assert "memory_version = v_patch.expected_memory_version" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert HOSTED_AGENT_RUNTIME_V2_SQL_PATH in migrate_module.migration_files(
+        "arena"
+    )
+
+
+def test_hosted_agent_cross_game_learning_is_durable_and_gated(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_CROSS_GAME_LEARNING_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "hosted_agent_learning_jobs" in sql
+    assert "hosted_agent_strategy_evaluations" in sql
+    assert "arena_game_completed_hosted_learning" in sql
+    assert "claim_hosted_agent_learning_jobs" in sql
+    assert "load_hosted_agent_learning_evidence" in sql
+    assert "complete_hosted_agent_learning_job" in sql
+    assert "release_hosted_agent_learning_job" in sql
+    assert "status = 'superseded'" in sql
+    assert "status = 'rolled_back'" in sql
+    assert "automatic_regression_rollback" in sql
+    assert "(v_net_worth - v_average_net_worth)" in sql
+    assert "/ v_average_net_worth" in sql
+    assert "v_average_net_worth <= 0" in sql
+    assert "v_base_evaluation_count >= 1" in sql
+    assert "v_base_average <= v_parent_average - 2000" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_CROSS_GAME_LEARNING_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_context_projects_prior_applied_memory(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "project_hosted_agent_memory_for_context" in sql
+    assert "patch.game_agent_id = p_game_agent_id" in sql
+    assert "result.apply_status IN ('applied', 'rejected')" in sql
+    assert "memory_version = v_patch.expected_memory_version" in sql
+    assert "PERFORM public.project_hosted_agent_memory_for_context" in sql
+    assert "load_hosted_agent_runtime_context" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_MEMORY_CONTEXT_BARRIER_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_memory_only_learns_applied_candidate_outcomes(
+    monkeypatch,
+):
+    sql = HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "arena_applied_agent_actions AS application" in sql
+    assert "application.application_outcome" in sql
+    assert "v_patch.application_outcome = 'candidate'" in sql
+    assert "SET status = 'discarded'" in sql
+    assert "project_hosted_agent_memory_patches" in sql
+    assert "project_hosted_agent_memory_for_context" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_MEMORY_CANDIDATE_OUTCOME_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_hosted_agent_learning_preserves_strategy_foundation(monkeypatch):
+    sql = HOSTED_AGENT_STRATEGY_FOUNDATION_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "load_hosted_agent_learning_evidence_v2" in sql
+    assert "WITH RECURSIVE strategy_lineage" in sql
+    assert "baseStrategyInstructions" in sql
+    assert "arena.hosted-learning-evidence.v2" in sql
+    assert "source <> 'learned'" in sql
+    assert "TO adx_hosted_worker" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_AGENT_STRATEGY_FOUNDATION_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_arena_money_precision_policy_wraps_apply_and_repairs_unprojected(
+    monkeypatch,
+):
+    sql = ARENA_MONEY_PRECISION_POLICY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "price_precision_exceeded" in sql
+    assert "apply_arena_agent_task_result_pre_precision_v1" in sql
+    assert (
+        "CREATE OR REPLACE FUNCTION public.apply_arena_agent_task_result("
+        in sql
+    )
+    assert "market_projection_receipts" in sql
+    assert "'default_pass'" in sql
+    assert "'market_timeout'" in sql
+    assert "'negotiation_timeout'" in sql
+    assert "GRANT EXECUTE ON FUNCTION" in sql
+    assert "public.apply_arena_agent_task_result(TEXT)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MONEY_PRECISION_POLICY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_arena_money_precision_recovery_only_requeues_proven_fixed_runs(
+    monkeypatch,
+):
+    sql = ARENA_MONEY_PRECISION_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_moneyerror'" in sql
+    assert "result.error_class = 'price_precision_exceeded'" in sql
+    assert "market_projection_receipts" in sql
+    assert "receipt.result_id IS NULL" in sql
+    assert "SET status = 'queued'" in sql
+    assert "safe_error_code = NULL" in sql
+    assert "completed_at = NULL" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MONEY_PRECISION_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_elapsed_task_recovery_only_requeues_proven_precision_followup(
+    monkeypatch,
+):
+    sql = ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_valueerror'" in sql
+    assert "result.error_class = 'price_precision_exceeded'" in sql
+    assert "task.deadline_at <= clock_timestamp()" in sql
+    assert "market_projection_receipts" in sql
+    assert "receipt.result_id IS NULL" in sql
+    assert "SET status = 'queued'" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_large_foundation_learning_recovery_is_narrow_and_one_time(
+    monkeypatch,
+):
+    sql = HOSTED_LARGE_FOUNDATION_LEARNING_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "WITH RECURSIVE strategy_lineage" in sql
+    assert "job.error_class = 'internal_learning_failure'" in sql
+    assert "foundation.source <> 'learned'" in sql
+    assert "char_length(foundation.instructions) > 3000" in sql
+    assert "job.candidate_strategy_revision_id IS NULL" in sql
+    assert "SET status = 'pending'" in sql
+    assert "attempt_count = 0" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        HOSTED_LARGE_FOUNDATION_LEARNING_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_money_precision_function_owner_receives_only_required_updates(
+    monkeypatch,
+):
+    sql = ARENA_MONEY_PRECISION_PRIVILEGES_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "UPDATE (" in sql
+    assert "application_outcome" in sql
+    assert "applied_action" in sql
+    assert "authoritative_entered_at" in sql
+    assert "UPDATE (safe_metadata)" in sql
+    assert "TO adx_arena_function_owner" in sql
+    assert "GRANT UPDATE ON" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MONEY_PRECISION_PRIVILEGES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_precision_privilege_recovery_requires_all_results_unapplied(
+    monkeypatch,
+):
+    sql = ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_insufficientprivilegeerror'" in sql
+    assert "result.apply_status <> 'pending'" in sql
+    assert "arena_applied_agent_actions" in sql
+    assert "applied.result_id IS NOT NULL" in sql
+    assert "SET status = 'queued'" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_PRECISION_PRIVILEGE_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
     )

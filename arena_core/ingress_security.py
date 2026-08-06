@@ -18,7 +18,13 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
-from arena_agent_contracts import AgentTaskResultV1, BuyAction, SellAction
+from arena_agent_contracts import (
+    AgentTaskResultV1,
+    BuyAction,
+    EngageRequestActionV1,
+    RequestNegotiationsActionV1,
+    SellAction,
+)
 
 
 IngressRejectionCode: TypeAlias = Literal[
@@ -228,6 +234,11 @@ def validate_runtime_result_identifiers(
     validate_runtime_controlled_text(result.result_id)
     if isinstance(result.action, (BuyAction, SellAction)):
         validate_runtime_controlled_text(result.action.good)
+    elif isinstance(result.action, RequestNegotiationsActionV1):
+        for request in result.action.requests:
+            validate_runtime_controlled_text(request.target_intent_id)
+    elif isinstance(result.action, EngageRequestActionV1):
+        validate_runtime_controlled_text(result.action.request_id)
     return result
 
 

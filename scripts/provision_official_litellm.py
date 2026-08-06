@@ -268,7 +268,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--manifest-file", type=Path, required=True)
     parser.add_argument("--model-alias", default="deepseek-v4-flash")
-    parser.add_argument("--upstream-model", default="deepseek-chat")
+    parser.add_argument("--upstream-model", default="deepseek-v4-flash")
     parser.add_argument("--config-version", default="v1")
     return parser
 

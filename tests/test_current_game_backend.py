@@ -560,6 +560,7 @@ def test_ensure_current_game_keeps_existing_nonterminal_pointer() -> None:
                 mode="seeded_shuffle",
             ),
             event_seed="current-game-seed",
+            market_protocol="agent_a2a.v1",
         )
     )
 
@@ -569,6 +570,31 @@ def test_ensure_current_game_keeps_existing_nonterminal_pointer() -> None:
         "INSERT INTO arena402.games" in query
         for query in connection.queries
     )
+
+
+def test_ensure_current_game_rejects_unknown_market_protocol() -> None:
+    connection = _CompletedCurrentConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    with pytest.raises(
+        PawnhouseRepositoryError,
+        match="invalid_market_protocol",
+    ):
+        asyncio.run(
+            repository.ensure_current_game(
+                game_id="game-next",
+                events=build_event_schedule(
+                    round_count=5,
+                    seed="next-current-game-seed",
+                    mode="seeded_shuffle",
+                ),
+                event_seed="next-current-game-seed",
+                market_protocol="agent_a2a.latest",
+            )
+        )
 
 
 def test_ensure_current_game_creates_and_atomically_rotates_terminal_pointer() -> None:
@@ -587,6 +613,7 @@ def test_ensure_current_game_creates_and_atomically_rotates_terminal_pointer() -
                 mode="seeded_shuffle",
             ),
             event_seed="next-current-game-seed",
+            market_protocol="agent_a2a.v1",
         )
     )
 
@@ -608,6 +635,8 @@ def test_ensure_current_game_creates_and_atomically_rotates_terminal_pointer() -
     )
     config = json.loads(str(game_insert[6]))
     assert config["portfolioMode"] == "manual"
+    assert config["marketProtocol"] == "agent_a2a.v1"
+    assert game_insert[10] == "agent_a2a.v1"
 
 
 def test_legacy_managed_current_game_does_not_overwrite_joined_portfolios() -> None:

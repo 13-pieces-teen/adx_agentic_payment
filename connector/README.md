@@ -20,8 +20,9 @@ in locally for a specific runtime.
 ## Arena game integration status
 
 The Connector is an implemented control plane, not the Arena game authority.
-It now accepts versioned `arena.decide` and `arena.negotiate` payloads inside
-the existing top-level `task.dispatch` action and returns a separate
+It accepts versioned `arena.decide`, `arena.negotiate`,
+`arena.market.intent`, `arena.market.rfq`, and `arena.market.select` payloads
+inside the existing top-level `task.dispatch` action and returns a separate
 `arena.agent-result.v1` terminal result. The local result is durably stored
 before transport, replayed after reconnect, and removed only after
 `agent_task.result.ack`. A new Connector process increments the binding's
@@ -43,6 +44,13 @@ accepted negotiation as `settlement_failed` with safe error
 `settlement_disabled`; it created no SettlementIntent, moved no inventory, and
 wrote nothing on chain. Production reconnect, real Hosted/Connector mixed
 acceptance, and payment-enabled Connector settlement are still pending.
+
+On 2026-08-04, the same real local Runtimes completed an opt-in
+`agent_a2a.v1` intent/discovery game. Claude published a grain buy intent and
+Codex published a grain sell intent through the new typed tasks. Their private
+price intervals did not overlap, so the buyer received no legal target and
+passed; no Engagement or Deal was invented. This proves real Local Agent
+execution through discovery, not a real negotiated A2A trade.
 
 The stateless MCP slice is also implementation-complete behind
 `ADX_ARENA_MCP_ENABLED=false`. It includes short-lived Device/Binding/epoch
@@ -68,25 +76,58 @@ migrations, login/pairing/approval, WSS hello and `task.available`, a
 Connector-owned managed Session, Device token exchange, MCP discover/list,
 sync/claim/submit/status, the PostgreSQL Result Sink, and zero chain writes.
 That harness emulates the managed Runtime control frames. A separate real
-Runtime harness now launches locally authenticated Claude Code and Codex child
-processes on the host while Docker owns Arena, Gateway, PostgreSQL, and the
-Arena worker. It verifies authoritative task/result/application rows and
+Runtime harness launches two configurable, locally authenticated Runtime
+children on the host while Docker owns Arena, Gateway, PostgreSQL, and the
+Arena worker. The default remains Claude Code plus Codex;
+`ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS=codex,codex` creates two independent Codex
+Connector participants with separate users, Devices, Bindings, Sessions, and
+state stores. It verifies authoritative task/result/application rows and
 rankings rather than treating process exit or MCP submit as business success.
 The accepted 2026-08-02 run also verifies one FCFS pairing and a two-message
 negotiation (`propose` then `accept`). It intentionally verifies the
 payment-disabled terminal path rather than claiming a settlement.
 
-Run the real Runtime E2E from PowerShell after confirming both local CLIs are
-authenticated. It uses the isolated project `arena402-real-runtimes-e2e`,
-loopback ports `18001`/`55434`, and payment-disabled one-time test users:
+The accepted 2026-08-04 Codex-only Agent-driven A2A run
+`real-runtimes-9efb7dc941` used two independent Codex CLI 0.146.0 Connector
+participants. It applied two Intents, one RFQ, one Engage, and three
+negotiation Results. The buyer proposed `3.600000`, the seller countered
+`4.500000`, and the buyer rejected because its ceiling was `4.200000`.
+Therefore the authoritative outcome is one Engagement, one compatibility
+Pairing, three negotiation messages, zero Deals, zero SettlementIntents, zero
+inventory commits, and zero chain writes. This proves real dual-Agent
+negotiation and autonomous non-convergence, not a completed trade.
+
+The post-fix payment-disabled run `real-runtimes-e8c3b2d723` used the same
+independent dual-Codex topology. The buyer published a grain ceiling of
+`2.950000`, issued an RFQ, and proposed `2.550000`; the seller engaged,
+countered at its `2.900000` floor, and the buyer independently accepted.
+Arena froze one Deal with distinct seller proposal and buyer acceptance Result
+IDs. Because the Game used `authorizationMode=none`, it correctly ended as
+`settlement_failed` with zero SettlementIntents, inventory commits, balance or
+holding mutations, and chain writes. This validates a real Local Agent Deal,
+not payment settlement. The preceding probes also exposed and fixed a bounded
+Codex adapter mismatch: an `accept` may fill the output schema's nullable
+`price` and `message` fields; the Connector now discards only those fields and
+uses Arena's frozen latest quote, as the Claude adapter already does.
+
+Run the Codex-only Agent-driven A2A E2E from PowerShell after confirming the
+local Codex CLI is authenticated. It uses the isolated project
+`arena402-codex-a2a-e2e`, loopback ports `18001`/`55434`, two payment-disabled
+one-time test users, and no chain writer:
 
 ```powershell
-docker compose -p arena402-real-runtimes-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena up --build -d postgres migrate provision-db-roles api arena-worker
-$inviteRaw = docker compose -p arena402-real-runtimes-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 2 --json
+docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena up --build -d postgres migrate provision-db-roles api arena-worker
+$inviteRaw = docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 2 --json
 $env:ADX_REAL_RUNTIME_E2E_INVITES = ConvertTo-Json -Compress -InputObject @((ConvertFrom-Json $inviteRaw).invites)
+$env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS = "codex,codex"
+$env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT = "0"
+$env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL = "agent_a2a.v1"
+$env:ADX_REAL_RUNTIME_E2E_ROUND_COUNT = "1"
+$env:ADX_REAL_RUNTIME_E2E_EVENT_SEED = "codex-natural-28"
+$env:ADX_REAL_RUNTIME_E2E_EXPECT_DEAL = "true"
 python tests/real_runtimes_docker_e2e.py
-Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES
-docker compose -p arena402-real-runtimes-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
+Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES, Env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS, Env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT, Env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL, Env:ADX_REAL_RUNTIME_E2E_ROUND_COUNT, Env:ADX_REAL_RUNTIME_E2E_EVENT_SEED, Env:ADX_REAL_RUNTIME_E2E_EXPECT_DEAL
+docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
 ```
 
 This accepted run does not cover production reconnect, lease expiry, durable
@@ -185,8 +226,15 @@ To enable Connector-owned Codex tasks for a trusted local demo:
 ./adx-connector run \
   --api-base http://localhost:8000 \
   --allow-root /path/to/project \
+  --runtime-kind codex \
   --enable-codex-tasks
 ```
+
+`--runtime-kind` may be repeated and limits inventory discovery itself. An
+excluded Runtime executable is not located, version-probed, authentication-
+probed, or published. Omit the flag to retain the compatibility behavior of
+detecting every supported local Runtime. This is separate from
+`--enable-codex-tasks`: discovery selection never grants task execution.
 
 Claude task execution requires the separate
 `--unsafe-enable-claude-tasks` development flag. The Connector cannot yet

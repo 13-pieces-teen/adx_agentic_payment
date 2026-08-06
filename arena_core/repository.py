@@ -63,6 +63,13 @@ class ArenaCoreRepository(Protocol):
 
     async def get_task(self, task_id: str) -> ArenaTaskRecord | None: ...
 
+    async def get_task_by_idempotency(
+        self,
+        *,
+        game_agent_id: str,
+        idempotency_key: str,
+    ) -> ArenaTaskRecord | None: ...
+
     async def get_result_for_task(self, task_id: str) -> ArenaResultRecord | None: ...
 
     async def get_results_for_tasks(
@@ -207,6 +214,20 @@ class MemoryArenaCoreRepository:
         async with self._lock:
             record = self._tasks.get(task_id)
             return self._copy(record) if record else None
+
+    async def get_task_by_idempotency(
+        self,
+        *,
+        game_agent_id: str,
+        idempotency_key: str,
+    ) -> ArenaTaskRecord | None:
+        async with self._lock:
+            task_id = self._task_by_idempotency.get(
+                (game_agent_id, idempotency_key)
+            )
+            if task_id is None:
+                return None
+            return self._copy(self._tasks[task_id])
 
     async def get_result_for_task(self, task_id: str) -> ArenaResultRecord | None:
         async with self._lock:

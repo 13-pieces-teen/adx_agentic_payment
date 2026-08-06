@@ -167,7 +167,13 @@ class ProviderRequest:
 
     attempt_id: str
     task_id: str
-    task_kind: Literal["arena.decide", "arena.negotiate"]
+    task_kind: Literal[
+        "arena.decide",
+        "arena.negotiate",
+        "arena.market.intent",
+        "arena.market.rfq",
+        "arena.market.select",
+    ]
     idempotency_key: str
     model_id: str
     prompt_version: str

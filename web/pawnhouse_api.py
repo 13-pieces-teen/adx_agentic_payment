@@ -87,6 +87,10 @@ class CreateGameBody(_Body):
         default="manual",
         alias="portfolioMode",
     )
+    market_protocol: Literal["fcfs.v1", "agent_a2a.v1"] = Field(
+        default="fcfs.v1",
+        alias="marketProtocol",
+    )
     settlement: "SettlementConfigBody | None" = None
 
 
@@ -1052,6 +1056,7 @@ def create_pawnhouse_router(
                 action_timeout_ms=body.action_timeout_ms,
                 max_participants=body.max_participants,
                 portfolio_mode=body.portfolio_mode,
+                market_protocol=body.market_protocol,
                 settlement_config=settlement_config,
             )
         except (EventDeckError, SettlementError) as exc:

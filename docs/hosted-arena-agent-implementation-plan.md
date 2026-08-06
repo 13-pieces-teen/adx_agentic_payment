@@ -1,10 +1,10 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：已批准实施；Phase 0–6 的 Hosted 后端路径与 1–10 回合游戏编排已完成，
-> Connector typed Task/Result 与 Result Sink 基础接线已完成；Local identity/session/
-> task dispatcher、mixed-Runtime 编排、生产 Tencent SSM/CAM 和完整生产 E2E 待验收；
-> DeepSeek/OpenAI-compatible Provider 已在本地真实链路验证
-> 最后更新：2026-07-25
+> 文档状态：Runtime v2 直接替换已完成本地隔离验收；2026-08-06 已批准并开始
+> Phase D 统一自主交易比赛。旧 Phase 0–6 作为已完成 foundation 保留；Runtime
+> v2 权威实现记录见第 22 节，跨 Runtime 产品切换见
+> [`agent-driven-a2a-market-implementation-plan.md`](./agent-driven-a2a-market-implementation-plan.md)
+> 最后更新：2026-08-06
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
 > 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
@@ -34,6 +34,15 @@ Agent identity / ownership
 中间的完整 FCFS 撮合、有限轮协商和结算引擎可以独立推进。本计划只实现它们所依赖的
 Agent/Runtime/Task 基础，并提供清晰的 Arena 接口；不会为了演示 Hosted Agent 而把
 已删除的内存 matching 原型冒充生产游戏内核。
+
+Runtime v2 在这些基础上直接替换认知执行链。生产切换后不并行保留
+`DirectModelDriver` fallback；保留的是 Task、lease、Attempt、Secret、Result Sink
+和 Finalizer 等平台基础设施。
+
+Phase D 不再改造 Hosted Agent 的认知内核。它把已经完成的 PydanticAI Hosted
+Runtime 与真实 Codex Connector 接入同一场版本化 `agent_a2a.v1` Current Game，
+并要求 `arena402-g` 的 confirmation-gated InventoryCommit、终场排名和后续 Game
+Strategy Revision 冻结来自同一条权威证据链。Native A2A 是 Phase E。
 
 ### 1.1 MVP 成功定义
 
@@ -1484,12 +1493,11 @@ class AgentRuntimeDriver(Protocol):
     async def execute(task_snapshot, deadline) -> AgentTaskResult: ...
 ```
 
-当前 `DirectModelDriver` 执行一个逻辑 AgentTask，并按统一规则最多发起两个 Provider
-Attempt。未来可以新增：
+Runtime v2 的 `HostedArenaAgentRuntime` 使用 PydanticAI 执行一个逻辑 AgentTask。
+未来可以在该边界内新增：
 
-- `LangGraphDriver`；
 - 受控多步骤 Planner；
-- 平台 Skill；
+- allowlisted MCP/平台 Skill；
 - 评估与版本发布。
 
 Agent Studio 仍必须遵守：
@@ -1516,7 +1524,7 @@ Agent Studio 不进入本次 MVP 的代码范围。
 | Guest signer Secret 命名与 region | 部署前确定；签名机制已冻结为 `sandbox_guest + single_eip3009` |
 | Native A2A auth/binding | Post-MVP |
 | 多 Runtime failover | Post-MVP，需重新评估公平性 |
-| 跨局长期记忆 | 不在 MVP |
+| 跨局策略学习的自动晋级阈值 | Runtime v2 先持久化 candidate/replay 证据，再用真实比赛校准 |
 
 以上事项不得被实现者用不安全默认值静默决定。
 
@@ -1553,3 +1561,238 @@ Agent Studio 不进入本次 MVP 的代码范围。
       均有脱敏证据；
 - [ ] README、product、game-design、roadmap、agent-onboarding 和 settlement 文档已同步；
 - [ ] frozen specs、compatibility identifiers 和无关用户改动未被破坏。
+
+## 22. Runtime v2：PydanticAI 直接替换计划
+
+本节是 2026-08-05 起的当前实施权威。旧 Phase 3 的 DirectModelDriver 内容只描述
+历史基线；对应实现与测试已经删除，不再定义或参与当前 Runtime。
+
+### 22.1 保留、替换和退役
+
+| 决策 | 范围 |
+|---|---|
+| 保留 | Agent identity、Hosted config、Secret ports、AgentTask/Result、lease、Attempt、Result Sink/Consumer、Finalizer |
+| 重构 | Durable Hosted Worker、Provider composition、official pool bootstrap |
+| 直接替换 | `DirectModelDriver`、`PromptBuilder`、比赛决策用 `ProviderAdapter.invoke` |
+| 已删除 | legacy Driver/Prompt 实现、对应测试、Worker fallback 与无调用引用 |
+
+生产切换后不得按请求或错误静默 fallback 到旧 Driver。数据库迁移保持 forward-only；
+运行故障通过完整部署版本回滚处理。
+
+### 22.2 目标模块
+
+```text
+hosted_agent_runtime/
+  arena_agent.py
+  runtime.py
+  context.py
+  model_factory.py
+  strategy.py
+  tools/
+  memory/
+  learning/
+```
+
+`Agent[ArenaAgentContext, HostedAgentRunOutput]` 组合：
+
+- 平台 instructions；
+- 冻结 Strategy Revision；
+- `RunContext` 中的不可变 Task 和已应用 Game Memory；
+- 只读分析工具；
+- `UsageLimits(request_limit, tool_calls_limit, output_tokens_limit)`；
+- typed terminal action、safe decision summary 和 pending memory patch。
+
+不持久化 PydanticAI raw messages、ThinkingPart、Provider reasoning text 或私有
+chain-of-thought。
+
+### 22.3 官方策略目录与抽取
+
+官方池一级策略固定为：
+
+- `aggressive`；
+- `conservative`；
+- `balanced`。
+
+每个一级类型可以有多个固定数值变体。Bootstrap 为每个官方 `agent_id` 持久化类型
+和 active Strategy Revision。补位候选使用：
+
+```text
+stable_random_key =
+  hash(game_id, agent_id, "arena.official-selection.v1")
+```
+
+相同 Game 的重试得到相同候选顺序；已经落入 `game_participants` 的身份不会被替换。
+入局事务把 Strategy Revision 写入 `game_agents` 快照并初始化
+`hosted_agent_game_memory`。一名玩家加九个官方 Agent 时，九个席位分别绑定九个
+持久身份和九份独立记忆。
+
+### 22.4 实施里程碑
+
+#### V2-0 文档冻结
+
+- [x] 更新 Hosted Spec、Implementation Plan 和 Game Design；
+- [x] 冻结策略类型、随机抽取单位和状态保存权威；
+- [x] 明确无 Runtime fallback、无 direct Arena write、无 CoT persistence。
+
+#### V2-1 状态与抽取 foundation
+
+- [x] 增加 Strategy Revision、Game Memory 和 pending memory patch migration；
+- [x] official pool 增加 strategy archetype；
+- [x] 使用 Game-scoped 稳定随机候选顺序；
+- [x] 入局冻结 revision 并初始化独立 Game Memory；
+- [x] 增加最小权限 SQL 与静态 migration contract 测试；
+- [x] 使用隔离 PostgreSQL 完成 migration、入局冻结、applied/defaulted memory
+  gate 集成验收；
+- [ ] 完成 rejected/late、并发 CAS 和 Worker 重启集成验收。
+
+#### V2-2 PydanticAI Runtime core
+
+- [x] 锁定 `pydantic-ai-slim[openai]==2.24.0`；
+- [x] 实现 allowlisted Model factory；
+- [x] 实现 Agent instructions、typed output、只读工具和 UsageLimits；
+- [x] 使用 TestModel 覆盖多步工具、输出纠正与 Worker 闭环；
+- [x] 不保存 raw message history/thinking content。
+
+#### V2-3 Worker cutover
+
+- [x] 生产 Durable Worker 改为构造 `HostedArenaAgentRuntime`；
+- [x] 一个 DB Attempt 包裹一个 bounded PydanticAI run；
+- [x] 将 run 的 request/tool 安全计数加入 Attempt 持久化；
+- [x] candidate action 仍只进入现有 Result Sink；
+- [x] pending memory patch 绑定具体 Runtime Result digest，只在该 Result
+  applied 后 CAS 提交；
+- [x] credential validation probe 与比赛决策引擎分离。
+
+`arena-scripted` Provider 仅可留作孤立 Provider 单元 fixture；Hosted Worker
+不再发布或执行该比赛路径，也不存在 PydanticAI 失败后的生产 fallback。
+
+#### V2-4 跨比赛学习
+
+- [x] `game.completed` 创建幂等 durable learning job；
+- [x] 只读取可验证的行动、成交、价格、净值、排名、失败和 usage 汇总；
+- [x] bounded PydanticAI learner 生成 candidate Strategy Revision 和安全证据
+  摘要，不持久化 raw messages 或 reasoning；
+- [x] learner 调用前要求至少两个 task、至少一个真实 candidate action、至少一笔
+  `settled` 交易和非零相对净值结果；单步、default-only、无成交或纯随机组合收益
+  不进入策略学习；
+- [x] 严格 schema、策略类型 envelope、单局每维最多 1000 bps 变化和历史动作
+  计数回放全部通过后，只对下一场 Game 激活；模型自报 confidence 仅作审计信号，
+  不作为安全权威；
+- [x] 保存完整 revision/evaluation 历史；已学习版本相对 parent 的平均结果分数
+  严重下降至少 2000 bps 时自动恢复 parent，只影响之后加入的 Game。
+
+首版 policy surface 固定为 `risk_budget_bps`、`min_expected_edge_bps`、
+`max_inventory_concentration_bps`、`negotiation_concession_bps` 和
+`exploration_bps`。当前 replay gate 验证的是历史动作证据完整性、计数一致性和
+Arena 合同安全，不是离线经济收益模拟；收益阈值仍需用真实多局结果校准。
+
+2026-08-06 隔离验收在全新 PostgreSQL 上执行 `002`–`066`，并证明：
+
+- 胜局 learning job 通过 TestModel 产生并激活 learned revision；
+- 已完成局仍引用原 base revision；
+- 下一局加入时冻结 learned revision 和渲染后的 bounded instructions；
+- 下一局严重退化时恢复 parent revision，而该局已冻结的 learned revision 不变。
+
+这份证据验证持久化、最小权限函数、Worker 编排和跨局版本边界，不等同于私有
+LiteLLM 真实调用、真实策略收益或生产部署验收。
+
+私有 LiteLLM + DeepSeek V4 Flash 的隔离真实模型验收同时发现并关闭了
+“看似成功但证据不足”的边界：
+
+- learner 实际执行 3 个 request 和 2 个只读 tool call，typed candidate 经过
+  确定性 gate；模型自报 confidence 仅作审计；
+- 首次 payment-disabled 单回合 1+9 虽然 10/10 决策成功，但从无成交局激活
+  learned revision 的结论被后续审计撤回；净值差来自初始组合和事件价格，不能
+  证明策略行动有效。当前所有此类 job 会在模型调用前拒绝；
+- 三回合 `regression-real-hosted-1plus9-v7` 完成 30/30 decide、2/2
+  negotiate，形成 iron 配对、`5.880600` 报价和 accept；支付关闭后按设计进入
+  `settlement_failed`，没有 SettlementIntent；
+- PydanticAI 的 DeepSeek profile 现在把上限发送为 `max_tokens`，而不是错误的
+  `max_completion_tokens`；非 thinking/thinking 单请求上限为 8192/16384，
+  Agent-run 累计上限 65536。`request_limit` 耗尽作为结构化输出失败允许同
+  Runtime 唯一重试，并保存已经产生的 usage；
+- v7 暴露下一回合可能在上一 applied memory patch 投影前加载旧版本；迁移 `065`
+  在加载新 task context 前按同一 `game_agent_id` 投影全部已终态 patch。全新
+  PostgreSQL 集成测试已证明第二个 task 读取 memory v1，而不是再次从 v0 生成
+  会变 stale 的补丁。
+- 修复后的 `regression-real-hosted-1plus9-v10` 以退出码 0 完成 34/34 task：
+  30/30 decide、4/4 negotiate、warhorse/iron 两次 proposal/accept，10/10
+  Game Agent 至少推进到 memory v3；payment-disabled 下 10 个 learning job
+  全部因无 `settled` 交易被拒绝，并保持 0 SettlementIntent。
+- 全新 PostgreSQL `002`–`066` fault-injection 使用不同 Worker identity 验证
+  claim 互斥、`created` 前置崩溃重试、`request_sent` 后 unknown/no-replay、
+  Result accepted/duplicate/conflict CAS、late Result 和 learning lease 重领。
+  实验还发现非法 candidate 会以 `default_pass` 被 Arena 确定性消费，不能只凭
+  `apply_status=applied` 推进记忆；迁移 `066` 现在要求
+  `application_outcome=candidate`，并已证明 `good_not_allowed` 对应 patch 被
+  `discarded`、memory version 不变。
+- `python tests/hosted_worker_process_recovery_e2e.py run` 进一步构建当前生产
+  镜像、应用全部迁移并 provision 最小权限角色，然后对独立
+  `hosted_agent_runtime.production_worker` 容器执行真实 `SIGKILL`。Attempt
+  前崩溃由新 Worker identity 在 30 秒 lease 到期后完成 Attempt 1；
+  `request_sent` 后崩溃由另一 Worker 收敛为
+  `request_outcome_unknown`，Provider 协议请求保持 1。隔离 AES-GCM 密钥卷和
+  本地 LiteLLM 协议替身随实验清理，支付始终关闭。
+
+这些证据已经覆盖外部多容器进程 kill/restart，但仍是 payment-disabled 隔离
+实验，不等同于真实 `settled` 跨局收益或生产部署验收。
+
+2026-08-06 又完成两场隔离、payment-enabled 的三回合 1+9 canary。两局共四笔
+mUSDC Intent 均经自建 Facilitator 在 Injective EVM testnet 确认后提交库存，
+Pairing/Negotiation 才进入 `settled`。第一局玩家以 owner revision 1、排名 1
+和一次本人 settled 交易激活 learned revision 2；第二局加入时冻结的正是
+revision 2，并实际产生 `buy/sell/pass` 各一次。第二局玩家没有成为 settled
+配对方，因此保持 revision 2，符合“无本人结算不学习”的 preflight。
+
+该真实链路还发现 learner 虽有 8192 的 PydanticAI run budget，Worker 却把
+Provider 输出再次截成 2048，导致 DeepSeek typed proposal 触发 token limit。
+现在已把已清洗的权威 evidence snapshot 直接放入 learner 上下文，保留只读工具
+供可选复查；结构化输出失败允许一次 durable retry，且 Provider 与 run 的输出
+上限统一为 8192。修复后第二局四个真实成交方的 learning job 均在第一次 Attempt
+激活新 revision，六个无成交方全部在模型调用前拒绝。该 canary 使用隔离 mUSDC，
+不能替代 `arena402-g`、公共 Facilitator、生产部署或统计性收益验收。
+
+同日的 Phase D 混合 Runtime 中间验收
+`phase-d-mixed-musdc-v4-c30a038913` 又把一名真实 Codex Connector 与九名
+Hosted Agent 放进同一场八回合 `agent_a2a.v1`。92 个 Task 全部 applied，
+产生三笔确认后提交库存的 mUSDC Deal 和十条排名；priority 3/5 分别激活
+revision 9/8。后续 `phase-d-revision-freeze-v1-df1bea4ee0` 冻结并实际运行
+这两条 revision，证明学习只影响未来 Game。另一名有 settled 信号的 Agent
+连续两次返回无效结构化输出，因此 job 失败并保留旧 revision；这属于 bounded
+失败，不记作学习成功。
+
+真实局还暴露并修复了三类恢复边界：超过六位小数的候选价格、按原
+idempotency key 恢复已过期的冻结 Task，以及 SECURITY DEFINER 投影函数的最小
+列级权限。迁移 `067`–`073` 只修复可证明的旧失败记录，新的候选仍由 Arena
+Result Sink fail closed。隔离 mUSDC 证据仍不替代 `arena402-g` 或生产切换。
+
+#### V2-5 删除与生产验收
+
+- [x] 生产入口显式注入 `PydanticModelFactory`，不再调用 DirectModelDriver；
+- [x] 人工确认后物理删除 legacy Driver/Prompt 实现及对应测试，并迁出 Attempt
+  与 Runtime 合同常量；
+- [x] 官方 Agent 与私有 LiteLLM 上游都固定为 `deepseek-v4-flash`；
+- [x] 完成单玩家 + 九官方 Agent 的三回合 payment-disabled 决策、配对和谈判 E2E；
+- [x] 完成真实 PostgreSQL 多 Worker identity、lease expiry、Attempt 恢复与
+  Result CAS/late 的隔离 fault-injection；
+- [x] 完成生产 Worker 外部多容器进程 `SIGKILL`/restart 恢复；
+- [x] 完成两局 payment-enabled、四笔 `settled` 的初始策略收益对比；样本仍
+  不足以校准 archetype 优劣或自动回滚阈值；
+- [x] 证明不同策略类型和独立 Game Memory；
+- [x] 证明下一局学习、历史 revision 和只影响未来局的自动回滚；
+- [x] 更新 README/Roadmap 的本地隔离证据；部署证据仍待生产切换。
+
+### 22.5 必须通过的行为测试
+
+- 相同 Game 和 pool 状态下，官方候选顺序可复现；
+- 不同 Game 的候选顺序发生变化；
+- 抽中后整局 identity/archetype/revision 不变；
+- 同一 Agent 的两场 Game 使用不同 `game_agent_id` 和独立 Game Memory；
+- default_pass/negotiation_timeout/rejected/defaulted/late result 不推进
+  memory version；
+- 只有 `application_outcome=candidate` 的 applied result 最多推进一次；
+- Worker 重启恢复相同 strategy revision 和 memory version；
+- PydanticAI 在限制内调用只读工具并返回唯一合法 terminal action；
+- raw reasoning、Secret 和不可信公开文本不进入记忆；
+- 新 revision 不影响正在进行的 Game。
+- learning job 重试、stale-base 拒绝和自动回滚都不会改写已冻结的 Game Agent。

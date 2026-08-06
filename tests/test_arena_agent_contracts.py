@@ -190,6 +190,43 @@ def test_decide_input_accepts_bounded_market_activity_feedback() -> None:
         )
 
 
+def test_decide_input_exposes_frozen_event_implied_final_prices() -> None:
+    view = ArenaDecideInputV1(
+        phase="decide",
+        game_id="game_01",
+        round_id="round_03",
+        round_index=3,
+        cash="100.000000",
+        holdings={"ruby": 5},
+        market={"ruby": "9.200000"},
+        event_implied_final={"ruby": "11.400000"},
+        reputation=ArenaReputationV1(failed_negotiations=0),
+        deadline_at="2026-07-24T12:00:20Z",
+    )
+
+    assert view.event_implied_final["ruby"] == Decimal("11.400000")
+    assert view.model_dump(by_alias=True)["eventImpliedFinal"] == {
+        "ruby": "11.400000"
+    }
+
+    with pytest.raises(
+        ValidationError,
+        match="eventImpliedFinal must cover the same goods as market",
+    ):
+        ArenaDecideInputV1(
+            phase="decide",
+            game_id="game_01",
+            round_id="round_03",
+            round_index=3,
+            cash="100.000000",
+            holdings={"ruby": 5},
+            market={"ruby": "9.200000"},
+            event_implied_final={"iron": "11.400000"},
+            reputation=ArenaReputationV1(failed_negotiations=0),
+            deadline_at="2026-07-24T12:00:20Z",
+        )
+
+
 def test_proposal_uses_decimal_not_binary_float_and_preserves_scale():
     action = ProposeAction(
         action="propose",

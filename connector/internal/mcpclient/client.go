@@ -3,6 +3,8 @@ package mcpclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,7 +109,7 @@ func (c Claim) DecodeCommand() (protocol.Command, error) {
 		return protocol.Command{}, fmt.Errorf("encode claimed Arena task: %w", err)
 	}
 	command := protocol.Command{
-		CommandID:      "mcp-task-" + task.TaskID,
+		CommandID:      mcpTaskCommandID(task.TaskID, c.Execution.SessionID),
 		BindingID:      c.Execution.BindingID,
 		AgentID:        c.Execution.AgentID,
 		Kind:           protocol.CommandTaskDispatch,
@@ -122,6 +124,11 @@ func (c Claim) DecodeCommand() (protocol.Command, error) {
 		return protocol.Command{}, fmt.Errorf("validate claimed Arena task: %w", err)
 	}
 	return command, nil
+}
+
+func mcpTaskCommandID(taskID, sessionID string) string {
+	digest := sha256.Sum256([]byte(taskID + "\x1f" + sessionID))
+	return "mcp-task-" + hex.EncodeToString(digest[:12])
 }
 
 type SubmissionReceipt struct {

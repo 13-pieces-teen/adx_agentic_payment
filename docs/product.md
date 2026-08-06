@@ -10,6 +10,24 @@ Arena 402 是一场面向 AI Agent 的回合制交易竞技场，同时提供一
 > 所有 Agent 公平开局，每回合决定买、卖或观望，进入市场后按先到先得配对并
 > 进行有限轮砍价，最终按事件塑造的结算价计算净资产。
 
+当前部署仍使用上述 `fcfs.v1`。已批准且在本地 opt-in 实现的下一版产品方向是
+[`agent_a2a.v1`](agent-driven-a2a-market-implementation-plan.md)：Agent 通过
+Arena A2A Gateway 发布意图、发现市场、选择对手、发起 RFQ、选择请求并自主协商；
+Arena 只负责中转、校验、并发占位、协议状态和结算，不能替 Agent 选择对手或生成
+接受动作。2026-08-04 已在本地以两个独立 Codex Connector Agent 完成
+Engagement、协商和 payment-disabled Deal E2E；这满足真实 Agent Deal 的本地
+证据门槛。2026-08-05 又由十个独立 Codex Connector 完成八回合完整比赛、
+140 个 succeeded/applied AgentTask、11 个 Deal、终场排名和零残留市场状态。
+这些证据仍不等于 payment-enabled 或部署验收，Current Game 尚未切换。
+早期状态机和 scripted Provider 只用于协议、不变量和 Fake E2E 验证。
+
+2026-08-06 的 Phase D 中间验收已在同一场隔离 Game 中组合一名真实 Codex
+Connector 玩家、九名 PydanticAI Hosted Agent 和八回合 `agent_a2a.v1`，完成
+三笔 mUSDC testnet 确认、库存提交、下一回合资产变化、终场排名和两条真实
+Strategy Revision activation；后续 payment-disabled Game 又冻结并使用这两条
+revision。该证据仍不是产品目标 `arena402-g`，也没有切换生产 Current Game，
+所以 Phase D 尚未完成。Native A2A Endpoint 顺延到 Phase E。
+
 产品展示的不是“谁调用了最贵的模型”，而是模型、Prompt、决策速度、风险判断
 和谈判策略如何共同影响可审计的交易结果。所有参赛者共享同一套规则、起始资产、
 事件牌组和排名口径，因此游戏结果也可以作为受控条件下的 Agent 行为比较样本。
@@ -46,8 +64,8 @@ PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控
    `action="buy" | "sell" | "pass"`。
 3. Result Sink 在持久化前过滤公开文字并记录数据库 `result_received_at`；
    Arena 校验后在限价区间有交集的同货物订单中按该时间进行 FCFS 配对。
-4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多协商
-   2–3 轮。
+4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多执行
+   3 个合并的协商行动，最终行动只能接受或拒绝。
 5. `accept` 后冻结价格、双方、货物和结算参数。
 6. 在目标 Hosted 路径中，Settlement 校验用户 Join 时一次确认的该局受限
    PaymentMandate，再由隔离的 guest signer 自动签名并提交 testnet 交易；单笔
@@ -108,7 +126,8 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - 模型 API Key 只允许经 write-only Credential ingress 写入批准的外部 Secret
   Manager；业务数据库、AgentTask、日志、Trace、Audit 与前端响应不得保存原值；
 - 游戏不得依赖保存模型私有 chain-of-thought；
-- Agent 不得直接通信；所有 A2A 由 Arena Gateway 中转、排序、校验和审计；
+- Agent 不得绕过 Arena Gateway 私下直连；Agent 通过 Gateway 进行逻辑 A2A，
+  自主选择对手和协商，Gateway 只中转、排序、校验和审计；
 - Runtime success、合法动作、协议接受、支付确认和库存提交必须是不同状态；
 - 事件、配对、协商、结算和排名必须持久化并可复核；
 - 超时或单个 Runtime 故障不得卡住整局；
@@ -149,8 +168,42 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   Result Sink 和 Hosted/Connector mixed-Runtime 编排。2026-08-02 已完成真实
   Claude Code/Codex 的一回合 Connector-only 比赛，并由 Result Sink 应用四项
   decide/negotiate 结果；该局形成 FCFS pairing、proposal 和 accept。隔离局未提供
-  PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。生产重连、
-  Hosted/Connector mixed 和 payment-enabled Connector 真实 E2E 尚未验收。
+  PaymentMandate，故以 `settlement_disabled` 终结且 0 链写入。真实 Codex
+  的任务执行中重启恢复和不重连 deadline default 已完成隔离故障注入；
+  lease-expiry takeover 和 terminal Result outbox replay 也已完成隔离
+  故障注入。Phase D 已完成一名真实 Codex Connector 与九名 Hosted Agent 的
+  隔离 mUSDC payment-enabled E2E；`arena402-g` 与生产 Connector E2E 尚未验收。
+  opt-in `agent_a2a.v1` 另已由两个独立 Codex Connector 完成 Intent、RFQ、
+  seller Engage、三轮协商和 immutable Deal；proposal 与 acceptance 来自不同
+  的已应用 Runtime Result。该局同样关闭支付，因此没有 SettlementIntent、
+  资产移动或链写入。另一个 `agent_a2a.v1` 隔离局
+  `mixed-fallback-7f15a77f8c` 已由 Hosted scripted buyer/rejecting seller
+  与真实 Codex seller 完成两次顺序 RFQ、第二次 Engage/accept 和 Deal；终局后
+  API/Arena worker 重启未重复消耗 RFQ budget 或增加 Deal/entry。后续
+  `mixed-fallback-a865aba66f` 在第二个 seller-selection Task 执行中重启
+  Connector，同一 Task 最终仅一条 Result 和一次 apply；不重连的
+  `mixed-fallback-5f00bae33a` 则由 Finalizer 精确应用 `market_timeout`。
+  `mixed-fallback-8af2ba9c8c` 验证 orphan lease 到期后由真实 MCP worker
+  接管；`mixed-fallback-4f99467b24` 验证 terminal Result 在本地 outbox
+  持久化、首次 submit 失败并重启后只进入 Arena 一次。上述局都保持零
+  SettlementIntent、零资产移动和零链写入。
+  `mixed-fallback-87fc3f3217` 又将两个 seller 都替换为独立真实 Codex
+  Connector：Primary seller 对低价 opening 自主 counter，buyer reject 后从冻结
+  剩余目录选择 Secondary seller，后者 engage 并 accept。该局完成 10 个
+  succeeded/applied AgentTask、2 个 RFQ、2 个 Engagement 和 1 个 Deal；服务
+  重启后计数不增长，同样保持零 SettlementIntent、零资产移动和零链写入。
+  `scripts/calibrate_action_timeout.py` 已将统一 timeout 公式实现为
+  fail-closed 证据门：按权威 Runtime/Task 分组读取 Arena 时间戳，每组合少于
+  100 个终态样本、deadline timeout 超过 1% 或没有成功端到端样本时均不输出
+  推荐值。三个 10-Agent Codex-only canary 又分别完成基础 A2A、等值多商品
+  A2A coverage 和 FCFS compatibility：`real-runtimes-d95129aafc` 形成
+  10 Intent、5 RFQ、2 Engagement 和 2 个真实接受 Deal；
+  `real-runtimes-61ba000c4b` 完成 10 个真实 Decide。所有 canary 都关闭支付、
+  无 timeout/retry/资产或链写入，并以 Runtime scan filter 排除 Claude 探针。
+  随后两场十 Agent、八回合完整 Codex 游戏把累计无故障终态样本增加到
+  `decide=10 / intent=195 / rfq=79 / select=33 / negotiate=36`；除 Intent
+  外仍未满足每组合 100 条，且尚无 12/25/50/100 Agent 分档证据，因此统一
+  timeout 仍未冻结。
 - Hosted Agent 已具备 PostgreSQL control repository、write-only credential
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable
@@ -205,18 +258,27 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - 通用 LangGraph/Agent Studio、任意工具、任意 MCP 或自定义 Provider Endpoint；
 - 比赛中途 Runtime 切换或 Hosted/Local 自动故障转移。
 
-## 待冻结参数
+## 已冻结与待实测参数
 
 - [x] Current Game 默认使用 8 回合；开发实现继续支持 1–10，部署方可通过
       `ADX_CURRENT_GAME_ROUND_COUNT=6` 运行较短实验；
-- [ ] `MAX_TURN`：2 还是 3？
-- [ ] 经真实 P95/P99 与负载测试校准后的统一 `action_timeout_ms`？
-- [ ] MVP 货物和初始现金/持仓？
-- [ ] `pawnhouse-standard-v1` 十张事件牌组内容与最终结算价算法是否作为正式
-      比赛版本冻结？确定性 seed 洗牌和赛程承诺已实现；
-- [ ] 单笔交易数量固定为 1，还是允许有界数量？
-- [ ] 逐笔链上结算无法满足现场吞吐时，采用哪种能保留逐笔 transfer
-      证据的批量交易方案？
+- [x] `MAX_TURN=3`，表示一段协商最多三个合并的 Agent 行动；最终行动只能
+      `accept` 或 `reject`，不能留下无人回应的新报价；
+- [x] 同一 Game 的所有 Runtime 使用统一 `action_timeout_ms`，其校准规则冻结为
+      目标负载下所有支持的 Runtime/Task 端到端 P99 最大值乘以 `1.25`，再向上
+      取整到 5 秒；具体数值仍须完成真实负载测试后写入部署配置；
+- [x] MVP 冻结 grain、iron、warhorse、gems 四种货物及其当前初始价；每名
+      Agent 以严格等值 20 金、可自由配置的现金和持仓开局，Join 后锁定；
+- [x] `pawnhouse-standard-v1` 十张事件牌组与当前终场估值算法作为当前 MVP
+      默认版本暂时冻结；后续可以通过新的版本化配置扩展，但不得原地改变已创建
+      Game 的冻结赛程或估值语义；
+- [x] 当前协议单笔交易数量固定为 `1`；未来版本允许有界数量，但必须增加新的
+      版本化 schema、资产预留、PaymentMandate 金额和结算校验，不能静默放宽
+      当前协议；首个有界数量版本使用正整数、精确全量成交，不支持 partial fill；
+- [x] 当真实吞吐证据表明逐笔链上提交不足时，允许显式启用批量结算；每个 Deal
+      仍须独立映射到批量交易中的具体 transfer、确认状态和幂等库存提交，不允许
+      使用无法还原逐笔成交的纯聚合净额；优先扩展并行逐笔提交和 Facilitator
+      shard，只有链上吞吐仍不足时才实现单交易多 transfer 的链上 batch；
 - [x] 上线签名模式冻结为 `sandbox_guest + single_eip3009`，用户 Join 时一次确认
       Game-scoped PaymentMandate，此后不逐笔确认；
 - [x] PaymentMandate 的 `reserve / consume / release` 与 revoke 已实现；
@@ -224,3 +286,12 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
       策略仍待验证；
 - [x] Official filler 的平台钱包已接入受限 PaymentMandate；停用 Official
       Agent 不得获得新 Mandate，Runtime 不接触钱包密钥或任意签名能力；
+
+`agent_a2a.v1` 的交易顺序进一步冻结为：每个 RFQ Task 只选择一个对手，
+`openingPrice` 是不可在 Engage 后反悔的第一个权威 proposal；每个买方每轮最多
+三次 RFQ 尝试，其中最多两次是从原冻结目录自主选择的 fallback，且同一时间最多
+一个 Engagement。Settlement failure 不触发 fallback。真实 Runtime 验收优先完成
+的 Hosted + Codex mixed、恢复矩阵和双真实 Codex seller fallback 已完成；
+Claude Code 待其外部连接健康后补证据，不阻塞 Codex 验收。进入 Current Game
+前仍需真实 P95/P99 负载校准；Phase D 已获 testnet 授权并完成隔离 mUSDC
+中间验收，但 `arena402-g` 仍需有效 owner/provisioning authority。

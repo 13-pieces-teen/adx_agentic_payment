@@ -203,6 +203,13 @@ def test_dispatcher_recreates_session_after_connector_process_restart() -> None:
                 "result": {"session_id": "session-after-restart"},
             },
         )
+        assert (
+            gateway.bindings["binding-1"]["last_session_id"]
+            == "session-after-restart"
+        ), (
+            gateway.bindings["binding-1"],
+            restarted_session["created_at"],
+        )
 
         assert await dispatcher.run_once() == 1
         task_dispatch = next(
@@ -280,13 +287,11 @@ def test_dispatcher_retries_inflight_task_once_after_connector_restart() -> None
         )
 
         await dispatcher.run_once()
-        restarted_session = max(
-            (
-                command
-                for command in gateway.commands.values()
-                if command["action"] == "session.start"
-            ),
-            key=lambda command: command["created_at"],
+        restarted_session = next(
+            command
+            for command in gateway.commands.values()
+            if command["action"] == "session.start"
+            and command["command_id"] != first_start["command_id"]
         )
         await gateway.acknowledge_command(
             "device-1",
@@ -296,6 +301,10 @@ def test_dispatcher_retries_inflight_task_once_after_connector_restart() -> None
                 "result": {"session_id": "session-after-restart"},
             },
         )
+        assert (
+            gateway.bindings["binding-1"]["last_session_id"]
+            == "session-after-restart"
+        ), gateway.bindings["binding-1"]
 
         await dispatcher.run_once()
         task_dispatches = [

@@ -217,9 +217,9 @@ func TestArenaNegotiationPromptMirrorsAuthoritativeConvergenceRules(t *testing.T
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"accept an in-bound counterparty quote",
-		"propose exactly your limitPrice",
-		"reject when remainingTurns <= 1",
+		"choose propose, accept, or reject",
+		"you may reject any quote",
+		"the final turn must accept or reject",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("negotiation prompt omitted %q: %s", expected, prompt)
@@ -474,6 +474,115 @@ func TestArenaActionRejectsTrailingJSONValues(t *testing.T) {
 		[]byte(`{"action":"pass"}{"action":"buy","good":"grain"}`),
 	); err == nil {
 		t.Fatal("multiple JSON values must not be accepted as one Arena action")
+	}
+}
+
+func TestAgentDrivenMarketTaskKindsUseStrictLocalRuntimeActions(t *testing.T) {
+	for _, kind := range []string{
+		"arena.market.intent",
+		"arena.market.rfq",
+		"arena.market.select",
+	} {
+		task := arenaDecideTask()
+		task["kind"] = kind
+		raw, err := json.Marshal(task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, prompt, err := decodeArenaTask(raw, time.Now())
+		if err != nil {
+			t.Fatalf("%s task was rejected: %v", kind, err)
+		}
+		if decoded.Kind != kind || !strings.Contains(prompt, kind) {
+			t.Fatalf("%s prompt did not retain the task kind", kind)
+		}
+		if _, err := arenaActionOutputSchema(kind); err != nil {
+			t.Fatalf("%s Claude schema was rejected: %v", kind, err)
+		}
+		if _, err := arenaActionCodexOutputSchema(kind); err != nil {
+			t.Fatalf("%s Codex schema was rejected: %v", kind, err)
+		}
+	}
+
+	valid := []struct {
+		kind string
+		raw  string
+	}{
+		{
+			kind: "arena.market.intent",
+			raw: `{"action":"buy","good":"iron","quantity":1,` +
+				`"publicPrice":"7.000000","limitPrice":"8.000000",` +
+				`"message":"Buying one iron lot."}`,
+		},
+		{
+			kind: "arena.market.rfq",
+			raw: `{"action":"request_negotiations","requests":[{` +
+				`"targetIntentId":"intent:round-1:seller-1",` +
+				`"openingPrice":"7.000000","message":"Let us trade."}]}`,
+		},
+		{
+			kind: "arena.market.select",
+			raw: `{"action":"engage",` +
+				`"requestId":"request:task-rfq:1"}`,
+		},
+	}
+	for _, testCase := range valid {
+		if _, err := validateArenaAction(
+			testCase.kind,
+			[]byte(testCase.raw),
+		); err != nil {
+			t.Fatalf(
+				"%s valid action was rejected: %v",
+				testCase.kind,
+				err,
+			)
+		}
+	}
+
+	if _, err := validateArenaAction(
+		"arena.market.rfq",
+		[]byte(
+			`{"action":"request_negotiations","requests":[`+
+				`{"targetIntentId":"intent-1","openingPrice":"1.0","message":"a"},`+
+				`{"targetIntentId":"intent-1","openingPrice":"1.1","message":"b"}]}`,
+		),
+	); err == nil {
+		t.Fatal("duplicate RFQ targets must be rejected")
+	}
+	if _, err := validateCodexArenaAction(
+		"arena.market.select",
+		[]byte(
+			`{"action":"reject_all","requestId":null,"message":null}`,
+		),
+	); err != nil {
+		t.Fatalf("Codex nullable select fields were not normalized: %v", err)
+	}
+	engage, err := validateCodexArenaAction(
+		"arena.market.select",
+		[]byte(
+			`{"action":"engage","requestId":"request:task-rfq:1",`+
+				`"message":"Let us negotiate."}`,
+		),
+	)
+	if err != nil {
+		t.Fatalf("Codex engage explanation was not normalized: %v", err)
+	}
+	if string(engage) !=
+		`{"action":"engage","requestId":"request:task-rfq:1"}` {
+		t.Fatalf("Codex engage changed the business choice: %s", engage)
+	}
+	accept, err := validateCodexArenaAction(
+		"arena.negotiate",
+		[]byte(
+			`{"action":"accept","price":"2.800000",`+
+				`"message":"Accepted at the latest quote."}`,
+		),
+	)
+	if err != nil {
+		t.Fatalf("Codex accept compatibility fields were not normalized: %v", err)
+	}
+	if string(accept) != `{"action":"accept"}` {
+		t.Fatalf("Codex accept changed the business choice: %s", accept)
 	}
 }
 

@@ -13,6 +13,7 @@ from .capabilities import (
 from .providers import (
     ARENA_SCRIPTED_ADAPTER_ID,
     ARENA_SCRIPTED_BUYER_MODEL,
+    ARENA_SCRIPTED_FALLBACK_BUYER_MODEL,
     ARENA_SCRIPTED_PROVIDER_ID,
     ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
     ARENA_SCRIPTED_REJECTING_SELLER_MODEL,
@@ -255,6 +256,10 @@ def build_local_development_provider_bundle() -> ProductionProviderBundle:
         )
         for model_id, display_name in (
             (ARENA_SCRIPTED_BUYER_MODEL, "Arena Demo Buyer"),
+            (
+                ARENA_SCRIPTED_FALLBACK_BUYER_MODEL,
+                "Arena Fallback Buyer",
+            ),
             (ARENA_SCRIPTED_SELLER_MODEL, "Arena Demo Seller"),
             (
                 ARENA_SCRIPTED_REJECTING_BUYER_MODEL,

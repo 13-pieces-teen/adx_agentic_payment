@@ -121,3 +121,38 @@ func TestScannerReportsLocalExecutionReadinessSeparatelyFromDetection(t *testing
 		}
 	}
 }
+
+func TestScannerRestrictionDoesNotProbeExcludedRuntimeKinds(t *testing.T) {
+	scanner := NewScanner("test", time.Second)
+	probed := []string{}
+	scanner.LookPath = func(command string) (string, error) {
+		probed = append(probed, command)
+		return filepath.Join(t.TempDir(), command), nil
+	}
+	scanner.ReadVersion = func(context.Context, string) (string, error) {
+		return "1.0.0", nil
+	}
+	scanner.ReadAuthStatus = func(context.Context, string, string) error {
+		return nil
+	}
+	scanner.ReadArenaCompatibility = func(
+		context.Context,
+		string,
+		string,
+	) error {
+		return nil
+	}
+
+	if err := scanner.RestrictKinds("codex"); err != nil {
+		t.Fatal(err)
+	}
+	inventory := scanner.Scan(context.Background())
+
+	if len(probed) != 1 || probed[0] != "codex" {
+		t.Fatalf("probed commands = %#v", probed)
+	}
+	if len(inventory.Runtimes) != 1 ||
+		inventory.Runtimes[0].Kind != "codex" {
+		t.Fatalf("inventory runtimes = %#v", inventory.Runtimes)
+	}
+}

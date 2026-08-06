@@ -757,6 +757,9 @@ class ConnectorGateway:
                     "payload": payload,
                     "idempotency_key": idempotency_key or command_id,
                     "request_fingerprint": request_fingerprint,
+                    "_session_generation": int(
+                        binding.get("session_generation", 0)
+                    ),
                     "status": CommandStatus.QUEUED.value,
                     "created_at": iso(now),
                     "expires_at": iso(now + timedelta(seconds=expires_in_seconds)),
@@ -1117,6 +1120,16 @@ class ConnectorGateway:
 
             binding = self.bindings.get(command["binding_id"])
             if binding:
+                action = CommandAction(command["action"])
+                lifecycle_is_older_than_restart = bool(
+                    action
+                    in {
+                        CommandAction.SESSION_START,
+                        CommandAction.SESSION_RESUME,
+                    }
+                    and int(command.get("_session_generation", 0))
+                    < int(binding.get("session_generation", 0))
+                )
                 result = payload.get("result")
                 result_session_id = (
                     result.get("session_id") if isinstance(result, dict) else None
@@ -1125,11 +1138,10 @@ class ConnectorGateway:
                     result.get("task_id") if isinstance(result, dict) else None
                 )
                 session_id = payload.get("session_id") or result_session_id
-                if session_id:
+                if session_id and not lifecycle_is_older_than_restart:
                     binding["last_session_id"] = str(session_id)[:128]
                 if result_task_id:
                     binding["last_task_id"] = str(result_task_id)[:128]
-                action = CommandAction(command["action"])
                 terminal_failure = status in {
                     CommandStatus.FAILED,
                     CommandStatus.REJECTED,
@@ -1165,6 +1177,7 @@ class ConnectorGateway:
                         CommandAction.SESSION_RESUME,
                     }
                     and not lifecycle_is_older_than_stop
+                    and not lifecycle_is_older_than_restart
                 ):
                     if status in {
                         CommandStatus.ACCEPTED,

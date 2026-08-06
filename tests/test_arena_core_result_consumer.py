@@ -310,7 +310,7 @@ def test_proposal_on_final_turn_converges_to_timeout():
     asyncio.run(scenario())
 
 
-def test_in_bound_quote_rejection_converges_to_timeout():
+def test_in_bound_quote_rejection_remains_an_agent_authored_candidate():
     async def scenario():
         repository = MemoryArenaCoreRepository()
         participant = negotiate_input(
@@ -344,7 +344,7 @@ def test_in_bound_quote_rejection_converges_to_timeout():
             clock=lambda: NOW + timedelta(seconds=1),
         ).submit(
             AgentTaskResultV1(
-                result_id="invalid-in-bound-reject",
+                result_id="agent-authored-in-bound-reject",
                 task_id=task.task.task_id,
                 schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
                 status="succeeded",
@@ -362,10 +362,13 @@ def test_in_bound_quote_rejection_converges_to_timeout():
         stored = await repository.get_result_for_task(task.task.task_id)
 
         assert len(applied) == 1
-        assert applied[0].outcome == "negotiation_timeout"
-        assert applied[0].action is None
+        assert applied[0].outcome == "candidate"
+        assert applied[0].action == {
+            "action": "reject",
+            "message": "Quote too low.",
+        }
         assert stored is not None
-        assert stored.rejection_reason == "in_bound_quote_must_accept"
+        assert stored.rejection_reason is None
 
     asyncio.run(scenario())
 

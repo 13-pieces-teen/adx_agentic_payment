@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from arena_game.official_filler import (
     OfficialAgentFiller,
     official_seat_deficit,
 )
+from arena_game.postgres import PostgresPawnhouseRepository
 
 
 class _Repository:
@@ -84,3 +85,70 @@ def test_pending_participants_reserve_official_fill_seats() -> None:
         ready_count=1,
         participating_count=4,
     ) == 6
+
+
+def test_one_player_gets_nine_stably_random_official_identities() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.fetchrow_count = 0
+            self.selection_sql = ""
+            self.selection_parameters: tuple[object, ...] = ()
+
+        async def fetchrow(
+            self,
+            _: str,
+            *parameters: object,
+        ) -> dict[str, object]:
+            self.fetchrow_count += 1
+            if self.fetchrow_count == 1:
+                return {
+                    "game_id": "game-randomized-officials",
+                    "phase": "registration",
+                    "config_snapshot": {
+                        "officialFillAfterSeconds": 300,
+                    },
+                    "start_threshold": 10,
+                }
+            assert parameters == ("game-randomized-officials",)
+            return {
+                "participating_count": 1,
+                "ready_count": 1,
+                "first_human_ready_at": (
+                    datetime(2026, 8, 5, tzinfo=timezone.utc)
+                    - timedelta(seconds=301)
+                ),
+            }
+
+        async def fetch(
+            self,
+            sql: str,
+            *parameters: object,
+        ) -> list[dict[str, str]]:
+            self.selection_sql = sql
+            self.selection_parameters = parameters
+            return [
+                {"agent_id": f"official-{index:02d}"}
+                for index in range(1, 10)
+            ]
+
+    async def scenario() -> None:
+        pool = _Pool()
+        repository = PostgresPawnhouseRepository("", pool=pool)
+
+        plan = await repository.official_fill_plan(
+            now=datetime(2026, 8, 5, tzinfo=timezone.utc)
+        )
+
+        assert plan["status"] == "FILLING"
+        assert plan["candidateAgentIds"] == [
+            f"official-{index:02d}" for index in range(1, 10)
+        ]
+        assert pool.selection_parameters == (
+            "game-randomized-officials",
+            9,
+        )
+        assert "md5(" in pool.selection_sql
+        assert "$1::text || ':' || official.agent_id" in pool.selection_sql
+        assert "arena.official-selection.v1" in pool.selection_sql
+
+    asyncio.run(scenario())

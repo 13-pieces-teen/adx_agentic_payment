@@ -17,10 +17,13 @@ from hosted_agent_control_plane.services import HostedAgentService
 from hosted_agent_runtime.production_providers import (
     build_production_capability_registry,
 )
-from scripts.bootstrap_official_agent_pool import _strategy
+from scripts.bootstrap_official_agent_pool import (
+    OFFICIAL_STRATEGY_RELEASE,
+    _strategy,
+)
 
 
-STRATEGY_VERSION = "market-v5"
+STRATEGY_VERSION = OFFICIAL_STRATEGY_RELEASE
 
 
 def _required_environment(name: str) -> str:
@@ -32,6 +35,30 @@ def _required_environment(name: str) -> str:
 
 def _update_idempotency_key(agent_id: str) -> str:
     return f"official-strategy-{STRATEGY_VERSION}-{agent_id}"
+
+
+def _select_official_rows(
+    rows: list[object],
+    *,
+    priorities: tuple[int, ...] | None,
+) -> list[object]:
+    if priorities is None:
+        return list(rows)
+    if not priorities or len(set(priorities)) != len(priorities):
+        raise RuntimeError("official priorities must be unique")
+    requested = set(priorities)
+    selected = [
+        row
+        for row in rows
+        if int(row["priority"]) in requested  # type: ignore[index]
+    ]
+    available = {
+        int(row["priority"])  # type: ignore[index]
+        for row in selected
+    }
+    if available != requested:
+        raise RuntimeError("requested official priority is not enabled")
+    return selected
 
 
 async def _refresh(args: argparse.Namespace) -> dict[str, object]:
@@ -63,6 +90,14 @@ async def _refresh(args: argparse.Namespace) -> dict[str, object]:
         )
         if not rows:
             raise RuntimeError("official Agent pool is empty")
+        rows = _select_official_rows(
+            list(rows),
+            priorities=(
+                tuple(args.priority)
+                if args.priority is not None
+                else None
+            ),
+        )
 
         service = HostedAgentService(
             repository,
@@ -118,6 +153,7 @@ async def _refresh(args: argparse.Namespace) -> dict[str, object]:
             "status": "ready",
             "strategyVersion": STRATEGY_VERSION,
             "agentCount": len(refreshed),
+            "priorities": [int(row["priority"]) for row in rows],
             "agentIds": [agent_id for _, agent_id in refreshed],
         }
     finally:
@@ -131,6 +167,16 @@ def _parser() -> argparse.ArgumentParser:
             "Refresh enabled Arena 402 official Agent strategies while reusing "
             "their existing validated Hosted credentials."
         )
+    )
+    parser.add_argument(
+        "--priority",
+        action="append",
+        type=int,
+        choices=range(1, 101),
+        help=(
+            "Refresh only this enabled official pool priority. Repeat to "
+            "select multiple priorities; omit to refresh the full pool."
+        ),
     )
     parser.add_argument(
         "--validation-timeout-seconds",

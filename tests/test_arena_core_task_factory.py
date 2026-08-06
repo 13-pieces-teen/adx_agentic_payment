@@ -128,6 +128,41 @@ def test_task_factory_rejects_elapsed_deadline():
     asyncio.run(scenario())
 
 
+def test_task_factory_reuses_exact_task_after_deadline_for_run_recovery():
+    async def scenario():
+        repository = MemoryArenaCoreRepository()
+        clock = [NOW]
+        task_ids = iter(["task-original", "task-never-inserted"])
+        factory = ArenaTaskFactory(
+            repository,
+            task_id_factory=lambda: next(task_ids),
+            clock=lambda: clock[0],
+        )
+        participant_view = decide_input(
+            deadline=NOW + timedelta(seconds=5)
+        )
+        config = {"provider": "fake"}
+        created = await factory.create_decide_task(
+            game_agent_id="game-agent-1",
+            participant_view=participant_view,
+            config_snapshot=config,
+        )
+
+        clock[0] = NOW + timedelta(seconds=10)
+        recovered = await factory.create_decide_task(
+            game_agent_id="game-agent-1",
+            participant_view=decide_input(
+                deadline=NOW + timedelta(seconds=5)
+            ),
+            config_snapshot={"provider": "fake"},
+        )
+
+        assert recovered.task.task_id == created.task.task_id
+        assert recovered.task.deadline_at == NOW + timedelta(seconds=5)
+
+    asyncio.run(scenario())
+
+
 def test_task_factory_freezes_snapshots_before_repository_wait():
     class GatedRepository(MemoryArenaCoreRepository):
         def __init__(self):

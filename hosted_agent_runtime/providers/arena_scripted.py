@@ -23,6 +23,7 @@ from .base import (
 ARENA_SCRIPTED_PROVIDER_ID = "arena-scripted"
 ARENA_SCRIPTED_ADAPTER_ID = "arena-scripted-v1"
 ARENA_SCRIPTED_BUYER_MODEL = "arena-buyer-v1"
+ARENA_SCRIPTED_FALLBACK_BUYER_MODEL = "arena-fallback-buyer-v1"
 ARENA_SCRIPTED_SELLER_MODEL = "arena-seller-v1"
 ARENA_SCRIPTED_REJECTING_BUYER_MODEL = "arena-rejecting-buyer-v1"
 ARENA_SCRIPTED_REJECTING_SELLER_MODEL = "arena-rejecting-seller-v1"
@@ -68,6 +69,7 @@ class ArenaScriptedProvider:
     def _action(request: ProviderRequest) -> dict[str, object]:
         if request.model_id not in {
             ARENA_SCRIPTED_BUYER_MODEL,
+            ARENA_SCRIPTED_FALLBACK_BUYER_MODEL,
             ARENA_SCRIPTED_SELLER_MODEL,
             ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
             ARENA_SCRIPTED_REJECTING_SELLER_MODEL,
@@ -84,13 +86,112 @@ class ArenaScriptedProvider:
         if request.task_kind == "arena.decide":
             if request.model_id in {
                 ARENA_SCRIPTED_BUYER_MODEL,
+                ARENA_SCRIPTED_FALLBACK_BUYER_MODEL,
                 ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
             }:
                 return {"action": "buy", "good": "iron"}
             return {"action": "sell", "good": "iron"}
+        if request.task_kind == "arena.market.intent":
+            if request.model_id in {
+                ARENA_SCRIPTED_BUYER_MODEL,
+                ARENA_SCRIPTED_FALLBACK_BUYER_MODEL,
+                ARENA_SCRIPTED_REJECTING_BUYER_MODEL,
+            }:
+                return {
+                    "action": "buy",
+                    "good": "iron",
+                    "quantity": 1,
+                    "publicPrice": "7.000000",
+                    "limitPrice": "8.000000",
+                    "message": "Seeking one iron lot.",
+                }
+            return {
+                "action": "sell",
+                "good": "iron",
+                "quantity": 1,
+                "publicPrice": "7.000000",
+                "limitPrice": "6.000000",
+                "message": "Offering one iron lot.",
+            }
+        if request.task_kind == "arena.market.rfq":
+            directory = arena_input.get("directory")
+            if not isinstance(directory, list) or not directory:
+                return {"action": "pass"}
+            target = directory[0]
+            if request.model_id == ARENA_SCRIPTED_FALLBACK_BUYER_MODEL:
+                target = next(
+                    (
+                        entry
+                        for entry in directory
+                        if isinstance(entry, Mapping)
+                        and any(
+                            marker
+                            in str(
+                                entry.get("displayName", "")
+                            ).casefold()
+                            for marker in ("rejecting", "primary")
+                        )
+                    ),
+                    target,
+                )
+            if not isinstance(target, Mapping):
+                raise ProviderInvocationError(
+                    "invalid_structured_output"
+                )
+            primary_target = (
+                request.model_id == ARENA_SCRIPTED_FALLBACK_BUYER_MODEL
+                and "primary"
+                in str(target.get("displayName", "")).casefold()
+            )
+            return {
+                "action": "request_negotiations",
+                "requests": [
+                    {
+                        "targetIntentId": target["intentId"],
+                        "openingPrice": (
+                            "1.000000"
+                            if primary_target
+                            else target["publicPrice"]
+                        ),
+                        "message": (
+                            "I choose the primary seller with a low "
+                            "opening bid."
+                            if primary_target
+                            else "I choose this seller."
+                        ),
+                    }
+                ],
+            }
+        if request.task_kind == "arena.market.select":
+            requests = arena_input.get("requests")
+            if not isinstance(requests, list) or not requests:
+                return {"action": "reject_all"}
+            selected = requests[0]
+            if not isinstance(selected, Mapping):
+                raise ProviderInvocationError(
+                    "invalid_structured_output"
+                )
+            return {
+                "action": "engage",
+                "requestId": selected["requestId"],
+            }
 
         role = arena_input.get("role")
         if role == "buyer":
+            counterparty = arena_input.get("counterparty")
+            if (
+                request.model_id
+                == ARENA_SCRIPTED_FALLBACK_BUYER_MODEL
+                and isinstance(counterparty, Mapping)
+                and "primary"
+                in str(
+                    counterparty.get("displayName", "")
+                ).casefold()
+            ):
+                return {
+                    "action": "reject",
+                    "message": "I will try another seller.",
+                }
             return {
                 "action": "propose",
                 "price": "7.000000",
@@ -112,6 +213,7 @@ class ArenaScriptedProvider:
 __all__ = [
     "ARENA_SCRIPTED_ADAPTER_ID",
     "ARENA_SCRIPTED_BUYER_MODEL",
+    "ARENA_SCRIPTED_FALLBACK_BUYER_MODEL",
     "ARENA_SCRIPTED_PROVIDER_ID",
     "ARENA_SCRIPTED_REJECTING_BUYER_MODEL",
     "ARENA_SCRIPTED_REJECTING_SELLER_MODEL",

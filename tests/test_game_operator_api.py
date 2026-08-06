@@ -74,6 +74,7 @@ def test_authenticated_operator_can_create_a_no_payment_game() -> None:
         json={
             "gameId": "production-game-1",
             "eventSeed": "server-reviewed-seed",
+            "marketProtocol": "agent_a2a.v1",
             "settlement": {"authorizationMode": "none"},
         },
     )
@@ -81,6 +82,8 @@ def test_authenticated_operator_can_create_a_no_payment_game() -> None:
     assert response.status_code == 201
     assert response.json()["gameId"] == "production-game-1"
     assert repository.created[0]["operator_user_id"] == "user-1"
+    assert repository.created[0]["market_protocol"] == "agent_a2a.v1"
+    assert repository.created[0]["portfolio_mode"] == "manual"
     assert (
         repository.created[0]["settlement_config"].authorization_mode
         == "none"

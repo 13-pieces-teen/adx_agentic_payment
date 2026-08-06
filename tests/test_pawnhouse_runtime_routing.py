@@ -29,12 +29,23 @@ class _Connection:
         self,
         *,
         runtime_run: dict[str, object] | None = None,
+        market_protocol: str = "fcfs.v1",
+        runtime_rows: list[dict[str, object]] | None = None,
     ) -> None:
         self.runtime_run = runtime_run
+        self.market_protocol = market_protocol
+        self.runtime_rows = runtime_rows or [
+            {"runtime_kind": "connector", "participant_count": 1},
+            {"runtime_kind": "hosted", "participant_count": 1},
+        ]
 
     async def fetchrow(self, query: str, *_: object):
         if "FROM arena402.games" in query:
-            return {"phase": "running", "current_round": 1}
+            return {
+                "phase": "running",
+                "current_round": 1,
+                "market_protocol": self.market_protocol,
+            }
         if "FROM arena402.rounds" in query:
             return {
                 "round_id": "round:game-1:1",
@@ -47,10 +58,7 @@ class _Connection:
 
     async def fetch(self, query: str, *_: object):
         if "FROM arena402.game_participants" in query:
-            return [
-                {"runtime_kind": "connector", "participant_count": 1},
-                {"runtime_kind": "hosted", "participant_count": 1},
-            ]
+            return self.runtime_rows
         raise AssertionError(query)
 
     async def fetchval(self, query: str, *_: object):
@@ -115,6 +123,24 @@ def test_mixed_round_waits_for_its_existing_runtime_run() -> None:
     assert state["runtimeRunStatus"] == "running"
 
 
+def test_agent_market_never_routes_rule_participants_to_fcfs() -> None:
+    connection = _Connection(
+        market_protocol="agent_a2a.v1",
+        runtime_rows=[
+            {"runtime_kind": "rule", "participant_count": 2},
+        ],
+    )
+    repository = PostgresPawnhouseRepository(
+        "",
+        pool=_Pool(connection),
+    )
+
+    state = asyncio.run(repository.automation_state(game_id="game-1"))
+
+    assert state["marketProtocol"] == "agent_a2a.v1"
+    assert state["action"] == "wait_runtime_adapter"
+
+
 def test_actionable_game_actions_use_one_set_based_query() -> None:
     pool = _BatchPool()
     repository = PostgresPawnhouseRepository("", pool=pool)
@@ -131,4 +157,5 @@ def test_actionable_game_actions_use_one_set_based_query() -> None:
     assert arguments == (50,)
     assert "WITH game_state AS" in query
     assert "LEFT JOIN LATERAL" in query
+    assert "market_protocol = 'fcfs.v1'" in query
     assert "WHERE action IS NOT NULL" in query

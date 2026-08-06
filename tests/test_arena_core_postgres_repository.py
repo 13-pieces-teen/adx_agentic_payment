@@ -585,11 +585,17 @@ def test_get_task_and_result_round_trip_json_into_strict_contracts():
             pool=FakePool(ScriptedConnection(handler)),
         )
         stored_task = await repository.get_task(task.task_id)
+        stored_by_key = await repository.get_task_by_idempotency(
+            game_agent_id=task.game_agent_id,
+            idempotency_key=task.idempotency_key,
+        )
         stored_result = await repository.get_result_for_task(task.task_id)
 
         assert stored_task is not None
         assert stored_task.task == task
         assert stored_task.config_snapshot == config
+        assert stored_by_key is not None
+        assert stored_by_key.task == task
         assert stored_result is not None
         assert stored_result.result.result_id == internal_id
         assert stored_result.result.action.price == result.action.price

@@ -6,7 +6,14 @@
 > dispatcher、typed Task/Result、Result Sink 和 Hosted/Connector mixed-Runtime
 > 回合编排已接线；PaymentMandate 与 x402 V2 自动链路已实现并通过 Fake E2E。
 > 经自建 Facilitator 的新鲜 Injective EVM testnet 交易、链上确认和库存提交已完成；
-> 真实 CC/Codex 完整比赛、公共第三方 Facilitator 兼容和完整生产验收尚未完成。
+> 十个独立 Codex Connector 已完成八回合 `agent_a2a.v1` 完整比赛；Claude Code
+> 因其外部 API/证书连接问题不作为该阶段阻塞。公共第三方 Facilitator 兼容、
+> 2026-08-06 的 Phase D 中间验收已由一名真实 Codex Connector 和九名
+> PydanticAI Hosted Agent 完成八回合 `agent_a2a.v1`，三笔隔离 mUSDC testnet
+> 支付均在确认后提交库存，并产生终场排名和后续 Game 冻结的 learned revision。
+> 该局不是 `arena402-g` 或生产 Current Game；公共第三方 Facilitator、正式
+> payment-enabled Current Game 和完整生产验收尚未完成。Native A2A Endpoint
+> 顺延至 Phase E。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 第一次参赛见 [`player-guide.md`](player-guide.md)。本文维护游戏规则、跨模块状态
@@ -17,7 +24,7 @@
 ## 一句话规则
 
 > 你的 AI 是个倒爷。每回合决定买、卖或观望；进入市场后按先到先得配对，
-> 最多砍价 2–3 轮；N 回合后按最终结算价清算，净资产最高者获胜。
+> 最多执行 3 个合并的协商行动；N 回合后按最终结算价清算，净资产最高者获胜。
 
 从产品叙事看，王城典当行既是一场游戏，也是一套受控的 Agent 能力比较场：同一
 规则下，模型、策略、速度、风险判断和谈判质量会共同形成可回放的差异。结算层则
@@ -132,6 +139,13 @@ Participant 会保留自己的席位，但不能参与回合。开赛事务只�
 Participant，并取消仍未准备完成的 Participant，后续 Decide、快照和排名均不得
 包含它们。
 
+官方补位从显式 allowlist 中抽取持久 Hosted Agent identity。候选顺序由
+`gameId + agentId + officialSelectionVersion` 形成稳定伪随机排序，便于重试和审计；
+不是每次 Worker 轮询重新随机。抽中后 `game_participants` 保存席位，
+`game_agents.config_snapshot` 冻结 `aggressive | conservative | balanced` 策略
+类型和 Strategy Revision，`hosted_agent_game_memory` 以 `game_agent_id` 保存局内
+状态。整局不重抽、不换策略；下一局才重新抽取并绑定当时生效的策略版本。
+
 产品 Current Game 的 Join v2 使用 `cashAtomic` 十进制整数字符串和四种货物的
 非负整数数量提交初始组合；服务端按公开初始价重新计算，只有总值严格等于
 `20000000` atomic（20 金）才允许加入。未提交 `portfolio` 的旧客户端使用
@@ -147,6 +161,7 @@ Arena 广播：
 - 当前回合和剩余时间；
 - 各货物公开参考价；
 - 本回合已公开事件；
+- 只基于截至本回合已公开事件计算的各货物 `eventImpliedFinal`；
 - Agent 自己的现金、持仓和 `failedNegotiations`；
 - 本轮允许使用的规则参数。
 
@@ -165,11 +180,15 @@ Factory 在同一数据库事务中冻结 participant view、Game Agent 配置�
 `allowedGoods` 只包含其正持仓货物。Arena 后端仍会独立重复余额、库存与限价
 校验，不能只信任 Prompt 约束。
 
-Hosted Prompt v5 要求 Agent 把 `market` 视为已包含当前 market-target 事件效果，
-不得重复应用；逐一比较全部允许货物，并按照冻结的私有策略画像计算 `fairValue`、
-买卖触发阈值和作为保留价的 `limitPrice`。官方池按优先级循环十种数值画像，覆盖
-买方偏向、卖方偏向和双边策略，并使用不同的现金保留比例、库存目标、商品同分
-排序和买卖阈值，避免所有官方 Agent 因同一事件使用同一方向。
+PydanticAI Hosted Agent instructions 要求 Agent 把 `market` 视为当前公开参考价，
+把 `eventImpliedFinal` 视为仅由已经揭示的事件推导出的终场价值锚点；不得重复应用
+同一事件，也不得看到或推断未揭示的未来 event deck。Agent 逐一比较全部允许货物，
+并按照冻结的私有策略画像在公开锚点上加入自己的保留价偏移，计算 `fairValue`、
+买卖触发阈值和作为保留价的 `limitPrice`。官方池固定三种一级类型：
+`aggressive`、`conservative`、`balanced`；每种类型下面保留多个数值画像，使用
+不同的现金保留比例、库存目标、商品同分排序和买卖阈值，避免所有官方 Agent 因
+同一事件使用同一方向。标准十 Agent 官方池采用 `4/3/3` 分布，所以一名玩家加九名
+官方 Agent 的比赛必然覆盖三种一级策略。
 
 Runtime 提交候选 Result 后，Arena Result Sink 在持久化前处理公开输出并使用数据库
 时钟记录 `result_received_at`。Result Consumer 完成 schema、阶段、资产和货物校验
@@ -178,6 +197,18 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 收敛为唯一 `pass`，不能阻塞整轮。
 
 ### 4. Pair
+
+> Transition note: 本节仍是已部署 `fcfs.v1` 的当前规则。已批准但尚未切换的
+> `agent_a2a.v1` 将由 Agent 发布 Intent、读取冻结市场目录、主动发送 RFQ，并由
+> 对手 Agent 选择是否 engage；Arena 不再替 Agent 创建业务 Pairing。目标协议、
+> 状态机验证边界和真实 Agent 验收顺序见
+> [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)。
+> 本地 opt-in 双 Codex payment-disabled E2E 已形成带独立 proposal/acceptance
+> Result provenance 的 Deal。迁移 `060` 已进一步把 RFQ `openingPrice` 固定为
+> Turn 1、限制每个 RFQ Task 只选一个对手，并持久化最多三次顺序尝试；本地 Fake
+> scripted E2E 已验证卖方直接接受该绑定开价。真实多对手 fallback、
+> mixed-Runtime、支付和 Current Game 切换仍未验收。
+> 旧 Game 保持创建时冻结的协议版本，不能原地改义。
 
 每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为
 限价区间有交集的订单创建 Pairing：买方存在 `limitPrice` 时成交价不得高于该值，
@@ -198,15 +229,16 @@ next buyer     <-> next compatible seller
 ### 5. Negotiate
 
 - 买方先报价；
-- `MAX_TURN` 默认为 3，可压测后调整为 2；
+- `MAX_TURN` 冻结为 3，表示一段协商最多三个合并的 Agent 行动；
 - 每个轮到行动的角色收到一条 `arena.negotiate` AgentTask；
 - 每条结果只能使用 `action="propose" | "accept" | "reject"`；
 - `propose` 包含定点价格和不超过 100 字、经 PublicOutputPolicy 处理的公开话术；
 - `accept` 只能接受对方最近一次有效报价，不能自行附带新价格；
 - `reject` 明确结束协商；
 - `limitPrice` 是硬数字边界：买方报价/接受不得高于上限，卖方报价/接受不得低于
-  下限；没有对方报价时按自身 `limitPrice` 报价，对方报价进入自身边界时立即
-  `accept`，越界且仍可反价时严格按自身 `limitPrice` 反价，不得扩大价差；
+  下限；买方首轮必须在自身边界内报价，后续仍有轮次时可在边界内自主反价，
+  任意一方都可主动 `reject`；最终轮只能 `accept` 或 `reject`，Arena 不会强迫
+  Agent 接受界内报价，也不会替 Agent 选择反价；
 - 达到轮次上限、Runtime 失败或 deadline 超时由 Arena 记录 negotiation timeout，
   而不是伪造一条 Agent 主动 `reject`。
 
@@ -217,13 +249,20 @@ Negotiate AgentTask。每条 AgentTask 最多两个 Provider/Runtime Attempt，�
 
 `action_timeout_ms` 是 Game 配置，并在开局时冻结。同一 Game 的 Hosted、Local、
 rule 与后续 Native A2A Runtime 使用相同时间窗；具体默认值由真实
-Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的 P95/P99 加缓冲校准，不在
-Adapter 中写死。只有错误可重试且剩余时间充足时才执行一次重试，不自动切换
+Provider/Model/thinking 组合和 2/5/10/12/25/50/100 Agent 负载的端到端 P99
+最大值乘以 `1.25`、再向上取整到 5 秒，不在 Adapter 中写死。只有错误可重试且
+剩余时间充足时才执行一次重试，不自动切换
 Provider、Model 或 Runtime。结构合法但违反自身 `limitPrice`、确定性协商规则，
 或冻结的 allowed action、余额、库存约束的 Hosted 候选动作，可在同一
 AgentTask、同一冻结输入和 deadline 内触发唯一一次带安全错误码的修正 Attempt；
 第二次仍非法则失败收敛，且 Arena 后端会独立重复相同的限价、协商语义、余额和
 库存校验。
+
+PydanticAI 在一次 bounded run 内因连续未产出合法 terminal output 而耗尽
+`request_limit`，按 `invalid_structured_output` 处理，可使用上述唯一一次同
+Runtime 重试；token/tool 预算耗尽仍是不可重试的预算失败。DeepSeek 的单请求输出
+上限必须按其 OpenAI-compatible `max_tokens` 字段发送，不能误写成
+`max_completion_tokens`。
 
 `failedNegotiations` 是对手可见的模糊信号，不直接扣分、不扣现金，也不改变
 FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
@@ -276,6 +315,13 @@ Arena 保存本回合的 Task/Result/default、池、配对、公开协商消息
 权威状态推进；重启后不依赖进程内计数恢复当前回合。所有 Hosted Decide Task
 先创建后等待结果，不同 pairing 可并发协商，但同一 pairing 内仍严格按
 `turn_sequence` 顺序执行。
+
+对 `agent_a2a.v1`，Round close 必须在同一事务内把仍为 `active` 的 RFQ
+session、`pending` 的 RFQ 和 `open | reserved` 的 Intent 终态化为
+`expired`，截断 Intent/session 的未来 TTL，并释放仍为 `reserved` 的
+Participant round slot。已经进入协商的 RFQ、Deal、协商消息和已消费 slot
+保留历史状态，不得被清理成“未发生”。Game complete 还需跨全局执行一次幂等
+兜底，完成的 Game 不得残留可活动的市场对象。
 
 只要存在 `accepted_pending_settlement` 或 `settling` pairing，Round 就保持在
 `settle`，不得关闭或进入下一回合。最后一轮关闭后，Arena 将最后的
@@ -387,6 +433,11 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 `input` 是 Task 创建事务冻结的最小 participant view。Worker 不得在排队或重试时
 重新读取可变的实时现金、持仓、行情或协商历史。
 
+Hosted Game Memory 只从 Arena 真正采用的原 candidate 推进。Result 被确定性消费
+并不等于 candidate 获采用：非法 decide candidate 会留下安全错误码并应用
+`default_pass`，此时 `application_outcome=default_pass`，对应 pending memory
+patch 必须丢弃；timeout、rejected、defaulted 和 late 同样不得推进 memory version。
+
 ### Decide
 
 输入包含当前公开行情/事件、自己的现金/持仓/谈崩次数、允许货物、精度规则和
@@ -405,6 +456,11 @@ Hosted、Connector、rule 与后续 Native A2A 都接收同一业务 envelope：
 Codex Structured Outputs 使用 root object + required nullable 占位，Connector
 只移除该 Adapter 约定的 `null` 字段后再执行同一严格 wire 校验；数据库对新写入
 的成功 buy/sell 结果也保留同一固定数量约束。
+
+未来有界数量只进入新的版本化协议，例如 `agent_a2a.v2`：数量必须是受 Game 上限
+约束的正整数，首版只支持精确全量成交，不支持 partial fill；协商冻结单位价格和
+数量，Settlement 以二者的定点乘积校验 PaymentMandate、链上金额和库存提交。
+`agent_a2a.v1` 及其历史 Game 永久保持 `quantity=1`。
 
 ### Negotiate
 
@@ -463,26 +519,27 @@ Runtime Result 使用 `arena.agent-result.v1`，且 dispatch ACK 与 Result 分�
 
 按优先级可降级：
 
-1. `MAX_TURN` 从 3 降为 1；
-2. 实时入池改为固定时间窗后的批量 FCFS；
-3. 逐笔链上提交改为一笔包含多笔点对点 transfer 的批量交易；每笔 accepted
+1. 实时入池改为固定时间窗后的批量 FCFS；
+2. 在并行逐笔提交和 Facilitator shard 仍不足时，将逐笔链上提交改为一笔包含
+   多笔点对点 transfer 的批量交易；每笔 accepted
    trade 仍须独立映射到该批量交易中的具体 transfer 事件；
-4. LLM Agent 不足时加入明确标注的规则 Agent；
-5. 演示场景可只激活一种货物，但正式 MVP schema 始终保留四种货物。
+3. LLM Agent 不足时加入明确标注的规则 Agent；
+4. 演示场景可只激活一种货物，但正式 MVP schema 始终保留四种货物。
 
 不可降级红线：被接受的交易不能只更新数据库。默认 MVP 是一笔 accepted
 trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易仍须可独立映射到
-真实链上转账证据。纯聚合净额且无法还原逐笔交易的方案不满足当前 MVP。
+真实链上转账证据、确认状态和幂等库存提交。纯聚合净额且无法还原逐笔交易的
+方案不满足当前 MVP。
 
 ## 待压测参数
 
 | 参数 | 候选值 |
 |------|--------|
 | 总回合数 `N` | Current Game 默认 8；支持 1–10，环境变量可调为 6 |
-| `MAX_TURN` | 2 或 3 |
+| `MAX_TURN` | 冻结为 3 个合并的 Agent 行动 |
 | 单回合时长 | 由当前生产拓扑下 10/12/25/50/100 Agent wave 实测冻结 |
-| `action_timeout_ms` | Provider/Model/thinking 与 10/12/25/50/100 Agent 负载的真实 P95/P99 + buffer |
-| 货物种类 | 2–3 |
+| `action_timeout_ms` | 目标负载下所有支持 Runtime/Task 的端到端 P99 最大值 × 1.25，向上取整到 5 秒 |
+| 货物种类 | 正式 MVP schema 保留 4 种；演示可只激活 1 种 |
 | 单局目标时长 | Current Game 按 8 回合计算；固定 Demo 仍为 5 回合 |
 
 参数调整不得改变本文的核心边界：公平开局、FCFS、有限轮协商、外生价值锚、

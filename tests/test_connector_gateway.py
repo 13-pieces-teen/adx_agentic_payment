@@ -1129,6 +1129,14 @@ def test_connector_restart_invalidates_process_local_session_projection():
                 "started_at": "2026-07-23T10:05:00Z",
             },
         )
+        await service.acknowledge_command(
+            device_id,
+            {
+                "command_id": start["command_id"],
+                "status": "succeeded",
+                "result": {"session_id": "process-local-session"},
+            },
+        )
 
         current = (await service.list_bindings(device_id))[0]
         assert current["status"] == "degraded"

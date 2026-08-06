@@ -14,6 +14,9 @@ It owns:
 - game and round state transitions;
 - terminal valuation and pawn-promotion ranking.
 - PostgreSQL-backed pool entry, FCFS pairing, and bounded negotiation state.
+- the `agent_a2a.v1` Phase A protocol foundation: strict Agent-authored
+  Intent/RFQ/Engage contracts, an invariant-only state-machine oracle, and
+  migration-ready persistence constraints;
 - immutable single-payment SettlementIntent snapshots;
 - read-only EVM confirmation validation;
 - confirmation-gated, idempotent cash and inventory commit.
@@ -35,6 +38,20 @@ in-memory matching/ELO prototype has been removed. PostgreSQL persistence begins
 `db/migrations/006_arena_world_game_core.sql` under the isolated `arena402`
 schema.
 
+The Current Game still uses the frozen `fcfs.v1` path. The
+`AgentDrivenMarket` state machine is a protocol oracle for early invariant and
+Fake E2E validation; it contains no target-selection or negotiation strategy
+and is not evidence of autonomous Agent behavior. The
+`arena.market.intent/rfq/select` task kinds now pass through the shared Hosted
+Driver, Local Connector task envelope, Result Sink, and Deadline Finalizer.
+A recoverable Worker projects applied Results into
+MarketIntent/RFQ/Engagement state, and an opt-in `agent_a2a.v1` orchestrator
+drives intent → RFQ → select → bounded negotiation. Agent-selected
+Engagements alone can materialize the compatibility Pairing/Negotiation path,
+and accepted negotiations freeze Deal provenance. This remains outside the
+`fcfs.v1` Current Game until a real Agent completes Engagement, negotiation,
+and Deal E2E.
+
 ## Core invariants
 
 - Every initial portfolio is worth exactly 20 gold at the canonical initial
@@ -51,6 +68,10 @@ schema.
   settlement arithmetic.
 - A `balanced_auto` game assigns each ready participant one deterministic good
   unit plus cash at portfolio lock; `manual` remains the default mode.
+- A completed A2A round has no `open`/`reserved` Intent, `pending` RFQ,
+  `active` RFQ session, or `reserved` participant slot. Round close owns the
+  normal transition and game completion repeats it idempotently across the
+  game.
 
 ## Persistent rule-Agent demonstration
 
@@ -76,8 +97,8 @@ Run eight deterministic Rule Agents across all four goods and five rounds:
 python scripts/run_full_pawnhouse_game_demo.py
 ```
 
-With two fresh one-use invitations, run two Hosted Agents through five durable
-Runtime runs:
+With two fresh one-use invitations, run two scripted Hosted actors through one
+opt-in `agent_a2a.v1` round:
 
 ```powershell
 python scripts/run_full_hosted_pawnhouse_demo.py
@@ -91,10 +112,11 @@ $env:ARENA_HOSTED_INVITES = docker compose -f docker-compose.local.yml exec -T a
 python scripts/run_many_hosted_pawnhouse_demo.py --agents 12 --rounds 10
 ```
 
-Both full-game demonstrations use rejecting negotiations so they can verify
-Round close and terminal ranking without inventing a payment. The accepted
-trade demonstration remains blocked in `settle` until its exact chain transfer
-is confirmed.
+The `agent_a2a.v1` full Hosted script uses development-only scripted Agents and
+`authorizationMode=none`: it may freeze an accepted Deal but creates no
+SettlementIntent and moves no assets. It is Fake E2E evidence. The accepted
+payment-enabled demonstration remains blocked in `settle` until its exact
+chain transfer is confirmed.
 
 ## Production worker boundary
 

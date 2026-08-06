@@ -28,6 +28,7 @@ class CurrentGameLifecycleWorker:
         official_fill_after_seconds: int = 300,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
+        market_protocol: str = "fcfs.v1",
     ) -> None:
         if round_count < 1:
             raise ValueError("round_count must be positive")
@@ -51,6 +52,8 @@ class CurrentGameLifecycleWorker:
             raise ValueError("official_fill_after_seconds must be positive")
         if max_negotiation_turns not in {2, 3}:
             raise ValueError("max_negotiation_turns must be 2 or 3")
+        if market_protocol not in {"fcfs.v1", "agent_a2a.v1"}:
+            raise ValueError("market_protocol must be fcfs.v1 or agent_a2a.v1")
 
         self._repository = repository
         self._settlement_config = settlement_config
@@ -60,6 +63,7 @@ class CurrentGameLifecycleWorker:
         self._official_fill_after_seconds = official_fill_after_seconds
         self._action_timeout_ms = action_timeout_ms
         self._max_negotiation_turns = max_negotiation_turns
+        self._market_protocol = market_protocol
 
     async def activate_confirmed_game_coin_provisions(
         self,
@@ -91,6 +95,7 @@ class CurrentGameLifecycleWorker:
             max_participants=self._max_participants,
             official_fill_after_seconds=self._official_fill_after_seconds,
             settlement_config=self._settlement_config,
+            market_protocol=self._market_protocol,
         )
 
 

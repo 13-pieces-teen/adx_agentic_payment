@@ -712,6 +712,22 @@ def test_create_game_accepts_an_eight_round_seeded_event_deck() -> None:
     assert repository.created[0]["event_mode"] == "seeded_shuffle"
 
 
+def test_create_game_can_freeze_the_opt_in_agent_market_protocol() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/dev/pawnhouse/games",
+        headers={"X-Arena-Dev-Token": "development-token-for-tests"},
+        json={
+            "gameId": "agent-market-game",
+            "eventSeed": "agent-market-fixed-seed",
+            "marketProtocol": "agent_a2a.v1",
+        },
+    )
+
+    assert created.status_code == 201
+    assert repository.created[0]["market_protocol"] == "agent_a2a.v1"
+
+
 def test_fixed_demo_event_mode_rejects_a_non_five_round_game() -> None:
     client, repository = _client()
     created = client.post(
