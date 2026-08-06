@@ -49,9 +49,26 @@ class _Repository:
         self.participants.append(values)
         return f"gp:{values['game_id']}:{values['agent_id']}"
 
-    async def add_current_participant(self, **values):
+    async def add_current_participant(
+        self,
+        *,
+        game_id,
+        user_id,
+        agent_id,
+        portfolio,
+        payment_mandate_id,
+        join_authorization_id,
+    ):
+        values = {
+            "game_id": game_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "portfolio": portfolio,
+            "payment_mandate_id": payment_mandate_id,
+            "join_authorization_id": join_authorization_id,
+        }
         self.participants.append(values)
-        return f"gp:{values['game_id']}:{values['agent_id']}"
+        return f"gp:{game_id}:{agent_id}"
 
     async def withdraw_current_game_participant(self, **values):
         return {
@@ -531,7 +548,7 @@ def test_current_game_join_requires_ready_mandate_and_returns_authoritative_stat
         "schemaVersion": "arena.game-join.v2",
     }
     joined = repository.participants[0]
-    assert joined["require_current_game"] is True
+    assert "require_current_game" not in joined
     assert joined["payment_mandate_id"] == "mandate-current"
     assert joined["join_authorization_id"] == "ja-current"
     assert joined["portfolio"] == expected_portfolio

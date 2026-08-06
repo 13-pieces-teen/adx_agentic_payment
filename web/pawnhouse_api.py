@@ -786,11 +786,10 @@ def create_pawnhouse_participation_router(
                 game_id=game_id,
                 user_id=principal.user_id,
                 agent_id=body.agent_id,
-                portfolio=portfolio,
-                payment_mandate_id=body.payment_mandate_id,
-                join_authorization_id=body.join_authorization_id,
-                require_current_game=True,
-            )
+            portfolio=portfolio,
+            payment_mandate_id=body.payment_mandate_id,
+            join_authorization_id=body.join_authorization_id,
+        )
             current = await repository.current_game(owner_user_id=principal.user_id)
         except (PortfolioError, SettlementError) as exc:
             raise HTTPException(
