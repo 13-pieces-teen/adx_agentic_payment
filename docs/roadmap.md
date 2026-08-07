@@ -249,6 +249,9 @@
   以 Result ID 的事务级 advisory lock 串行化，并在锁后重读 durable receipt；
   migration `078` 只重排同时存在“已投影 RFQ”和“completed/pending RFQ”的
   `runtime_pawnhouserepositoryerror` Match Run，不泛化恢复其他 Repository 错误。
+  Production Worker 同时补接通通用 Arena Result Consumer；若恢复时 Round 已经
+  关闭，迟到的已应用市场 Result 会获得 `market_stage_closed` no-op receipt，
+  不重新打开历史 RFQ，也不残留 `apply_status=pending`。
 - [ ] D5b 容量：市场质量的功能正确性通过后，再完成 12/25/50/100 Agent 分档、
   每 Runtime/Task 至少 100 条真实终态样本、4 Facilitator shard 和
   timeout/公平性冻结。

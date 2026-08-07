@@ -3992,6 +3992,7 @@ class PostgresPawnhouseRepository:
                         task.game_agent_id,
                         task.deadline_at,
                         task.input_snapshot,
+                        round.phase AS current_round_phase,
                         applied.result_id,
                         applied.application_outcome,
                         applied.applied_action,
@@ -3999,6 +4000,9 @@ class PostgresPawnhouseRepository:
                     FROM public.arena_applied_agent_actions AS applied
                     JOIN public.arena_agent_tasks AS task
                       ON task.task_id = applied.task_id
+                    JOIN arena402.rounds AS round
+                      ON round.round_id = task.round_id
+                     AND round.game_id = task.game_id
                     WHERE applied.task_id = $1
                       AND applied.result_id = $2
                       AND applied.task_kind = $3
@@ -4060,6 +4064,26 @@ class PostgresPawnhouseRepository:
                         "kind": str(row["task_kind"]),
                         "outcome": outcome,
                         "projected": False,
+                    }
+                    await self._record_market_projection_locked(
+                        connection,
+                        row=row,
+                    )
+                    return projection
+
+                allowed_round_phases = {
+                    "arena.market.intent": {"decide"},
+                    "arena.market.rfq": {"match", "negotiate"},
+                    "arena.market.select": {"negotiate"},
+                }[application.kind]
+                if str(row["current_round_phase"]) not in allowed_round_phases:
+                    projection = {
+                        "taskId": str(row["task_id"]),
+                        "resultId": str(row["result_id"]),
+                        "kind": str(row["task_kind"]),
+                        "outcome": outcome,
+                        "projected": False,
+                        "rejectionReason": "market_stage_closed",
                     }
                     await self._record_market_projection_locked(
                         connection,

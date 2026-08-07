@@ -9,6 +9,7 @@ import signal
 from datetime import datetime, timezone
 
 from arena_core.postgres_repository import PostgresArenaCoreRepository
+from arena_core.result_consumer import ArenaResultConsumer
 from db.schema_identity import verify_schema_identity
 
 from .a2a_projection_worker import AgentDrivenMarketProjectionWorker
@@ -52,12 +53,14 @@ class ArenaProductionWorker:
         game_orchestrator: PawnhouseGameOrchestrator,
         coordinator: PawnhouseAgentRuntimeCoordinator,
         arena_core: PostgresArenaCoreRepository,
+        result_consumer: ArenaResultConsumer,
         settlement_recovery: SettlementRecoveryWorker,
         current_game_lifecycle: CurrentGameLifecycleWorker,
         official_agent_filler: OfficialAgentFiller,
         agent_market_projection: AgentDrivenMarketProjectionWorker,
         coordinator_poll_seconds: float = 0.25,
         finalizer_poll_seconds: float = 1.0,
+        result_consumer_poll_seconds: float = 0.25,
         settlement_poll_seconds: float = 3.0,
         orchestration_poll_seconds: float = 0.25,
         current_game_poll_seconds: float = 1.0,
@@ -68,6 +71,7 @@ class ArenaProductionWorker:
             orchestration_poll_seconds,
             coordinator_poll_seconds,
             finalizer_poll_seconds,
+            result_consumer_poll_seconds,
             settlement_poll_seconds,
             current_game_poll_seconds,
             official_fill_poll_seconds,
@@ -77,12 +81,14 @@ class ArenaProductionWorker:
         self._game_orchestrator = game_orchestrator
         self._coordinator = coordinator
         self._arena_core = arena_core
+        self._result_consumer = result_consumer
         self._settlement_recovery = settlement_recovery
         self._current_game_lifecycle = current_game_lifecycle
         self._official_agent_filler = official_agent_filler
         self._agent_market_projection = agent_market_projection
         self._coordinator_poll_seconds = coordinator_poll_seconds
         self._finalizer_poll_seconds = finalizer_poll_seconds
+        self._result_consumer_poll_seconds = result_consumer_poll_seconds
         self._settlement_poll_seconds = settlement_poll_seconds
         self._orchestration_poll_seconds = orchestration_poll_seconds
         self._current_game_poll_seconds = current_game_poll_seconds
@@ -116,6 +122,10 @@ class ArenaProductionWorker:
                 name="arena-deadline-finalizer",
             ),
             asyncio.create_task(
+                self._result_consumer_loop(),
+                name="arena-result-consumer",
+            ),
+            asyncio.create_task(
                 self._settlement_loop(),
                 name="arena-settlement-recovery",
             ),
@@ -147,6 +157,16 @@ class ArenaProductionWorker:
             except Exception:
                 _LOGGER.error("arena_deadline_finalizer_cycle_failed")
             await self._wait(self._finalizer_poll_seconds)
+
+    async def _result_consumer_loop(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                await self._result_consumer.consume_pending(limit=100)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("arena_result_consumer_cycle_failed")
+            await self._wait(self._result_consumer_poll_seconds)
 
     async def _settlement_loop(self) -> None:
         while not self._stopping.is_set():
@@ -237,6 +257,7 @@ async def main() -> None:
     )
     pawnhouse = PostgresPawnhouseRepository(database_url)
     arena_core = PostgresArenaCoreRepository(database_url)
+    result_consumer = ArenaResultConsumer(arena_core)
     coordinator = PawnhouseAgentRuntimeCoordinator(
         pawnhouse=pawnhouse,
         arena_core=arena_core,
@@ -307,6 +328,7 @@ async def main() -> None:
         game_orchestrator=game_orchestrator,
         coordinator=coordinator,
         arena_core=arena_core,
+        result_consumer=result_consumer,
         settlement_recovery=settlement_recovery,
         current_game_lifecycle=current_game_lifecycle,
         official_agent_filler=official_agent_filler,
@@ -316,6 +338,9 @@ async def main() -> None:
         ),
         finalizer_poll_seconds=float(
             os.getenv("ADX_ARENA_FINALIZER_POLL_SECONDS", "1")
+        ),
+        result_consumer_poll_seconds=float(
+            os.getenv("ADX_ARENA_RESULT_CONSUMER_POLL_SECONDS", "0.25")
         ),
         settlement_poll_seconds=float(
             os.getenv("ADX_SETTLEMENT_RECOVERY_POLL_SECONDS", "3")

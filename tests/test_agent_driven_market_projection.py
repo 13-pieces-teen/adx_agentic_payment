@@ -203,11 +203,17 @@ def _row(kind: str, result_id: str, task_input, action):
         if kind == "arena.market.select"
         else "buyer-game-agent"
     )
+    round_phase = {
+        "arena.market.intent": "decide",
+        "arena.market.rfq": "match",
+        "arena.market.select": "negotiate",
+    }[kind]
     return {
         "task_id": f"task:{kind}",
         "task_kind": kind,
         "game_id": "game-1",
         "round_id": "round-1",
+        "current_round_phase": round_phase,
         "game_agent_id": participant,
         "deadline_at": DEADLINE,
         "input_snapshot": task_input.model_dump(
@@ -531,6 +537,59 @@ def test_rfq_projection_replays_after_concurrent_projection_commits() -> None:
             in call[1]
         )
         assert lock_index < receipt_index
+        assert not any(
+            "FROM arena402.market_rfq_sessions" in call[1]
+            for call in connection.calls
+        )
+        assert not any(
+            "INSERT INTO arena402.market_negotiation_requests" in call[1]
+            for call in connection.calls
+        )
+
+    asyncio.run(scenario())
+
+
+def test_late_rfq_projection_is_receipted_without_reopening_closed_round() -> None:
+    async def scenario() -> None:
+        result_id = "runtime:" + ("a" * 64)
+        authoritative = _row(
+            "arena.market.rfq",
+            result_id,
+            _rfq_input(),
+            {
+                "action": "request_negotiations",
+                "requests": [
+                    {
+                        "targetIntentId": "seller-intent-1",
+                        "openingPrice": "1.700000",
+                        "message": "请求协商",
+                    }
+                ],
+            },
+        )
+        authoritative["current_round_phase"] = "completed"
+        connection = _ProjectionConnection(authoritative)
+        repository = PostgresPawnhouseRepository(
+            "",
+            pool=_Pool(connection),
+        )
+
+        receipt = await repository.project_agent_market_application(
+            _application("arena.market.rfq", result_id)
+        )
+
+        assert receipt == {
+            "taskId": "task:arena.market.rfq",
+            "resultId": result_id,
+            "kind": "arena.market.rfq",
+            "outcome": "candidate",
+            "projected": False,
+            "rejectionReason": "market_stage_closed",
+        }
+        assert any(
+            "INSERT INTO arena402.market_projection_receipts" in call[1]
+            for call in connection.calls
+        )
         assert not any(
             "FROM arena402.market_rfq_sessions" in call[1]
             for call in connection.calls
