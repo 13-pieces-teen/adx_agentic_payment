@@ -282,6 +282,12 @@ ARENA_MARKET_PROJECTION_RUN_RECOVERY_SQL_PATH = (
     / "migrations"
     / "075_arena_market_projection_run_recovery.sql"
 )
+SETTLEMENT_NEGOTIATION_PRIVILEGES_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "076_arena_settlement_negotiation_privileges.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -775,6 +781,28 @@ def test_negotiation_settlement_status_migration_adds_terminal_states() -> None:
     assert "DROP CONSTRAINT IF EXISTS negotiations_status_check" in sql
     assert "'settled'" in sql
     assert "'settlement_failed'" in sql
+
+
+def test_settlement_role_can_terminalize_a_negotiation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sql = SETTLEMENT_NEGOTIATION_PRIVILEGES_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "GRANT SELECT, UPDATE ON" in sql
+    assert "arena402.negotiations" in sql
+    assert "TO adx_settlement;" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        SETTLEMENT_NEGOTIATION_PRIVILEGES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
 
 
 def test_semantic_candidate_policy_converges_sql_with_python() -> None:
