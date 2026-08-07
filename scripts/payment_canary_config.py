@@ -73,6 +73,50 @@ _PHASE_D_PORTFOLIOS: tuple[tuple[int, dict[str, int]], ...] = (
 )
 
 
+def resolve_canary_event_deck_id() -> Literal[
+    "pawnhouse-standard-v1",
+    "pawnhouse-standard-v2",
+]:
+    """Return the explicitly selected immutable event deck."""
+
+    deck_id = os.getenv(
+        "CANARY_EVENT_DECK_ID",
+        "pawnhouse-standard-v1",
+    ).strip()
+    if deck_id not in {
+        "pawnhouse-standard-v1",
+        "pawnhouse-standard-v2",
+    }:
+        raise RuntimeError(
+            "CANARY_EVENT_DECK_ID must be pawnhouse-standard-v1 "
+            "or pawnhouse-standard-v2"
+        )
+    return deck_id  # type: ignore[return-value]
+
+
+def resolve_canary_official_strategy_profile() -> Literal[
+    "existing",
+    "baseline_v4",
+    "liquidity_v2",
+]:
+    """Return the opt-in official strategy treatment for this canary."""
+
+    profile = os.getenv(
+        "CANARY_OFFICIAL_STRATEGY_PROFILE",
+        "existing",
+    ).strip()
+    if profile not in {
+        "existing",
+        "baseline_v4",
+        "liquidity_v2",
+    }:
+        raise RuntimeError(
+            "CANARY_OFFICIAL_STRATEGY_PROFILE must be existing, "
+            "baseline_v4, or liquidity_v2"
+        )
+    return profile  # type: ignore[return-value]
+
+
 def resolve_canary_event_seed(game_id: str) -> str:
     """Return a bounded explicit seed or the legacy per-Game seed."""
 
@@ -234,9 +278,11 @@ __all__ = [
     "canary_mandate_limits",
     "canary_summary_is_accepted",
     "phase_d_portfolio_for_seat",
+    "resolve_canary_event_deck_id",
     "resolve_canary_event_seed",
     "resolve_canary_asset_config",
     "resolve_canary_game_config",
+    "resolve_canary_official_strategy_profile",
     "resolve_canary_player_config",
     "resolve_canary_settlement_mode",
 ]

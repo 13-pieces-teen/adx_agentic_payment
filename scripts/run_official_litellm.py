@@ -125,6 +125,14 @@ def _build_litellm_config(
                 "litellm_params": {
                     "model": f"deepseek/{deployment['upstreamModel']}",
                     "api_key": f"os.environ/{alias}",
+                    # LiteLLM 1.89.x drops DeepSeek's explicit
+                    # `thinking={"type":"disabled"}` request parameter.
+                    # Preserve the official pool's non-thinking contract at
+                    # the provider wire boundary so required tool choice is
+                    # accepted upstream.
+                    "extra_body": {
+                        "thinking": {"type": "disabled"},
+                    },
                 },
                 "model_info": {
                     "id": alias.lower().replace("_", "-"),

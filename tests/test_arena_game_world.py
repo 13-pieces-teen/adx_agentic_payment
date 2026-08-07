@@ -5,6 +5,10 @@ from decimal import Decimal
 import pytest
 
 from arena_game import (
+    EffectKind,
+    EXPERIMENTAL_EVENT_DECK_ID_V2,
+    EXPERIMENTAL_PRICE_CATALOG_ID_V2,
+    EventEffect,
     INITIAL_PRICES,
     GameConfig,
     GameError,
@@ -14,6 +18,8 @@ from arena_game import (
     Portfolio,
     PortfolioError,
     RoundPhase,
+    STANDARD_PRICE_CATALOG_ID,
+    WorldEvent,
     WorldState,
     apply_market_feedback,
     apply_basis_points,
@@ -21,6 +27,8 @@ from arena_game import (
     demo_events,
     format_gold,
     gold,
+    price_catalog_from_snapshot,
+    resolve_price_catalog,
     schedule_commitment,
 )
 from arena_game.portfolio import (
@@ -91,6 +99,103 @@ def test_demo_event_schedule_is_deterministic_and_resets_gem_bubble() -> None:
     assert round_five.final_prices["gems"] == INITIAL_PRICES["gems"]
 
 
+def test_world_reset_uses_the_game_frozen_base_prices() -> None:
+    event = WorldEvent(
+        event_id="reset-gems",
+        display_name="价格重置",
+        narrative="测试冻结基础价格。",
+        reveal_round=1,
+        duration_rounds=None,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_RESET_TO_BASE,
+                good="gems",
+                target="both",
+            ),
+        ),
+    )
+    frozen_prices = {
+        "grain": gold("2.5"),
+        "iron": gold("4.5"),
+        "warhorse": gold("7"),
+        "gems": gold("4"),
+    }
+
+    snapshot = WorldState(
+        {event.event_id: event},
+        base_prices=frozen_prices,
+    ).reveal(event.event_id, round_index=1)
+
+    assert snapshot.market_prices == frozen_prices
+    assert snapshot.final_prices == frozen_prices
+
+
+def test_standard_price_catalog_freezes_the_existing_mvp_prices() -> None:
+    catalog = resolve_price_catalog(STANDARD_PRICE_CATALOG_ID)
+
+    assert catalog.catalog_id == "pawnhouse-price-v1"
+    assert catalog.prices == INITIAL_PRICES
+    assert catalog.to_snapshot() == {
+        "priceCatalogId": "pawnhouse-price-v1",
+        "initialPricesAtomic": {
+            "grain": "2000000",
+            "iron": "5000000",
+            "warhorse": "8000000",
+            "gems": "3000000",
+        },
+    }
+
+    with pytest.raises(ValueError, match="unknown price catalog"):
+        resolve_price_catalog("unknown-price-catalog")
+
+
+def test_experimental_v2_price_catalog_compresses_unit_ticket_size() -> None:
+    catalog = resolve_price_catalog(EXPERIMENTAL_PRICE_CATALOG_ID_V2)
+
+    assert catalog.catalog_id == "pawnhouse-price-v2"
+    assert catalog.prices == {
+        "grain": gold("2.5"),
+        "iron": gold("4"),
+        "warhorse": gold("6"),
+        "gems": gold("3"),
+    }
+    assert max(catalog.prices.values()) * 10 <= (
+        min(catalog.prices.values()) * 24
+    )
+
+
+def test_frozen_price_snapshot_replays_without_the_live_catalog() -> None:
+    catalog = price_catalog_from_snapshot(
+        {
+            "priceCatalogId": "pawnhouse-price-v2",
+            "initialPricesAtomic": {
+                "grain": "2500000",
+                "iron": "4500000",
+                "warhorse": "7000000",
+                "gems": "4000000",
+            },
+        }
+    )
+
+    assert catalog.catalog_id == "pawnhouse-price-v2"
+    assert catalog.prices["gems"] == gold("4")
+
+
+def test_frozen_price_snapshot_rejects_non_atomic_numbers() -> None:
+    with pytest.raises(ValueError, match="frozen initial price"):
+        price_catalog_from_snapshot(
+            {
+                "priceCatalogId": "pawnhouse-price-v2",
+                "initialPricesAtomic": {
+                    "grain": 2.5,
+                    "iron": "4500000",
+                    "warhorse": "7000000",
+                    "gems": "4000000",
+                },
+            }
+        )
+
+
 def test_market_feedback_is_bounded_and_keeps_event_price_as_anchor() -> None:
     event = demo_events()[0]
     snapshot = WorldState({event.event_id: event}).reveal(
@@ -134,6 +239,56 @@ def test_seeded_event_deck_builds_a_replayable_ten_round_schedule() -> None:
     ]
     assert [event.reveal_round for event in first] == list(range(1, 11))
     assert len({event.event_id for event in first}) == 10
+
+
+def test_standard_v1_event_deck_preserves_the_historical_seed_order() -> None:
+    schedule = build_event_schedule(
+        round_count=8,
+        seed="phase-d5a-seed-01",
+        mode="seeded_shuffle",
+    )
+
+    assert [event.event_id for event in schedule] == [
+        "coronation-cancelled",
+        "royal-wedding",
+        "stable-plague",
+        "barbarian-siege",
+        "peace-rumor",
+        "noble-gem-fever",
+        "new-iron-mine",
+        "granary-fire",
+    ]
+
+
+def test_experimental_v2_event_deck_has_bounded_two_sided_shocks() -> None:
+    schedule = build_event_schedule(
+        round_count=10,
+        seed="market-quality-v2-seed",
+        deck_id=EXPERIMENTAL_EVENT_DECK_ID_V2,
+        mode="seeded_shuffle",
+    )
+
+    market_only_signs = {
+        good: set()
+        for good in ("grain", "iron", "warhorse", "gems")
+    }
+    for event in schedule:
+        assert event.event_id.endswith("-v2")
+        for effect in event.effects:
+            if effect.kind is EffectKind.PRICE_MULTIPLY_BPS:
+                assert effect.basis_points is not None
+                assert abs(effect.basis_points) <= 1_000
+                if effect.target == "market":
+                    market_only_signs[effect.good].add(
+                        1 if effect.basis_points > 0 else -1
+                    )
+
+    assert market_only_signs == {
+        "grain": {-1, 1},
+        "iron": {-1, 1},
+        "warhorse": {-1, 1},
+        "gems": {-1, 1},
+    }
 
 
 def test_game_config_accepts_two_hundred_participants() -> None:

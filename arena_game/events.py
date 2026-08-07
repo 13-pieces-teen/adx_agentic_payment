@@ -14,6 +14,7 @@ from .money import apply_basis_points
 
 
 _EVENT_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
+MARKET_FEEDBACK_POLICY_VERSION_V1 = "arena.market-feedback.v1"
 
 
 class EventError(ValueError):
@@ -147,7 +148,22 @@ class WorldSnapshot:
 @dataclass(slots=True)
 class WorldState:
     event_catalog: Mapping[str, WorldEvent]
+    base_prices: dict[GoodId, int] = field(
+        default_factory=lambda: dict(INITIAL_PRICES)
+    )
     revealed_event_ids: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if set(self.base_prices) != set(GOOD_IDS):
+            raise EventError("base prices require exactly the canonical goods")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            for value in self.base_prices.values()
+        ):
+            raise EventError("base prices must be positive integers")
+        self.base_prices = dict(self.base_prices)
 
     def reveal(self, event_id: str, *, round_index: int) -> WorldSnapshot:
         event = self.event_catalog.get(event_id)
@@ -163,8 +179,8 @@ class WorldState:
     def snapshot(self, round_index: int) -> WorldSnapshot:
         if round_index < 0:
             raise EventError("round_index cannot be negative")
-        market = dict(INITIAL_PRICES)
-        final = dict(INITIAL_PRICES)
+        market = dict(self.base_prices)
+        final = dict(self.base_prices)
         supply = {good_id: 10_000 for good_id in GOOD_IDS}
         bubble = {good_id: 0 for good_id in GOOD_IDS}
         orders: list[RoyalOrder] = []
@@ -184,9 +200,14 @@ class WorldState:
                         supply,
                         bubble,
                         orders,
+                        self.base_prices,
                     )
             for effect in event.effects:
-                self._apply_final_effect(effect, final)
+                self._apply_final_effect(
+                    effect,
+                    final,
+                    self.base_prices,
+                )
 
         return WorldSnapshot(
             round_index=round_index,
@@ -206,6 +227,7 @@ class WorldState:
         supply: dict[GoodId, int],
         bubble: dict[GoodId, int],
         orders: list[RoyalOrder],
+        base_prices: Mapping[GoodId, int],
     ) -> None:
         if effect.target not in ("market", "both"):
             return
@@ -214,7 +236,7 @@ class WorldState:
                 market[effect.good], effect.basis_points or 0
             )
         elif effect.kind is EffectKind.PRICE_RESET_TO_BASE:
-            market[effect.good] = INITIAL_PRICES[effect.good]
+            market[effect.good] = base_prices[effect.good]
         elif effect.kind is EffectKind.SUPPLY_INDEX_ADD_BPS:
             supply[effect.good] = max(
                 0, supply[effect.good] + (effect.basis_points or 0)
@@ -239,6 +261,7 @@ class WorldState:
     def _apply_final_effect(
         effect: EventEffect,
         final: dict[GoodId, int],
+        base_prices: Mapping[GoodId, int],
     ) -> None:
         if effect.target not in ("final", "both"):
             return
@@ -247,7 +270,7 @@ class WorldState:
                 final[effect.good], effect.basis_points or 0
             )
         elif effect.kind is EffectKind.PRICE_RESET_TO_BASE:
-            final[effect.good] = INITIAL_PRICES[effect.good]
+            final[effect.good] = base_prices[effect.good]
 
 
 def apply_market_feedback(
@@ -302,6 +325,7 @@ __all__ = [
     "EffectKind",
     "EventEffect",
     "EventError",
+    "MARKET_FEEDBACK_POLICY_VERSION_V1",
     "PriceTarget",
     "RoyalOrder",
     "WorldEvent",

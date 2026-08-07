@@ -11,8 +11,10 @@ from scripts.payment_canary_config import (
     canary_mandate_limits,
     phase_d_portfolio_for_seat,
     resolve_canary_event_seed,
+    resolve_canary_event_deck_id,
     resolve_canary_asset_config,
     resolve_canary_game_config,
+    resolve_canary_official_strategy_profile,
     resolve_canary_player_config,
     resolve_canary_settlement_mode,
 )
@@ -71,6 +73,48 @@ def test_phase_d_canary_accepts_a_frozen_liquidity_seed(
     assert (
         resolve_canary_event_seed("game-ignored")
         == "phase-d-a2a-liquidity-v1"
+    )
+
+
+def test_market_quality_canary_explicitly_selects_event_deck_v2(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "CANARY_EVENT_DECK_ID",
+        "pawnhouse-standard-v2",
+    )
+
+    assert (
+        resolve_canary_event_deck_id()
+        == "pawnhouse-standard-v2"
+    )
+
+
+def test_market_quality_canary_explicitly_selects_liquidity_v2(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "CANARY_OFFICIAL_STRATEGY_PROFILE",
+        "liquidity_v2",
+    )
+
+    assert (
+        resolve_canary_official_strategy_profile()
+        == "liquidity_v2"
+    )
+
+
+def test_market_quality_canary_can_explicitly_restore_baseline_v4(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "CANARY_OFFICIAL_STRATEGY_PROFILE",
+        "baseline_v4",
+    )
+
+    assert (
+        resolve_canary_official_strategy_profile()
+        == "baseline_v4"
     )
 
 
@@ -261,3 +305,12 @@ def test_payment_canary_runner_uses_manual_phase_d_portfolios() -> None:
     assert "phase_d_portfolio_for_seat(" in RUNNER
     assert 'portfolio_mode="manual"' in RUNNER
     assert "resolve_canary_event_seed(game_id)" in RUNNER
+
+
+def test_payment_canary_runner_applies_only_explicit_market_treatments() -> None:
+    assert "resolve_canary_event_deck_id()" in RUNNER
+    assert "deck_id=event_deck_id" in RUNNER
+    assert "event_deck_id=event_deck_id" in RUNNER
+    assert "resolve_canary_official_strategy_profile()" in RUNNER
+    assert "_prepare_official_strategy_treatment(" in RUNNER
+    assert '"officialStrategyProfile": official_strategy_profile' in RUNNER

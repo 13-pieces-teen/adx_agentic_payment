@@ -8,7 +8,7 @@ import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -39,12 +39,18 @@ from .a2a_market import NEGOTIATE_STAGE_ACTION_SLOTS
 from .events import (
     EffectKind,
     EventEffect,
+    MARKET_FEEDBACK_POLICY_VERSION_V1,
     WorldEvent,
     WorldState,
     apply_market_feedback,
     schedule_commitment,
 )
-from .goods import GOODS, GOOD_IDS, INITIAL_PRICES, require_good
+from .goods import GOODS, GOOD_IDS, INITIAL_PRICES, GoodId, require_good
+from .liquidity import (
+    LiquidityIntent,
+    MarketSide,
+    summarize_round_liquidity,
+)
 from .market import Pairing, PoolEntry, fcfs_pair
 from .money import gold
 from .negotiation import Negotiation, NegotiationAction, NegotiationStatus
@@ -54,6 +60,11 @@ from .portfolio import (
     Portfolio,
     default_join_portfolio,
     distribute_balanced_portfolios,
+)
+from .price_catalog import (
+    STANDARD_PRICE_CATALOG_ID,
+    price_catalog_from_snapshot,
+    resolve_price_catalog,
 )
 from .ranking import calculate_rankings
 from .rule_runtime import RuleRuntime, RuleStrategy
@@ -159,6 +170,7 @@ class PostgresPawnhouseRepository:
         event_seed: str,
         event_deck_id: str = "pawnhouse-standard-v1",
         event_mode: str = "fixed_demo",
+        price_catalog_id: str = STANDARD_PRICE_CATALOG_ID,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
         min_participants: int = 2,
@@ -180,6 +192,12 @@ class PostgresPawnhouseRepository:
             raise PawnhouseRepositoryError("invalid_portfolio_mode")
         if market_protocol not in {"fcfs.v1", "agent_a2a.v1"}:
             raise PawnhouseRepositoryError("invalid_market_protocol")
+        try:
+            price_catalog = resolve_price_catalog(price_catalog_id)
+        except ValueError:
+            raise PawnhouseRepositoryError(
+                "invalid_price_catalog"
+            ) from None
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
         config = {
@@ -192,6 +210,10 @@ class PostgresPawnhouseRepository:
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
             "eventMode": event_mode,
+            **price_catalog.to_snapshot(),
+            "marketFeedbackPolicyVersion": (
+                MARKET_FEEDBACK_POLICY_VERSION_V1
+            ),
             "initialNetWorthAtomic": "20000000",
             "initial_cash_atomic": 20_000_000,
             "initial_inventory": {
@@ -239,6 +261,7 @@ class PostgresPawnhouseRepository:
         event_seed: str,
         event_deck_id: str = "pawnhouse-standard-v1",
         event_mode: str = "seeded_shuffle",
+        price_catalog_id: str = STANDARD_PRICE_CATALOG_ID,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
         start_threshold: int = CURRENT_GAME_START_THRESHOLD,
@@ -265,6 +288,12 @@ class PostgresPawnhouseRepository:
             )
         if market_protocol not in {"fcfs.v1", "agent_a2a.v1"}:
             raise PawnhouseRepositoryError("invalid_market_protocol")
+        try:
+            price_catalog = resolve_price_catalog(price_catalog_id)
+        except ValueError:
+            raise PawnhouseRepositoryError(
+                "invalid_price_catalog"
+            ) from None
 
         commitment = schedule_commitment(events, seed=event_seed)
         resolved_settlement = settlement_config or SettlementConfig()
@@ -283,6 +312,10 @@ class PostgresPawnhouseRepository:
             "eventDeckId": event_deck_id,
             "eventDeckVersion": 1,
             "eventMode": event_mode,
+            **price_catalog.to_snapshot(),
+            "marketFeedbackPolicyVersion": (
+                MARKET_FEEDBACK_POLICY_VERSION_V1
+            ),
             "initialNetWorthAtomic": "20000000",
             "initial_cash_atomic": 20_000_000,
             "initial_inventory": {
@@ -1894,11 +1927,18 @@ class PostgresPawnhouseRepository:
             if isinstance(game["config_snapshot"], str)
             else dict(game["config_snapshot"])
         )
+        try:
+            frozen_price_catalog = price_catalog_from_snapshot(game_config)
+        except ValueError:
+            raise PawnhouseRepositoryError(
+                "invalid_frozen_price_catalog"
+            ) from None
         if _should_assign_balanced_portfolios(game_config):
             await self._assign_balanced_portfolios_locked(
                 connection,
                 game_id=game_id,
                 seed=str(game["event_seed"]),
+                base_prices=frozen_price_catalog.prices,
             )
         count = await connection.fetchval(
             """
@@ -1971,7 +2011,10 @@ class PostgresPawnhouseRepository:
             round_id,
             game_id,
         )
-        snapshot = WorldState({event.event_id: event for event in events})
+        snapshot = WorldState(
+            {event.event_id: event for event in events},
+            base_prices=dict(frozen_price_catalog.prices),
+        )
         world_snapshot = snapshot.reveal(events[0].event_id, round_index=1)
         await self._persist_world_snapshot(
             connection,
@@ -2035,6 +2078,7 @@ class PostgresPawnhouseRepository:
         *,
         game_id: str,
         seed: str,
+        base_prices: Mapping[GoodId, int] = INITIAL_PRICES,
     ) -> None:
         rows = await connection.fetch(
             """
@@ -2049,6 +2093,7 @@ class PostgresPawnhouseRepository:
         portfolios = distribute_balanced_portfolios(
             [str(row["game_participant_id"]) for row in rows],
             seed=seed,
+            prices=base_prices,
         )
         for participant_id, portfolio in portfolios.items():
             await connection.execute(
@@ -2752,6 +2797,80 @@ class PostgresPawnhouseRepository:
                 "agent_market_round_not_found"
             )
         return str(row["phase"])
+
+    async def record_agent_market_liquidity_summary(
+        self,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> dict[str, object]:
+        """Persist one privacy-safe liquidity summary for an A2A round."""
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            return await self._record_agent_market_liquidity_summary(
+                connection,
+                game_id=game_id,
+                round_id=round_id,
+            )
+
+    async def _record_agent_market_liquidity_summary(
+        self,
+        connection: Any,
+        *,
+        game_id: str,
+        round_id: str,
+    ) -> dict[str, object]:
+        participant_count = int(
+            await connection.fetchval(
+                """
+                SELECT count(*)
+                FROM public.arena_agent_tasks
+                WHERE game_id = $1
+                  AND round_id = $2
+                  AND task_kind = 'arena.market.intent'
+                """,
+                game_id,
+                round_id,
+            )
+        )
+        rows = await connection.fetch(
+            """
+            SELECT
+                game_participant_id,
+                side,
+                good_id,
+                limit_price_atomic
+            FROM arena402.market_intents
+            WHERE game_id = $1
+              AND round_id = $2
+            ORDER BY game_participant_id
+            """,
+            game_id,
+            round_id,
+        )
+        summary = summarize_round_liquidity(
+            participant_count=participant_count,
+            intents=tuple(
+                LiquidityIntent(
+                    participant_id=str(row["game_participant_id"]),
+                    side=cast(MarketSide, str(row["side"])),
+                    good=require_good(str(row["good_id"])),
+                    limit_price_atomic=int(row["limit_price_atomic"]),
+                )
+                for row in rows
+            ),
+        )
+        payload = summary.to_public_payload()
+        await self._event(
+            connection,
+            game_id=game_id,
+            round_id=round_id,
+            event_type="market.liquidity_summarized",
+            source_key=f"{round_id}:market-liquidity:v1",
+            public_payload=payload,
+        )
+        return payload
 
     async def advance_agent_market_stage(
         self,
@@ -7437,7 +7556,8 @@ class PostgresPawnhouseRepository:
                     """
                     SELECT
                         phase, current_round, round_count, event_seed,
-                        event_schedule_commitment
+                        event_schedule_commitment, market_protocol,
+                        config_snapshot
                     FROM arena402.games
                     WHERE game_id = $1
                     FOR UPDATE
@@ -7576,6 +7696,12 @@ class PostgresPawnhouseRepository:
                         "round_not_ready_to_close"
                     )
 
+                if str(game["market_protocol"]) == "agent_a2a.v1":
+                    await self._record_agent_market_liquidity_summary(
+                        connection,
+                        game_id=game_id,
+                        round_id=round_id,
+                    )
                 await self._terminalize_agent_market_scope(
                     connection,
                     game_id=game_id,
@@ -7627,10 +7753,24 @@ class PostgresPawnhouseRepository:
 
                 if int(game["current_round"]) < int(game["round_count"]):
                     next_round = int(game["current_round"]) + 1
+                    game_config = (
+                        json.loads(game["config_snapshot"])
+                        if isinstance(game["config_snapshot"], str)
+                        else dict(game["config_snapshot"])
+                    )
+                    try:
+                        frozen_price_catalog = price_catalog_from_snapshot(
+                            game_config
+                        )
+                    except ValueError:
+                        raise PawnhouseRepositoryError(
+                            "invalid_frozen_price_catalog"
+                        ) from None
                     result = await self._open_next_round(
                         connection,
                         game_id=game_id,
                         round_index=next_round,
+                        base_prices=frozen_price_catalog.prices,
                     )
                     return {
                         "gameId": game_id,
@@ -8180,6 +8320,12 @@ class PostgresPawnhouseRepository:
                     if isinstance(game["config_snapshot"], str)
                     else dict(game["config_snapshot"])
                 )
+                try:
+                    frozen_price_catalog = price_catalog_from_snapshot(config)
+                except ValueError:
+                    raise PawnhouseRepositoryError(
+                        "invalid_frozen_price_catalog"
+                    ) from None
                 settlement = self._settlement_config(config)
                 if settlement.authorization_mode != "single_eip3009":
                     raise PawnhouseRepositoryError("settlement_not_available")
@@ -8254,6 +8400,7 @@ class PostgresPawnhouseRepository:
         default_portfolio = default_join_portfolio(
             game_id=game_id,
             agent_id=agent_id,
+            prices=frozen_price_catalog.prices,
         )
         return {
             "gameId": game_id,
@@ -8283,7 +8430,7 @@ class PostgresPawnhouseRepository:
                 "initialNetWorthAtomic": str(INITIAL_NET_WORTH_ATOMIC),
                 "goldDecimals": 6,
                 "initialPricesAtomic": {
-                    good_id: str(INITIAL_PRICES[good_id])
+                    good_id: str(frozen_price_catalog.prices[good_id])
                     for good_id in GOOD_IDS
                 },
                 "allowedGoods": list(GOOD_IDS),
@@ -9541,6 +9688,7 @@ class PostgresPawnhouseRepository:
         *,
         game_id: str,
         round_index: int,
+        base_prices: Mapping[GoodId, int] = INITIAL_PRICES,
     ) -> dict[str, object]:
         events = await self._scheduled_events(
             connection,
@@ -9550,7 +9698,10 @@ class PostgresPawnhouseRepository:
         event = event_by_round.get(round_index)
         if event is None:
             raise PawnhouseRepositoryError("round_event_not_found")
-        world = WorldState({value.event_id: value for value in events})
+        world = WorldState(
+            {value.event_id: value for value in events},
+            base_prices=dict(base_prices),
+        )
         snapshot = None
         for scheduled in events:
             if scheduled.reveal_round > round_index:

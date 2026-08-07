@@ -36,8 +36,8 @@ from .providers import ProviderErrorCode, ProviderUsage
 
 @dataclass(frozen=True, slots=True)
 class HostedAgentRuntimeLimits:
-    request_limit: int = 4
-    tool_calls_limit: int = 6
+    request_limit: int = 7
+    tool_calls_limit: int = 8
     # PydanticAI applies this limit to the whole multi-request Agent run.
     # Individual provider requests remain clamped by
     # arena_action_output_token_budget() in the worker.

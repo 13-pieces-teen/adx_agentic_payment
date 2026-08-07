@@ -15,11 +15,19 @@ from arena_agent_contracts import (
 from ..context import HostedArenaAgentContext
 
 
+def _record_analysis_tool(
+    ctx: RunContext[HostedArenaAgentContext],
+    tool_name: str,
+) -> None:
+    ctx.deps.analysis_tool_calls.add(tool_name)
+
+
 def inspect_portfolio(
     ctx: RunContext[HostedArenaAgentContext],
 ) -> dict[str, object]:
     """Return the frozen cash, inventory, and marked portfolio inputs."""
 
+    _record_analysis_tool(ctx, "inspect_portfolio")
     task_input = ctx.deps.task.input
     value: dict[str, object] = {
         "taskKind": ctx.deps.task.kind,
@@ -47,6 +55,7 @@ def inspect_market_history(
 ) -> dict[str, object]:
     """Return bounded public history already frozen into this AgentTask."""
 
+    _record_analysis_tool(ctx, "inspect_market_history")
     task_input = ctx.deps.task.input
     value: dict[str, object] = {
         "events": [
@@ -80,6 +89,7 @@ def recall_strategy_and_plan(
 ) -> dict[str, object]:
     """Return the frozen strategy revision and last applied private memory."""
 
+    _record_analysis_tool(ctx, "recall_strategy_and_plan")
     return {
         "strategyRevisionId": ctx.deps.strategy_revision_id,
         "strategyRevisionNo": ctx.deps.strategy_revision_no,
@@ -97,6 +107,7 @@ def evaluate_negotiation_boundary(
 ) -> dict[str, object]:
     """Check a proposed price against the frozen negotiation hard limit."""
 
+    _record_analysis_tool(ctx, "evaluate_negotiation_boundary")
     task_input = ctx.deps.task.input
     if not isinstance(task_input, ArenaNegotiateInputV1):
         return {"applicable": False, "reason": "not_negotiation_task"}

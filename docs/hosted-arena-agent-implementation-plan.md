@@ -1796,3 +1796,285 @@ Result Sink fail closed。隔离 mUSDC 证据仍不替代 `arena402-g` 或生产
 - raw reasoning、Secret 和不可信公开文本不进入记忆；
 - 新 revision 不影响正在进行的 Game。
 - learning job 重试、stale-base 拒绝和自动回滚都不会改写已冻结的 Game Agent。
+
+## 23. Phase D5a：不修改 A2A 协议的市场质量优化
+
+### 23.1 冻结边界
+
+本阶段保持已部署 `agent_a2a.v1` 的 wire contract、任务种类、每回合单一成交
+slot、最多三次 RFQ 尝试、最多三个合并协商行动和逐 Deal 结算不变。任何需要
+多 Intent、Intent revision、双边 standing quote 或一回合多次执行的能力都必须
+进入未来 `agent_a2a.v2`，不能修改历史 Game 的协议解释。
+
+本阶段允许版本化升级：
+
+- Hosted Strategy Catalog、官方数值画像和只影响未来 Game 的 Strategy Revision；
+- 不改变 Task action union 的 participant-view 安全字段；
+- Arena 内部及公开聚合的市场质量诊断；
+- Game 创建时冻结的价格目录和事件牌组；
+- 有界、确定性、只影响下一回合公开参考价的订单流反馈；
+- 前端对 Intent/RFQ/Engagement/Negotiation/Settlement 漏斗的解释。
+
+### 23.2 第一性目标
+
+成交量不是单独的优化目标。首要目标是让独立 Agent 在相同公开事实下形成可解释的
+私有保留价和库存效用，使市场自然出现同商品、相反方向且限价可交叠的交易机会，
+同时保留 `pass`、拒绝和无成交作为合法策略结果。
+
+当前生产基线已经有十个官方数值画像，但仍共同围绕公开
+`eventImpliedFinal`、确定性比例阈值和“界内立即接受”运行。当前世界引擎又让
+事件冲击主导公开参考价：上一成交价最多贡献下一轮参考价的四分之一，订单流压力
+最多约 2%，而个别事件的 market 冲击达到 20%～100%。因此本阶段优先修复共同
+估值锚和供需反馈比例，不把前端展示问题误判为成交原因。
+
+### 23.3 纵向实施顺序
+
+1. 持久化 `arena.market-liquidity.v1` 聚合摘要，不公开 Agent 私有限价或画像；
+2. 建立按 Game/round/event seed 可复现的离线重放与 A/B 数据集；
+3. 将私有估值固定为公开事件锚、Agent/Game 稳定偏差、库存影子价格、现金约束、
+   剩余回合偏好和历史拥挤度的有界组合；
+4. 让无成交原因进入 Game Memory，但只有权威经济证据仍可激活收益型 revision；
+5. 将 `target / acceptable / walk-away` 三段价格用于真实 counter/accept 决策，
+   不为展示效果强制反价；
+6. 建立版本化价格目录；第一轮对照继续使用 `2/5/8/3`；
+7. 新增 `pawnhouse-standard-v2`，保留 v1 immutable；
+8. 完成多局 1+9 A/B 后才允许 Current Game 切换新的 Strategy/Price/Event 组合。
+
+### 23.4 价格与事件版本规则
+
+基础价格不能继续只由进程级 `INITIAL_PRICES` 解释新旧 Game。新 Game 必须冻结：
+
+```text
+price_catalog_id
+initial_prices
+event_deck_id
+event_schedule_commitment
+market_feedback_policy_version
+```
+
+`PRICE_RESET_TO_BASE` 必须读取该 Game 冻结的基础价格，不能读取部署后的最新全局
+常量。`pawnhouse-standard-v2` 应覆盖临时流动性、传闻、基本面、反转和跨商品
+事件；常规冲击应落在各策略私有估值分布可能交叠的区间，极端冲击保持稀有。
+订单流反馈只改变下一轮公开参考价并保持定点整数、上下界、确定性重放，不能生成
+虚假 Agent Intent、强制 RFQ 或替 Agent 接受报价。
+
+### 23.5 A/B 退出门槛
+
+每个实验组合必须报告：
+
+- participant、Intent、pass 和按商品/方向分布；
+- 同商品反向理论容量、限价兼容理论容量及二者差值；
+- RFQ、Engagement、Deal、chain-confirmed、inventory-committed 转化；
+- `no_same_good`、`price_incompatible`、`rfq_not_sent`、`rfq_not_engaged`、
+  `negotiation_not_accepted` 和 settlement failure；
+- 行动方向熵、独立对手覆盖、反价率和平均协商轮数；
+- archetype/具体画像的净值、下行风险和事件/商品集中度。
+
+第一轮目标是证明相较生产基线，更多回合出现至少一个可协商对手，同时不提高非法
+动作、timeout、负期望强制交易、重复支付或不公平初始净值。正式阈值必须由多局
+样本冻结，不能由单局三笔或更多成交倒推。
+
+### 23.6 首个纵向切片
+
+2026-08-06 已完成不改变 `agent_a2a.v1` 的第一批基础：
+
+- [x] 新增 `arena.market-liquidity.v1` 聚合模型；
+- [x] A2A Round close 在清理未完成市场对象前幂等发布
+  `market.liquidity_summarized`；
+- [x] 摘要区分同商品反向容量和限价兼容量，但不公开参与者或私有限价；
+- [x] 新 Game config 冻结 `pawnhouse-price-v1`、四个
+  `initialPricesAtomic` 和 `arena.market-feedback.v1`；
+- [x] `WorldState` 和 `PRICE_RESET_TO_BASE` 使用 Game 冻结基础价格，旧 Game
+  缺少新字段时回退到历史 v1；
+- [x] Join preflight、确定性默认组合和 `balanced_auto` 组合按同一 Game 冻结
+  基础价格保持等值 20 金；
+- [x] 建立消费冻结回合观测的离线成对 A/B 评估器与 CLI；
+- [x] 从两个明确指定的已完成 baseline/candidate Game 只读导出冻结观测；
+- [x] 运行同 seed 的真实 Hosted A/A 基线局，确认商品方向集中和 Provider
+  抖动边界；
+- [ ] 运行真实 baseline/candidate Runtime 多 seed A/B 并形成可选型样本；
+- [x] 注册仅供实验选择、尚未接入 Current Game 的
+  `pawnhouse-standard-v2`；
+- [x] 注册仅供实验选择、尚未接入 Current Game 的
+  `pawnhouse-price-v2`；
+- [x] 实现仅供 canary 显式选择的 Hosted `liquidity_v2` 私有估值、库存影子
+  价格和 counter policy；生产 Official pool 未切换；
+- [ ] 生产 Current Game 切换。
+
+因此当前代码只增加可观测性和历史安全的版本入口，没有改变正在运行的价格、
+事件、Agent 动作或 A2A 协议。
+
+### 23.7 离线成对 A/B 评估器
+
+`scripts/run_market_quality_ab.py` 读取
+`arena.market-quality-experiment.v1` JSON manifest。control 和 treatment 必须
+使用相同 `caseId`、event seed、参与者、公开 archetype 和回合编号；不成对时
+fail closed。报告输出：
+
+- Intent/pass、买卖方向、按商品容量和限价兼容量；
+- RFQ → Engagement → Deal → chain-confirmed → inventory-committed 漏斗；
+- 非法动作、timeout、反价率、协商行动数、对手覆盖和方向熵；
+- 总体及各 archetype 的平均收益和下行收益；
+- 不包含参与者 identity 或私有限价的输入/设计 SHA-256。
+
+示例：
+
+```powershell
+python scripts/export_market_quality_ab.py `
+  --experiment-id hosted-policy-ab-1 `
+  --control-game-id <completed-control-game-id> `
+  --treatment-game-id <completed-treatment-game-id> `
+  --output .tmp/market-quality-ab-manifest.json
+
+python scripts/run_market_quality_ab.py `
+  --input .tmp/market-quality-ab-manifest.json `
+  --output .tmp/market-quality-ab-report.json
+```
+
+导出命令只接受已完成的 `agent_a2a.v1` Game，并要求相同 event seed、
+Agent/archetype 阵容、初始净值和回合数。它在 PostgreSQL read-only transaction
+中运行，使用 `--database-url`、`ARENA_TEST_DATABASE_URL` 或
+`ADX_ARENA_CORE_DATABASE_URL`，不使用无权读取私有限价的 API 角色。
+导出的 manifest 含 Agent identity 和私有限价，只能保存在已忽略的 `.tmp/`
+等 operator-private 位置，不能提交或发布；只有评估后的匿名聚合 report 可交付。
+
+该工具只评估已冻结观测。它不调用模型、不生成 Agent 决策、不模拟协商接受，也不
+把理论限价兼容量称为 Deal 或 settled 交易。下一步仍需从相同 Runtime 配置、
+人数、初始资产、event seed 和回合数运行真实 baseline/candidate Game；在形成
+多 seed 样本之前不能据示例结果选择 V2 参数。
+
+### 23.8 同 seed Hosted A/A 证据与 V2 实验候选
+
+2026-08-07 在隔离的 DeepSeek Hosted Runtime 中，使用
+`phase-d5a-seed-01`、10 个 Hosted Agent、8 回合、相同阵容、相同手工组合、
+`agent_a2a.v1` 和 payment-disabled 连续运行三局：
+
+- `market-baseline-a-20260807`：严格 canary 通过，92/92 AgentTask
+  `completed`；
+- `market-baseline-b-20260807`：第 2 回合出现 Provider 延迟尖峰，
+  11/80 个 Intent task default，严格 canary 失败；
+- `market-baseline-c-20260807`：只有 1 个 permanent-request default；除
+  timeout 外，匿名经济聚合与第一局完全一致。
+
+第一局和第三局共同得到：
+
+```text
+participant-round       80
+non-pass Intent          58
+pass                     22
+buy / sell               44 / 14
+RFQ / Engagement / Deal  6 / 3 / 3
+opposite / compatible    3 / 3
+compatible rounds        3 / 8
+```
+
+四个商品中只有 grain 同时出现买卖：grain 为 6 buy / 14 sell，
+iron 为 21～25 buy / 0 sell，warhorse 为 8～12 buy / 0 sell，
+gems 为 5 buy / 0 sell。A/A 中 3 个 Deal 和全部可交叠容量都来自 grain。
+这证明当前主要约束不是协商动作失败，而是官方数值画像、库存目标和初始组合
+共同导致非 grain 商品没有卖方。相同 seed 仍可能遇到 Provider 抖动，因此
+正式 A/B 必须把 timeout 作为无效样本或独立运行时指标，不能把 default action
+计为策略收益。
+
+基于该证据，先注册两个不自动启用的实验候选：
+
+- `pawnhouse-price-v2`：grain/iron/warhorse/gems 为
+  `2.5 / 4 / 6 / 3` 金，将单件价格跨度由 4 倍压缩到 2.4 倍，降低
+  `quantity=1` 下的票面离散度；新组合仍必须按该目录保持严格等值 20 金；
+- `pawnhouse-standard-v2`：十张独立牌，对四个商品都包含正向和负向的
+  market-only 冲击；单次常规价格冲击控制在 4%～9%，任何价格冲击不超过
+  10%，配套 final 变化为 2%，并包含两张跨商品轮动牌。
+
+上述注册只提供显式实验选择；`STANDARD_*` 常量、v1 schedule hash、
+Current Game 和生产 Official pool 均未切换。Hosted Strategy V2 下一步采用：
+
+1. 将“目标库存”从禁止出售最后一单位的硬门槛改为有界库存影子价格；
+2. 为 Agent × good 冻结小幅、稳定、私有的保留价偏移，避免共同锚完全趋同；
+3. 继续叠加现金储备、剩余回合和拥挤度，但总调整保持有界；
+4. 至少让多个画像在持有非 grain 商品时能够形成真实卖方，同时不强制 Intent、
+   RFQ 或接受报价。
+
+下一次真实 treatment 应先单独替换 Strategy + Event Deck，继续使用 v1 起始价；
+确认非 grain 双边容量上升后，再单独测试 Price V2，避免一次同时改变三类变量。
+
+### 23.9 首个 Strategy + Event V2 真实 treatment
+
+2026-08-07 已完成 `liquidity_v2` 的首个真实纵向实现：
+
+- `hosted_agent_runtime.official_market_strategy` 按 Official priority 为
+  Agent × good 生成稳定、私有、±350bps 内的偏移；
+- 私有估值由画像偏移、商品偏移、库存影子价格、现金储备和剩余回合组成，总调整
+  clamp 到 ±1600bps；
+- 目标库存改为 utility center，而不是禁止出售最后一单位的硬门槛；
+- canary 默认继续使用 `existing + pawnhouse-standard-v1`，只有显式设置
+  `CANARY_OFFICIAL_STRATEGY_PROFILE=liquidity_v2` 和
+  `CANARY_EVENT_DECK_ID=pawnhouse-standard-v2` 才应用 treatment；
+- `baseline_v4` 可使用新的 idempotency key 明确恢复隔离 Official pool，避免
+  后续 control 静默继承 treatment。
+
+首个 treatment Game `market-treatment-v2-a-20260807` 与有效 control
+`market-baseline-a-20260807` 使用相同 seed、阵容、初始组合、v1 起始价、
+8 回合和 payment-disabled 边界，只替换 Strategy + Event Deck：
+
+```text
+metric                    control   treatment
+Intent                    58        66
+pass                      22        14
+sell Intent               14        20
+opposite capacity          3         9
+compatible capacity        3         9
+compatible rounds        3/8       6/8
+RFQ                         6        17
+Engagement / Deal           3/3       7/7
+counterparty coverage     7.5%      17.5%
+default action              0        12
+true deadline timeout       0         0
+```
+
+V2 首次让 gems 出现 12 buy / 4 sell，并将 grain 的可交叠容量从 3 提升到 6；
+iron 与 warhorse 仍是 0 sell，因此 Strategy V2 只完成了部分商品的流动性修复。
+第 5、7、8 回合仍产生 RFQ，证明后半局市场发现不再像 baseline 一样完全枯竭。
+
+该局的 12 个终态最初被实验导出器误记为 timeout。按 Task/Attempt 时间戳复核后，
+它们实际均为 Runtime default，其中主要原因为 `invalid_structured_output`；
+queue wait 接近 0，且没有 `deadline_exceeded`。严格 canary 仍以退出码 2 正确拒绝
+该局，但拒绝原因是结构化输出可靠性，而不是 Provider 网络或 deadline timeout。
+Event Deck 改变了终场价格，payment-disabled 又没有资产移动，因此本次净值
+delta 不能用于比较策略收益。实验结束后，隔离 Official pool 已显式恢复
+`baseline_v4`；生产和 Current Game 从未切换。
+
+### 23.10 Hosted Agent 输出可靠性修复与同 seed 复验
+
+2026-08-07 对上述 default 根因完成以下修复：
+
+- 实验漏斗将 `defaultActionCount`、`invalidStructuredOutputCount` 和真实
+  `timeoutCount` 分开；只有 `deadline_exceeded` 或 Runtime 明确
+  `timed_out` 才计入 timeout；
+- DeepSeek 非思考 Arena action 单请求输出上限从 8192 收紧到 2048；
+- Official LiteLLM 在 provider wire 的 `extra_body` 固定补入
+  `thinking.type=disabled`，绕过 LiteLLM 1.89.x 丢弃显式 disabled 的兼容问题；
+- PydanticAI 采用两阶段运行：第一阶段仅暴露只读分析工具并强制调用，工具返回后
+  隐藏分析工具，第二阶段通过 JSON Object 模式返回类型化终态；
+- Agent run 上限冻结为 7 requests、8 tool calls、4 次 output validation retry，
+  Worker 仍只允许一次同 Runtime/Model 的 task retry，且继续受 Game 的 180 秒
+  绝对 deadline 约束。
+
+最终同 seed、10 Agent、8 回合、payment-disabled 验收局
+`market-treatment-v2-h-20260807` 结果：
+
+```text
+AgentTask                         115
+completed / default / timeout    115 / 0 / 0
+Intent / RFQ                     64 / 15
+Engagement / Deal                 8 / 8
+task wall P50 / P95 / P99        9.1s / 21.4s / 28.1s
+Harness exit                      0
+```
+
+前一局 `market-treatment-v2-g-20260807` 为 126 completed、1
+`invalid_structured_output` default、0 timeout、69 Intent 和 11 Deal；因此 h
+证明严格可靠性门槛可以通过，g 同时证明 default 与 timeout 必须继续分开监控。
+两局成交数存在随机差异，当前证据足以进入受控线上评测，但仍不足以完成多 seed
+策略收益结论或 D5a 全量验收。下一步应在线上保持回滚点，采集多局
+`defaultActionRate`、真实 `timeoutRate`、Deal 漏斗和模型调用成本后再决定是否
+默认启用 Price V2。

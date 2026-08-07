@@ -25,23 +25,23 @@ def test_factory_builds_only_allowlisted_official_model() -> None:
         provider_id="official-deepseek",
         model_id="deepseek-v4-flash",
         api_key="test-only-key",
-        thinking_enabled=True,
+        thinking_enabled=False,
         remaining_timeout_ms=15_000,
         requested_max_output_tokens=2_048,
     )
     try:
         assert built.resolved.provider_id == "official-deepseek"
         assert built.resolved.model_id == "deepseek-v4-flash"
-        assert built.resolved.thinking_enabled is True
+        assert built.resolved.thinking_enabled is False
         assert built.resolved.request_timeout_ms == 15_000
         assert built.resolved.max_output_tokens == 2_048
         assert built.settings["parallel_tool_calls"] is False
         assert built.settings["extra_body"] == {
-            "thinking": {"type": "enabled"}
+            "thinking": {"type": "disabled"}
         }
         assert (
             built.model.profile["openai_supports_tool_choice_required"]
-            is False
+            is True
         )
         assert (
             built.model.profile["openai_chat_thinking_field"]
@@ -58,9 +58,17 @@ def test_factory_builds_only_allowlisted_official_model() -> None:
             is False
         )
         assert built.model.profile["openai_system_prompt_role"] == "system"
+        assert (
+            built.model.profile["default_structured_output_mode"]
+            == "prompted"
+        )
+        assert (
+            built.model.profile["supports_json_object_output"]
+            is True
+        )
         assert isinstance(built.model, _DeepSeekOpenAIChatModel)
         tools, tool_choice = built.model._get_tool_choice(
-            {},
+            built.settings,
             ModelRequestParameters(
                 function_tools=[
                     ToolDefinition(
@@ -70,11 +78,13 @@ def test_factory_builds_only_allowlisted_official_model() -> None:
                             "properties": {},
                         },
                     )
-                ]
+                ],
+                output_mode="prompted",
+                allow_text_output=True,
             ),
         )
         assert len(tools) == 1
-        assert tool_choice is None
+        assert tool_choice == "required"
         mapped = built.model._map_model_response(
             ModelResponse(
                 parts=[

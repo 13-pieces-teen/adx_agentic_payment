@@ -11,9 +11,11 @@
 > 2026-08-06 的 Phase D 中间验收已由一名真实 Codex Connector 和九名
 > PydanticAI Hosted Agent 完成八回合 `agent_a2a.v1`，三笔隔离 mUSDC testnet
 > 支付均在确认后提交库存，并产生终场排名和后续 Game 冻结的 learned revision。
-> 该局不是 `arena402-g` 或生产 Current Game；公共第三方 Facilitator、正式
-> payment-enabled Current Game 和完整生产验收尚未完成。Native A2A Endpoint
-> 顺延至 Phase E。
+> 后续正式 Game `game-20260806-110040-099857d6f841` 已由一名真实 Codex
+> Connector 和九名 DeepSeek Hosted Agent 使用 `arena402-g` 完成八回合
+> `agent_a2a.v1`、三笔链上确认和库存提交。生产 Current Game、Official pool、
+> 外部前端投影、备份与回滚已验收。公共第三方 Facilitator、D5a 市场质量、
+> D5b 容量和 Native A2A Endpoint 仍是独立后续项。
 > 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
 >
 > 第一次参赛见 [`player-guide.md`](player-guide.md)。本文维护游戏规则、跨模块状态
@@ -44,8 +46,9 @@ Prompt、决策速度和谈判质量。
 `arena402-g` 链上结算。该币只允许已登记参赛钱包间转账；平台负责组织回合、
 配对和记录，不托管用户自带钱包
 或真实资金。当前实现已接入 EIP-3009 direct-relay 基础和确认门控，并已完成经
-自建 Facilitator 的新鲜 testnet 交易；公共第三方 Facilitator 兼容性和完整生产
-恢复仍未完成验收。
+自建 Facilitator 的正式 `arena402-g` 生产游戏；Worker/Connector/Settlement
+恢复和两局之间的整机重启已验收。公共第三方 Facilitator 兼容性、活动局中途
+整机重启和分档容量仍未完成验收。
 
 游客模式是明确例外：平台 signer service 可管理隔离、限额、可过期和可撤销的
 testnet-only 演示密钥。它不承载真实资金，也不能被宣传为非托管主网钱包。
@@ -56,7 +59,7 @@ testnet-only 演示密钥。它不承载真实资金，也不能被宣传为非�
 | 角色 | 职责 | 不负责 |
 |------|------|--------|
 | 玩家 Agent | 根据公开行情和事件决定买、卖或观望；参与有限轮协商 | 修改规则、事件结果或最终结算价 |
-| Arena | 组织游戏、广播事件、记录 Result Sink 数据库接收时间、FCFS 配对、驱动协商、生成排名 | 代替 Agent 定价或托管资金 |
+| Arena | 组织游戏、广播事件、记录 Result Sink 数据库接收时间、按 Game 冻结协议执行 A2A 市场发现或 legacy FCFS、驱动协商、生成排名 | 代替 Agent 定价或托管资金 |
 | Agent Runtime | 执行版本化 `arena.decide` 和 `arena.negotiate` AgentTask；可为 Hosted、Local Connector 或后续 Native A2A Runtime | 直接写入 Arena 业务状态或链上最终性 |
 | Settlement | 校验买方授权、由 Facilitator 提交链上交易、返回交易结果 | 重新定价、决定货物归属或伪造链上确认 |
 
@@ -103,6 +106,10 @@ cash + grain*2 + iron*5 + warhorse*8 + gems*3 = 20 gold
 `pawnhouse-standard-v1` 十张事件牌组按 Game seed 确定性洗牌并冻结完整赛程。
 相同 deck 版本、seed 和回合数必须产生相同赛程。每回合最多让每个 Agent 完成
 一笔交易。
+
+仓库另注册 `pawnhouse-price-v2` 与 `pawnhouse-standard-v2` 作为 D5a
+显式 A/B 候选；它们不会被 `STANDARD_*`、Current Game 或历史 Game 自动选择。
+只有 Operator 明确创建实验 Game 时才能使用，且不能把“已注册”表述为产品切换。
 
 Game 在创建时同时冻结 `roundCount`、`eventDeckId`、`eventMode`、
 `maxParticipants` 和配置版本。Current Game 的 `maxParticipants` 默认 100、下限为 2，
@@ -198,16 +205,15 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 
 ### 4. Pair
 
-> Transition note: 本节仍是已部署 `fcfs.v1` 的当前规则。已批准但尚未切换的
-> `agent_a2a.v1` 将由 Agent 发布 Intent、读取冻结市场目录、主动发送 RFQ，并由
+> Transition note: Current Game 已版本化切换到 `agent_a2a.v1`。该协议由 Agent
+> 发布 Intent、读取冻结市场目录、主动发送 RFQ，并由
 > 对手 Agent 选择是否 engage；Arena 不再替 Agent 创建业务 Pairing。目标协议、
 > 状态机验证边界和真实 Agent 验收顺序见
 > [`agent-driven-a2a-market-implementation-plan.md`](agent-driven-a2a-market-implementation-plan.md)。
-> 本地 opt-in 双 Codex payment-disabled E2E 已形成带独立 proposal/acceptance
-> Result provenance 的 Deal。迁移 `060` 已进一步把 RFQ `openingPrice` 固定为
+> 正式 1+9 八回合 Game 已形成三条带独立 proposal/acceptance Result provenance
+> 的 `arena402-g` settled Deal。迁移 `060` 把 RFQ `openingPrice` 固定为
 > Turn 1、限制每个 RFQ Task 只选一个对手，并持久化最多三次顺序尝试；本地 Fake
-> scripted E2E 已验证卖方直接接受该绑定开价。真实多对手 fallback、
-> mixed-Runtime、支付和 Current Game 切换仍未验收。
+> 与真实 Runtime E2E 已验证直接接受、反价、拒绝和顺序 fallback。
 > 旧 Game 保持创建时冻结的协议版本，不能原地改义。
 
 每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为

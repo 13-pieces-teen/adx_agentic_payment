@@ -14,6 +14,7 @@ from .events import (
     EffectKind,
     EventEffect,
     EventError,
+    MARKET_FEEDBACK_POLICY_VERSION_V1,
     RoyalOrder,
     WorldEvent,
     WorldSnapshot,
@@ -24,6 +25,7 @@ from .events import (
 from .event_deck import (
     EventDeckError,
     EventMode,
+    EXPERIMENTAL_EVENT_DECK_ID_V2,
     STANDARD_EVENT_DECK_ID,
     build_event_schedule,
 )
@@ -60,6 +62,13 @@ from .portfolio import (
     normalize_holdings,
     portfolio_value,
 )
+from .price_catalog import (
+    EXPERIMENTAL_PRICE_CATALOG_ID_V2,
+    PriceCatalog,
+    STANDARD_PRICE_CATALOG_ID,
+    price_catalog_from_snapshot,
+    resolve_price_catalog,
+)
 from .postgres import PawnhouseRepositoryError, PostgresPawnhouseRepository
 from .presets import DEMO_EVENT_IDS, MVP_EVENT_CATALOG, demo_events
 from .ranking import RankingEntry, calculate_rankings, promotion_tier
@@ -93,7 +102,10 @@ __all__ = [
     "INITIAL_PRICES",
     "MVP_EVENT_CATALOG",
     "MAX_OUTBOUND_RFQ",
+    "MARKET_FEEDBACK_POLICY_VERSION_V1",
     "EffectKind",
+    "EXPERIMENTAL_EVENT_DECK_ID_V2",
+    "EXPERIMENTAL_PRICE_CATALOG_ID_V2",
     "EventEffect",
     "EventDeckError",
     "EventMode",
@@ -124,6 +136,7 @@ __all__ = [
     "default_join_portfolio",
     "distribute_balanced_portfolios",
     "PostgresPawnhouseRepository",
+    "PriceCatalog",
     "RankingEntry",
     "RuleDecision",
     "RuleRuntime",
@@ -139,6 +152,7 @@ __all__ = [
     "SettlementIntent",
     "SettlementRecoveryWorker",
     "STANDARD_EVENT_DECK_ID",
+    "STANDARD_PRICE_CATALOG_ID",
     "WorldEvent",
     "WorldSnapshot",
     "WorldState",
@@ -156,6 +170,8 @@ __all__ = [
     "normalize_holdings",
     "portfolio_value",
     "promotion_tier",
+    "price_catalog_from_snapshot",
+    "resolve_price_catalog",
     "schedule_commitment",
     "validate_chain_confirmation",
 ]

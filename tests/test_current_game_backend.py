@@ -253,6 +253,13 @@ class _JoinPreflightConnection(_CreateConnection):
                 "phase": "portfolio_setup",
                 "max_participants": 100,
                 "config_snapshot": {
+                    "priceCatalogId": "pawnhouse-price-v2",
+                    "initialPricesAtomic": {
+                        "grain": "2500000",
+                        "iron": "4500000",
+                        "warhorse": "7000000",
+                        "gems": "4000000",
+                    },
                     "settlement": {
                         "authorizationMode": "single_eip3009",
                         "chainId": 1439,
@@ -466,6 +473,26 @@ def test_successful_join_preflight_explicitly_authorizes_frontend_entry() -> Non
         "wallet": "READY",
         "paymentMandate": "ACTION_REQUIRED",
     }
+    assert value["portfolioRequirements"]["initialPricesAtomic"] == {
+        "grain": "2500000",
+        "iron": "4500000",
+        "warhorse": "7000000",
+        "gems": "4000000",
+    }
+    default_portfolio = value["portfolioRequirements"]["defaultPortfolio"]
+    assert (
+        int(default_portfolio["cashAtomic"])
+        + sum(
+            default_portfolio["holdings"][good] * price
+            for good, price in {
+                "grain": 2_500_000,
+                "iron": 4_500_000,
+                "warhorse": 7_000_000,
+                "gems": 4_000_000,
+            }.items()
+        )
+        == 20_000_000
+    )
     assert any(
         "pg_advisory_xact_lock" in query
         for query in connection.queries
@@ -640,6 +667,16 @@ def test_ensure_current_game_creates_and_atomically_rotates_terminal_pointer() -
     config = json.loads(str(game_insert[6]))
     assert config["portfolioMode"] == "manual"
     assert config["marketProtocol"] == "agent_a2a.v1"
+    assert config["priceCatalogId"] == "pawnhouse-price-v1"
+    assert config["initialPricesAtomic"] == {
+        "grain": "2000000",
+        "iron": "5000000",
+        "warhorse": "8000000",
+        "gems": "3000000",
+    }
+    assert config["marketFeedbackPolicyVersion"] == (
+        "arena.market-feedback.v1"
+    )
     assert game_insert[10] == "agent_a2a.v1"
 
 

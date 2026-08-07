@@ -20,6 +20,11 @@ class HostedArenaAgentContext:
     strategy_catalog_version: str
     strategy_instructions: str = field(repr=False)
     game_memory: HostedGameMemory
+    analysis_tool_calls: set[str] = field(
+        default_factory=set,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if (

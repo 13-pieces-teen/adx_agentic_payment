@@ -72,4 +72,5 @@ def test_round_and_game_transitions_invoke_market_terminalization() -> None:
     )
 
     assert "round_id=round_id" in advance_source
+    assert "_record_agent_market_liquidity_summary" in advance_source
     assert "round_id=None" in finalize_source

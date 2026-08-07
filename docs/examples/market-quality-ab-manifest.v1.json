@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "arena.market-quality-experiment.v1",
+  "experimentId": "example-market-quality-ab",
+  "control": {
+    "armId": "production-baseline",
+    "cases": [
+      {
+        "caseId": "example-seed-1",
+        "eventSeed": "example-seed-1",
+        "participantIds": [
+          "example-buyer",
+          "example-seller"
+        ],
+        "outcomes": [
+          {
+            "participantId": "example-buyer",
+            "archetype": "aggressive",
+            "netWorthAtomic": "20000000"
+          },
+          {
+            "participantId": "example-seller",
+            "archetype": "conservative",
+            "netWorthAtomic": "20000000"
+          }
+        ],
+        "rounds": [
+          {
+            "roundIndex": 1,
+            "intents": [
+              {
+                "participantId": "example-buyer",
+                "side": "buy",
+                "good": "grain",
+                "limitPriceAtomic": "1900000"
+              },
+              {
+                "participantId": "example-seller",
+                "side": "sell",
+                "good": "grain",
+                "limitPriceAtomic": "2000000"
+              }
+            ],
+            "funnel": {
+              "rfqCount": 0,
+              "engagementCount": 0,
+              "dealCount": 0,
+              "chainConfirmedCount": 0,
+              "inventoryCommittedCount": 0,
+              "invalidActionCount": 0,
+              "timeoutCount": 0,
+              "counterOfferCount": 0,
+              "negotiationActionCount": 0,
+              "counterpartyParticipantCount": 0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "treatment": {
+    "armId": "candidate-policy",
+    "cases": [
+      {
+        "caseId": "example-seed-1",
+        "eventSeed": "example-seed-1",
+        "participantIds": [
+          "example-buyer",
+          "example-seller"
+        ],
+        "outcomes": [
+          {
+            "participantId": "example-buyer",
+            "archetype": "aggressive",
+            "netWorthAtomic": "20500000"
+          },
+          {
+            "participantId": "example-seller",
+            "archetype": "conservative",
+            "netWorthAtomic": "19500000"
+          }
+        ],
+        "rounds": [
+          {
+            "roundIndex": 1,
+            "intents": [
+              {
+                "participantId": "example-buyer",
+                "side": "buy",
+                "good": "grain",
+                "limitPriceAtomic": "2100000"
+              },
+              {
+                "participantId": "example-seller",
+                "side": "sell",
+                "good": "grain",
+                "limitPriceAtomic": "2000000"
+              }
+            ],
+            "funnel": {
+              "rfqCount": 1,
+              "engagementCount": 1,
+              "dealCount": 1,
+              "chainConfirmedCount": 1,
+              "inventoryCommittedCount": 1,
+              "invalidActionCount": 0,
+              "timeoutCount": 0,
+              "counterOfferCount": 1,
+              "negotiationActionCount": 2,
+              "counterpartyParticipantCount": 2
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

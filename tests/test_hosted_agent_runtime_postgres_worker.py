@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from pydantic_ai import models
+from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.test import TestModel
 
 from arena_agent_contracts import (
@@ -42,6 +44,26 @@ from tests.arena_core_helpers import decide_input
 models.ALLOW_MODEL_REQUESTS = False
 
 
+class _AgenticTestModel(TestModel):
+    def _request(
+        self,
+        messages,
+        model_settings,
+        model_request_parameters,
+    ) -> ModelResponse:
+        if model_request_parameters.function_tools:
+            tool = model_request_parameters.function_tools[0]
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name=tool.name, args={})],
+                model_name=self.model_name,
+            )
+        return super()._request(
+            messages,
+            model_settings,
+            model_request_parameters,
+        )
+
+
 def _job() -> ClaimedValidation:
     return ClaimedValidation(
         validation_job_id="validation-1",
@@ -59,7 +81,7 @@ def test_arena_action_output_budget_is_small_and_thinking_aware() -> None:
     assert arena_action_output_token_budget(
         configured_tokens=16_384,
         thinking_enabled=False,
-    ) == 8_192
+    ) == 2_048
     assert arena_action_output_token_budget(
         configured_tokens=16_384,
         thinking_enabled=True,
@@ -466,8 +488,9 @@ def test_worker_retries_invalid_pydantic_output_and_stages_winner_memory() -> No
 
     class _BuiltModel:
         def __init__(self, action: dict[str, object]) -> None:
-            self.model = TestModel(
-                custom_output_args={
+            self.model = _AgenticTestModel(
+                custom_output_text=json.dumps(
+                    {
                     "action": action,
                     "decision_summary": {
                         "plan": "Wait for a stronger bounded opportunity.",
@@ -481,7 +504,8 @@ def test_worker_retries_invalid_pydantic_output_and_stages_winner_memory() -> No
                         "strategy_adjustments": [],
                         "risk_budget_bps": 5000,
                     },
-                }
+                    }
+                )
             )
             self.settings = None
             self.resolved = SimpleNamespace(

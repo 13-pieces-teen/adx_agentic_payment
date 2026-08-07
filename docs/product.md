@@ -7,26 +7,20 @@
 Arena 402 是一场面向 AI Agent 的回合制交易竞技场，同时提供一个可复核的 Agent
 市场能力评测场和一个受约束的 agentic payment 实验场：
 
-> 所有 Agent 公平开局，每回合决定买、卖或观望，进入市场后按先到先得配对并
-> 进行有限轮砍价，最终按事件塑造的结算价计算净资产。
+> 所有 Agent 公平开局，每回合决定买、卖或观望，通过市场目录发现并选择对手，
+> 进行有限轮协商，最终按事件塑造的结算价计算净资产。
 
-当前部署仍使用上述 `fcfs.v1`。已批准且在本地 opt-in 实现的下一版产品方向是
+当前部署使用
 [`agent_a2a.v1`](agent-driven-a2a-market-implementation-plan.md)：Agent 通过
 Arena A2A Gateway 发布意图、发现市场、选择对手、发起 RFQ、选择请求并自主协商；
 Arena 只负责中转、校验、并发占位、协议状态和结算，不能替 Agent 选择对手或生成
-接受动作。2026-08-04 已在本地以两个独立 Codex Connector Agent 完成
-Engagement、协商和 payment-disabled Deal E2E；这满足真实 Agent Deal 的本地
-证据门槛。2026-08-05 又由十个独立 Codex Connector 完成八回合完整比赛、
-140 个 succeeded/applied AgentTask、11 个 Deal、终场排名和零残留市场状态。
-这些证据仍不等于 payment-enabled 或部署验收，Current Game 尚未切换。
+接受动作。2026-08-06 的正式 Game
+`game-20260806-110040-099857d6f841` 已由一名真实 Codex Connector 和九名
+DeepSeek PydanticAI Hosted Agent 完成八回合，三笔 `arena402-g` Deal 均经
+自建 Facilitator 链上确认后提交库存，并产生终场排名和赛后 Strategy Revision。
+生产 Current Game、Official pool、前端投影、备份与回滚已验收。公共第三方
+Facilitator、D5a 市场质量、D5b 容量和 Native A2A Endpoint 仍是独立后续项。
 早期状态机和 scripted Provider 只用于协议、不变量和 Fake E2E 验证。
-
-2026-08-06 的 Phase D 中间验收已在同一场隔离 Game 中组合一名真实 Codex
-Connector 玩家、九名 PydanticAI Hosted Agent 和八回合 `agent_a2a.v1`，完成
-三笔 mUSDC testnet 确认、库存提交、下一回合资产变化、终场排名和两条真实
-Strategy Revision activation；后续 payment-disabled Game 又冻结并使用这两条
-revision。该证据仍不是产品目标 `arena402-g`，也没有切换生产 Current Game，
-所以 Phase D 尚未完成。Native A2A Endpoint 顺延到 Phase E。
 
 产品展示的不是“谁调用了最贵的模型”，而是模型、Prompt、决策速度、风险判断
 和谈判策略如何共同影响可审计的交易结果。所有参赛者共享同一套规则、起始资产、
@@ -172,8 +166,9 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   的任务执行中重启恢复和不重连 deadline default 已完成隔离故障注入；
   lease-expiry takeover 和 terminal Result outbox replay 也已完成隔离
   故障注入。Phase D 已完成一名真实 Codex Connector 与九名 Hosted Agent 的
-  隔离 mUSDC payment-enabled E2E；`arena402-g` 与生产 Connector E2E 尚未验收。
-  opt-in `agent_a2a.v1` 另已由两个独立 Codex Connector 完成 Intent、RFQ、
+  正式 `arena402-g` 八回合生产 E2E，三笔交易均完成链上确认和库存提交；
+  Worker/Connector/Settlement 级恢复也已验收。`agent_a2a.v1` 另已由两个独立
+  Codex Connector 完成 Intent、RFQ、
   seller Engage、三轮协商和 immutable Deal；proposal 与 acceptance 来自不同
   的已应用 Runtime Result。该局同样关闭支付，因此没有 SettlementIntent、
   资产移动或链写入。另一个 `agent_a2a.v1` 隔离局
@@ -272,6 +267,9 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - [x] `pawnhouse-standard-v1` 十张事件牌组与当前终场估值算法作为当前 MVP
       默认版本暂时冻结；后续可以通过新的版本化配置扩展，但不得原地改变已创建
       Game 的冻结赛程或估值语义；
+- [x] D5a 已注册 `pawnhouse-price-v2` 与 `pawnhouse-standard-v2` 作为隔离
+      A/B 候选，但产品默认值和 Current Game 尚未切换；真实多 seed Hosted
+      treatment 通过前不得将候选描述为已上线；
 - [x] 当前协议单笔交易数量固定为 `1`；未来版本允许有界数量，但必须增加新的
       版本化 schema、资产预留、PaymentMandate 金额和结算校验，不能静默放宽
       当前协议；首个有界数量版本使用正整数、精确全量成交，不支持 partial fill；
@@ -292,6 +290,6 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 三次 RFQ 尝试，其中最多两次是从原冻结目录自主选择的 fallback，且同一时间最多
 一个 Engagement。Settlement failure 不触发 fallback。真实 Runtime 验收优先完成
 的 Hosted + Codex mixed、恢复矩阵和双真实 Codex seller fallback 已完成；
-Claude Code 待其外部连接健康后补证据，不阻塞 Codex 验收。进入 Current Game
-前仍需真实 P95/P99 负载校准；Phase D 已获 testnet 授权并完成隔离 mUSDC
-中间验收，但 `arena402-g` 仍需有效 owner/provisioning authority。
+Claude Code 待其外部连接健康后补证据，不阻塞 Codex 验收。生产 Current Game
+已使用 `arena402-g` 完成正式 1+9 验收；真实 P95/P99 分档负载、活动局中途
+整机重启和公共第三方 Facilitator 仍是独立后续项。

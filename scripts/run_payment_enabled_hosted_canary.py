@@ -29,7 +29,6 @@ from arena_game import (
 )
 from arena_game.hosted_coordinator import PawnhouseAgentRuntimeCoordinator
 from arena_game.event_deck import (
-    STANDARD_EVENT_DECK_ID,
     build_event_schedule,
 )
 from arena_game.orchestrator import PawnhouseGameOrchestrator
@@ -39,7 +38,12 @@ from hosted_agent_control_plane import (
     CredentialIngressService,
     HostedAgentCreateRequest,
     HostedAgentService,
+    HostedAgentUpdateRequest,
     PostgresHostedAgentControlRepository,
+)
+from hosted_agent_runtime.official_market_strategy import (
+    EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2,
+    official_market_strategy_v2,
 )
 from hosted_agent_runtime.production_providers import (
     build_production_capability_registry,
@@ -55,8 +59,10 @@ from scripts.payment_canary_config import (
     canary_summary_is_accepted,
     phase_d_portfolio_for_seat,
     resolve_canary_asset_config,
+    resolve_canary_event_deck_id,
     resolve_canary_event_seed,
     resolve_canary_game_config,
+    resolve_canary_official_strategy_profile,
     resolve_canary_player_config,
     resolve_canary_settlement_mode,
 )
@@ -173,6 +179,95 @@ async def _create_player_agent(
     finally:
         key = SecretStr("")
         await close_secret_port(writer)
+        await repository.close()
+
+
+async def _prepare_official_strategy_treatment(
+    *,
+    control_database_url: str,
+    officials: list[asyncpg.Record],
+    profile: str,
+) -> None:
+    if profile == "existing":
+        return
+    if profile not in {"baseline_v4", "liquidity_v2"}:
+        raise RuntimeError("unsupported official strategy treatment")
+
+    repository = PostgresHostedAgentControlRepository(control_database_url)
+    try:
+        await repository.initialize()
+        service = HostedAgentService(
+            repository,
+            capabilities=build_production_capability_registry(
+                include_official=True
+            ),
+            hosted_agents_enabled=True,
+        )
+        pending: dict[str, str] = {}
+        for row in officials:
+            owner_user_id = str(row["owner_user_id"])
+            agent_id = str(row["agent_id"])
+            current = await service.get_hosted_agent(
+                owner_user_id=owner_user_id,
+                agent_id=agent_id,
+            )
+            if profile == "liquidity_v2":
+                strategy_instructions = official_market_strategy_v2(
+                    int(row["priority"])
+                ).instructions
+                idempotency_prefix = "market-quality-liquidity-v2"
+            else:
+                from scripts.bootstrap_official_agent_pool import (
+                    _strategy as baseline_strategy_v4,
+                )
+
+                strategy_instructions = baseline_strategy_v4(
+                    int(row["priority"])
+                )
+                idempotency_prefix = (
+                    "market-quality-baseline-v4-restore"
+                )
+            await service.update_hosted_agent(
+                owner_user_id=owner_user_id,
+                agent_id=agent_id,
+                request=HostedAgentUpdateRequest(
+                    provider_id=current.provider_id,
+                    model_id=current.model_id,
+                    thinking_enabled=current.thinking_enabled,
+                    strategy_instructions=strategy_instructions,
+                    idempotency_key=(
+                        f"{idempotency_prefix}-{agent_id}"
+                    ),
+                ),
+            )
+            pending[agent_id] = owner_user_id
+
+        deadline = time.monotonic() + 300
+        while pending and time.monotonic() < deadline:
+            for agent_id, owner_user_id in tuple(pending.items()):
+                current = await service.get_hosted_agent(
+                    owner_user_id=owner_user_id,
+                    agent_id=agent_id,
+                )
+                if (
+                    current.route_status.value == "ready"
+                    and current.provisioning_status.value == "ready"
+                ):
+                    pending.pop(agent_id)
+                elif current.provisioning_status.value in {
+                    "degraded",
+                    "disabled",
+                }:
+                    raise RuntimeError(
+                        "official strategy treatment validation failed"
+                    )
+            if pending:
+                await asyncio.sleep(0.5)
+        if pending:
+            raise TimeoutError(
+                "official strategy treatment validation timed out"
+            )
+    finally:
         await repository.close()
 
 
@@ -444,10 +539,16 @@ async def _summary(
     player_agent_id: str,
     settlement_mode: str,
     asset: CanaryAssetConfig,
+    official_strategy_profile: str,
 ) -> dict[str, object]:
     game = await admin.fetchrow(
         """
-        SELECT phase, round_count, current_round, market_protocol
+        SELECT
+            phase,
+            round_count,
+            current_round,
+            market_protocol,
+            config_snapshot ->> 'eventDeckId' AS event_deck_id
         FROM arena402.games
         WHERE game_id = $1
         """,
@@ -568,6 +669,17 @@ async def _summary(
         "roundCount": int(game["round_count"]) if game else None,
         "currentRound": int(game["current_round"]) if game else None,
         "marketProtocol": str(game["market_protocol"]) if game else None,
+        "eventDeckId": str(game["event_deck_id"]) if game else None,
+        "officialStrategyProfile": official_strategy_profile,
+        "officialStrategyRelease": (
+            EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2
+            if official_strategy_profile == "liquidity_v2"
+            else (
+                "pydantic-agent-v4"
+                if official_strategy_profile == "baseline_v4"
+                else None
+            )
+        ),
         "participantCount": len(rankings),
         "runtimeCounts": runtime_counts,
         "agentTaskCount": int(activity_counts["agent_tasks"]),
@@ -602,6 +714,10 @@ async def main() -> int:
     game_id = _required("CANARY_GAME_ID")
     timeout_seconds = int(os.getenv("CANARY_TIMEOUT_SECONDS", "1800"))
     market_protocol, round_count = resolve_canary_game_config()
+    event_deck_id = resolve_canary_event_deck_id()
+    official_strategy_profile = (
+        resolve_canary_official_strategy_profile()
+    )
     player_config = resolve_canary_player_config()
     settlement_mode = resolve_canary_settlement_mode()
     asset = resolve_canary_asset_config()
@@ -666,7 +782,7 @@ async def main() -> int:
             )
         officials = await admin.fetch(
             """
-            SELECT agent.owner_user_id, pool.agent_id
+            SELECT agent.owner_user_id, pool.agent_id, pool.priority
             FROM arena402.official_agent_pool AS pool
             JOIN public.arena_agents AS agent
               ON agent.agent_id = pool.agent_id
@@ -677,6 +793,11 @@ async def main() -> int:
         )
         if len(officials) != 9:
             raise RuntimeError("nine ready official Agents are required")
+        await _prepare_official_strategy_treatment(
+            control_database_url=control_url,
+            officials=list(officials),
+            profile=official_strategy_profile,
+        )
 
         await pawnhouse.initialize()
         await coordinator.initialize()
@@ -689,7 +810,7 @@ async def main() -> int:
             events = build_event_schedule(
                     round_count=round_count,
                     seed=event_seed,
-                    deck_id=STANDARD_EVENT_DECK_ID,
+                    deck_id=event_deck_id,
                     mode="seeded_shuffle",
                 )
             settlement_config = (
@@ -714,7 +835,7 @@ async def main() -> int:
                     game_id=game_id,
                     events=events,
                     event_seed=event_seed,
-                    event_deck_id=STANDARD_EVENT_DECK_ID,
+                    event_deck_id=event_deck_id,
                     event_mode="seeded_shuffle",
                     action_timeout_ms=180_000,
                     max_negotiation_turns=3,
@@ -733,6 +854,7 @@ async def main() -> int:
                     game_id=game_id,
                     events=events,
                     event_seed=event_seed,
+                    event_deck_id=event_deck_id,
                     event_mode="seeded_shuffle",
                     action_timeout_ms=180_000,
                     max_negotiation_turns=3,
@@ -866,6 +988,7 @@ async def main() -> int:
             player_agent_id=player_agent_id,
             settlement_mode=settlement_mode,
             asset=asset,
+            official_strategy_profile=official_strategy_profile,
         )
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         accepted = canary_summary_is_accepted(

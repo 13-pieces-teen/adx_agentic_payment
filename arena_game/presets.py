@@ -276,6 +276,238 @@ MVP_EVENT_CATALOG: Final[dict[str, WorldEvent]] = {
 }
 
 
+EXPERIMENTAL_EVENT_CATALOG_V2: Final[dict[str, WorldEvent]] = {
+    "grain-shortage-rumor-v2": WorldEvent(
+        event_id="grain-shortage-rumor-v2",
+        display_name="粮荒传闻",
+        narrative="粮仓盘点传出缺口，但终场基本面只受到温和影响。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="market",
+                basis_points=900,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="final",
+                basis_points=200,
+            ),
+        ),
+    ),
+    "harvest-relief-v2": WorldEvent(
+        event_id="harvest-relief-v2",
+        display_name="丰收缓解",
+        narrative="早熟作物到港，粮价短期回落，长期供给仅小幅改善。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="market",
+                basis_points=-800,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="final",
+                basis_points=-200,
+            ),
+        ),
+    ),
+    "iron-order-rumor-v2": WorldEvent(
+        event_id="iron-order-rumor-v2",
+        display_name="军械订单传闻",
+        narrative="军械订单推高精铁现货，终场需求预期只温和上修。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="iron",
+                target="market",
+                basis_points=900,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="iron",
+                target="final",
+                basis_points=200,
+            ),
+        ),
+    ),
+    "mine-output-revision-v2": WorldEvent(
+        event_id="mine-output-revision-v2",
+        display_name="矿产预期上调",
+        narrative="新矿试产压低精铁现货，长期供给预期仅小幅上升。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="iron",
+                target="market",
+                basis_points=-800,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="iron",
+                target="final",
+                basis_points=-200,
+            ),
+        ),
+    ),
+    "cavalry-review-v2": WorldEvent(
+        event_id="cavalry-review-v2",
+        display_name="骑兵检阅",
+        narrative="临时检阅抬高战马现货需求，终场估值只小幅上升。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="market",
+                basis_points=900,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="final",
+                basis_points=200,
+            ),
+        ),
+    ),
+    "stable-recovery-v2": WorldEvent(
+        event_id="stable-recovery-v2",
+        display_name="马厩复产",
+        narrative="马厩恢复供应使战马现货回落，长期影响保持温和。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="market",
+                basis_points=-800,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="final",
+                basis_points=-200,
+            ),
+        ),
+    ),
+    "jewel-auction-v2": WorldEvent(
+        event_id="jewel-auction-v2",
+        display_name="珠宝拍卖",
+        narrative="王城拍卖抬高宝石现货热度，终场收藏价值小幅上修。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="market",
+                basis_points=900,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="final",
+                basis_points=200,
+            ),
+        ),
+    ),
+    "gem-shipment-v2": WorldEvent(
+        event_id="gem-shipment-v2",
+        display_name="宝石到港",
+        narrative="新到货压低宝石现货，终场稀缺性仅小幅下降。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="market",
+                basis_points=-800,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="final",
+                basis_points=-200,
+            ),
+        ),
+    ),
+    "military-procurement-shift-v2": WorldEvent(
+        event_id="military-procurement-shift-v2",
+        display_name="军需调整",
+        narrative="军需预算转向装备与骑兵，粮草现货需求暂时放缓。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="iron",
+                target="market",
+                basis_points=600,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="market",
+                basis_points=600,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="market",
+                basis_points=-400,
+            ),
+        ),
+    ),
+    "court-festival-budget-v2": WorldEvent(
+        event_id="court-festival-budget-v2",
+        display_name="宫廷庆典预算",
+        narrative="宫廷预算转向宴席与珠宝，军需现货短期降温。",
+        reveal_round=1,
+        duration_rounds=1,
+        effects=(
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="gems",
+                target="market",
+                basis_points=600,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="grain",
+                target="market",
+                basis_points=400,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="iron",
+                target="market",
+                basis_points=-400,
+            ),
+            EventEffect(
+                kind=EffectKind.PRICE_MULTIPLY_BPS,
+                good="warhorse",
+                target="market",
+                basis_points=-400,
+            ),
+        ),
+    ),
+}
+
+
 DEMO_EVENT_IDS: Final[tuple[str, ...]] = (
     "palace-requisition",
     "noble-gem-fever",
@@ -291,6 +523,7 @@ def demo_events() -> tuple[WorldEvent, ...]:
 
 __all__ = [
     "DEMO_EVENT_IDS",
+    "EXPERIMENTAL_EVENT_CATALOG_V2",
     "MVP_EVENT_CATALOG",
     "demo_events",
 ]

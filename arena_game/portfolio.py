@@ -21,6 +21,7 @@ def distribute_balanced_portfolios(
     agent_ids: Sequence[str],
     *,
     seed: str,
+    prices: Mapping[GoodId, int] = INITIAL_PRICES,
 ) -> dict[str, "Portfolio"]:
     """Give every participant equal net worth and a deterministic inventory seed.
 
@@ -38,13 +39,19 @@ def distribute_balanced_portfolios(
         holdings = {good_id: 0 for good_id in GOOD_IDS}
         holdings[good] = 1
         portfolios[agent_id] = Portfolio.initial(
-            cash_atomic=INITIAL_NET_WORTH_ATOMIC - INITIAL_PRICES[good],
+            cash_atomic=INITIAL_NET_WORTH_ATOMIC - prices[good],
             holdings=holdings,
+            prices=prices,
         )
     return portfolios
 
 
-def default_join_portfolio(*, game_id: str, agent_id: str) -> "Portfolio":
+def default_join_portfolio(
+    *,
+    game_id: str,
+    agent_id: str,
+    prices: Mapping[GoodId, int] = INITIAL_PRICES,
+) -> "Portfolio":
     """Build the deterministic equal-value fallback for an omitted portfolio."""
 
     if not game_id:
@@ -54,6 +61,7 @@ def default_join_portfolio(*, game_id: str, agent_id: str) -> "Portfolio":
     return distribute_balanced_portfolios(
         (agent_id,),
         seed=f"current-game-default:{game_id}",
+        prices=prices,
     )[agent_id]
 
 
@@ -98,9 +106,10 @@ class Portfolio:
         *,
         cash_atomic: int,
         holdings: Mapping[str, int],
+        prices: Mapping[GoodId, int] = INITIAL_PRICES,
     ) -> "Portfolio":
         normalized = normalize_holdings(holdings)
-        value = portfolio_value(cash_atomic, normalized, INITIAL_PRICES)
+        value = portfolio_value(cash_atomic, normalized, prices)
         if value != INITIAL_NET_WORTH_ATOMIC:
             raise PortfolioError(
                 "initial cash plus holdings must equal exactly 20 gold"

@@ -190,13 +190,65 @@
   和 SSE 均通过。外部 Vercel 前端 `a0b33d665de952ec569e38e8e2f4071d3fde6a88`
   已在同一权威 Game 上验证 Intent 目录、RFQ Engagement、谈判文本、支付四阶段
   和终场排名；历史 FCFS Game 仍由冻结协议回放。
-- [ ] D5：统一功能正确性通过后，再完成 12/25/50/100 Agent 分档、每 Runtime/
-  Task 至少 100 条真实终态样本、4 Facilitator shard 和 timeout/公平性冻结。
+- [ ] D5a 市场质量：保持 `agent_a2a.v1` 的 Intent → RFQ → Engagement →
+  Negotiation → Deal 合同不变，先为每回合持久化不暴露私有限价的流动性摘要，
+  区分 `pass`、无同商品反向 Intent、限价不兼容、未发送 RFQ、RFQ 未 Engage、
+  协商未接受和结算失败。随后以版本化 Strategy Catalog 增加稳定私有估值、
+  库存影子价格、现金约束、剩余回合偏好和拥挤度反馈；未成交结果只进入安全
+  Game Memory 和探索门控，不被伪装成经济收益学习。
+  首个纵向切片已实现 `arena.market-liquidity.v1`：
+  A2A Round close 幂等发布 `market.liquidity_summarized`，包含 participant、
+  Intent、pass、按商品买卖数量、同商品反向理论容量、限价兼容理论容量和最小
+  未匹配数；payload 不包含 Agent identity 或私有限价。
+- [ ] D5a 价格与事件：先用当前 `2/5/8/3` 起始价建立对照基线，再增加冻结到
+  Game 的 `price_catalog_id`、基础价格快照和 `pawnhouse-standard-v2` 事件牌组。
+  新牌组降低常规事件相对私有估值分布过大的单边冲击，增加临时、传闻、基本面、
+  反转和跨商品事件；订单流只以有界、确定性的下一轮参考价反馈吸引对手，不由
+  Arena 强制成交。不得原地修改 `pawnhouse-standard-v1` 或历史 Game。
+  兼容骨架已完成：新 Game 冻结 `pawnhouse-price-v1`、四个原子基础价格和
+  `arena.market-feedback.v1`；`WorldState` 与 `PRICE_RESET_TO_BASE` 从该 Game
+  快照重放，Join preflight、默认组合和 `balanced_auto` 也按相同价格保持等值
+  20 金；缺少新字段的旧 Game 回退到原 v1。2026-08-07 已注册仅供显式实验
+  选择的 `pawnhouse-price-v2`（`2.5/4/6/3`）和
+  `pawnhouse-standard-v2`（十张、四商品双向、单次不超过 10% 的温和冲击）；
+  `STANDARD_*`、Current Game 和生产配置均未切换。
+- [ ] D5a A/B：在相同人数、回合数、初始净值和 event seed 控制下比较当前基线
+  与新 Strategy/Price/Event 组合，至少报告非 pass Intent、同商品反向容量、
+  限价兼容量、RFQ/Engagement/Deal/Settlement 漏斗、方向熵、反价率、对手覆盖、
+  archetype 收益和事件/商品集中度；不能只以成交数作为成功标准。离线
+  `arena.market-quality-experiment.v1` 成对评估器与
+  `scripts/run_market_quality_ab.py` 已完成，能 fail closed 校验实验设计并输出
+  匿名聚合报告；`scripts/export_market_quality_ab.py` 也已能从两个明确指定的
+  已完成 A2A Game 在只读事务中导出 manifest。真实 baseline/candidate 多 seed
+  对照局及其样本仍未完成。首个同 seed Hosted A/A 已完成：严格有效基线为
+  58 Intent、22 pass、44 buy/14 sell、6 RFQ、3 Engagement、3 Deal，
+  8 回合只有 3 回合具备可交叠容量，且全部来自 grain；另两局分别观察到
+  11 个 deadline default 和 1 个 permanent-request default，因此 Provider
+  timeout 必须与策略效果分开报告，不能用 default 局选择 V2。
+  首个真实 `liquidity_v2 + pawnhouse-standard-v2` treatment 也已完成：
+  Intent `58→66`、pass `22→14`、可交叠容量 `3→9`、可成交回合
+  `3/8→6/8`、RFQ `6→17`、Deal `3→7`，并首次让 gems 形成双边市场；
+  iron/warhorse 仍无卖方。该局的 12 个终态经复核均为 default，其中主要是
+  `invalid_structured_output`，真实 deadline timeout 为 0；旧导出器把所有
+  `defaulted` 错算为 timeout，现已拆分为 default、structured-output failure
+  和真实 timeout 三个指标。
+  PydanticAI/DeepSeek 输出链现采用“强制一次只读分析工具 → JSON Object 终态”，
+  Official LiteLLM 固定透传 non-thinking，单请求 action 输出上限为 2048，
+  Agent run 上限为 7 requests / 8 tool calls / 4 output retries。最终同 seed
+  `market-treatment-v2-h-20260807` 严格通过：115/115 AgentTask completed、
+  0 default、0 timeout、64 Intent、15 RFQ、8 Engagement/Deal，task wall
+  P50/P95/P99 为 `9.1s/21.4s/28.1s`，Harness 退出码 0。前一复验局为
+  126 completed、1 structured-output default、0 timeout、11 Deal，说明当前
+  已达到受控线上评测门槛，但仍需多 seed 统计 default、成交随机性和调用成本，
+  尚不能关闭 D5a。生产切换应保留回滚点并单独验收。
+- [ ] D5b 容量：市场质量的功能正确性通过后，再完成 12/25/50/100 Agent 分档、
+  每 Runtime/Task 至少 100 条真实终态样本、4 Facilitator shard 和
+  timeout/公平性冻结。
 - [x] Phase D 的统一功能链已由同一场权威 Game
   `game-20260806-110040-099857d6f841` 完成，不再由 FCFS Hosted 支付 canary、
-  payment-disabled Codex A2A 或历史交易拼接声明。D5 的 12/25/50/100 Agent
-  容量、正式 timeout/公平性冻结，以及公共第三方 Facilitator 仍是独立未完成
-  验收，不属于本次 1+9 功能链完成声明。
+  payment-disabled Codex A2A 或历史交易拼接声明。D5a 的市场质量、策略/价格/
+  事件 A/B，D5b 的 12/25/50/100 Agent 容量、正式 timeout/公平性冻结，以及
+  公共第三方 Facilitator仍是独立未完成验收，不属于本次 1+9 功能链完成声明。
 
 ## Product narrative baseline
 
@@ -243,9 +295,11 @@ Arena 402 的对外叙事固定为三层：
 - [x] Milestone 5 foundation: separate Hosted Worker, Credential Controller,
   Arena Coordinator/Deadline Finalizer/settlement recovery process,
   least-privilege database logins, fail-closed profiles, and operator runbook.
-- [ ] Milestone 5 live acceptance: single-host AES-GCM credential vault, real
-  Provider credential, server restart/offline continuity, and permission-denial
-  evidence. Tencent CAM/SSM remains an optional higher-security acceptance.
+- [x] Milestone 5 live acceptance: single-host AES-GCM credential vault, real
+  DeepSeek Provider credential, permission-denial evidence and between-Game
+  server restart/offline continuity have been accepted. Active-Game full-host
+  restart remains a separate recovery test; Tencent CAM/SSM remains an optional
+  higher-security acceptance.
 - [x] Milestone 6: durable backend-only N-round orchestration, one event per
   round, automatic Hosted/rule execution, four-good FCFS pools, pairing-group
   concurrency, settlement-gated round close, per-round portfolio snapshots,
@@ -482,8 +536,8 @@ create game
       不返回 User、Runtime 配置或结算账户。
 - [x] Arena Worker 已增加幂等 Current Game 生命周期循环：首次启动和上一局终态后，
       在事务级 advisory lock 内创建产品规格的新 Game 并原子切换单例指针；外部前端
-      本地代码已接入 Current Game 三态、3 秒轮询、404 准备态和 RUNNING 自动观战，
-      但尚未部署到 Vercel 或完成公网 E2E。
+      已接入 Current Game 三态、3 秒轮询、404 准备态和 RUNNING 自动观战，并在
+      Phase D 的同一权威 Game 上完成 Vercel 公网投影验收。
 - [ ] 单一当前游戏的 Join v2 preflight、动态同局 Mandate payee、显式 Ready
       投影、Withdraw、阈值原子自动启动、交易列表和结果接口
       仍按 `prd-current-game-backend.md` 顺序实施。旧 Participant 在这些校验落库前
@@ -491,8 +545,8 @@ create game
 - [x] Current Game Join 不再假设 Hosted Runtime：preflight 同时校验 ready 的
       Hosted 与 owner-scoped Connector route，统一 Join 按冻结的 Runtime Kind
       分流；Connector Participant 复用同一 PaymentMandate、Join Authorization、
-      settlement account、game-coin provision 和 Ready 门控。真实 Connector
-      自动 testnet 支付仍需单独的人类批准验收。
+      settlement account、game-coin provision 和 Ready 门控。Phase D 已经人工
+      授权并完成真实 Connector 的 `arena402-g` 支付与库存提交验收。
 - [x] Current Game Join v2 已支持玩家提交 `cashAtomic` 与四种货物数量；
       Arena 按冻结初始价校验总值严格等于 20 金并在 Join 时锁定。Current Game
       使用 `manual` portfolio mode，开赛不再用 `balanced_auto` 覆盖玩家组合；
@@ -503,8 +557,10 @@ create game
       时 route 保持 `provisioning`。
 - [x] 通用 Join API 在同一事务内写入 Runtime/config 冻结记录与
       `arena402.game_participants`、20 gold 初始组合和公开 joined event。
-- [ ] 公网单机加密 vault、真实 Provider Key 与服务器离线连续性尚未实机验收；
-      腾讯 CAM/SSM 三身份保留为可选高安全验收。
+- [x] 公网单机加密 vault、真实 Provider Key 与服务器离线连续性已完成实机验收；
+      Phase D 在两局之间执行整机重启并恢复 Current Game、Hosted Worker 和
+      Connector。该证据不冒充活动局中途整机重启；腾讯 CAM/SSM 三身份保留为
+      可选高安全验收。
 - [x] Connector 已严格解析 `arena.decide` / `arena.negotiate` typed Task，并把
       deadline、binding epoch 和固定业务 prompt 传给本地 CC/Codex child。
 - [x] Connector 已返回与 dispatch ACK 分离的唯一 typed AgentTaskResult；结果先写
@@ -745,7 +801,8 @@ create game
 ### Phase 8：前端、部署、E2E 与校准（M3）
 
 - [x] 原 Compose 过渡壳的页面能力已迁交外部前端，本仓库已移除该壳。
-- [ ] 外部前端完成对应页面、Vercel 部署及 API/CORS 端到端切换。
+- [x] 外部前端已完成对应页面、Vercel 部署及 API/CORS 端到端切换；Phase D
+      正式 Game 已验证 Intent 目录、RFQ Engagement、谈判文本、支付阶段和排名。
 - [ ] 增加 owner-only 私有投影与 Realtime 推送。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
       及独立权限。
@@ -757,9 +814,9 @@ create game
       port 写入版本化平台专用 ref，不复用带短 TTL 的未绑定玩家 Credential；
       磁盘 manifest 只含 opaque secret ref 和模型别名。LiteLLM 不开放宿主端口，
       Proxy retry/fallback 均关闭，Arena 保留唯一的 AgentTask retry 语义。
-- [ ] 现有生产 Official pool 尚未静默迁移到 `official-deepseek`；应在无活跃
-      Game 的维护窗口验证新池 ready 后再切换，不能把代码接入描述成已完成
-      production cutover。
+- [x] 生产 Official pool 已在无活跃 Game 的维护窗口切换到
+      `official-deepseek`；Phase D 正式 Game 的九个 Hosted 席位均冻结并执行
+      `deepseek/deepseek-v4-flash`，旧 Game 的 Runtime/config 快照未被改义。
 - [x] 增加独立数据库角色、无公网端口的 Settlement Worker；生产配置保持单个
       PostgreSQL、单个 API，Hosted Worker 以 4 副本 × 25 task slot 起步，
       Settlement Worker 以 4 个执行 slot 驱动 4 个独立 EOA Facilitator shard，

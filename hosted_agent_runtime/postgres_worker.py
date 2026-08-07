@@ -44,7 +44,7 @@ from .strategy import StrategyArchetype
 
 
 _LOGGER = logging.getLogger(__name__)
-_ARENA_VISIBLE_OUTPUT_TOKENS = 8_192
+_ARENA_VISIBLE_OUTPUT_TOKENS = 2_048
 _ARENA_THINKING_OUTPUT_TOKENS = 16_384
 
 

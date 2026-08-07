@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic_ai import models
 from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage
 
@@ -27,11 +29,36 @@ pytestmark = pytest.mark.anyio
 models.ALLOW_MODEL_REQUESTS = False
 
 
+class _AgenticTestModel(TestModel):
+    def _request(
+        self,
+        messages,
+        model_settings,
+        model_request_parameters,
+    ) -> ModelResponse:
+        if model_request_parameters.function_tools:
+            tool = model_request_parameters.function_tools[0]
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name=tool.name,
+                        args={},
+                    )
+                ],
+                model_name=self.model_name,
+            )
+        return super()._request(
+            messages,
+            model_settings,
+            model_request_parameters,
+        )
+
+
 def test_runtime_default_budget_covers_multi_request_agent_run() -> None:
     limits = HostedAgentRuntimeLimits()
 
-    assert limits.request_limit == 4
-    assert limits.tool_calls_limit == 6
+    assert limits.request_limit == 7
+    assert limits.tool_calls_limit == 8
     assert limits.output_tokens_limit == 65_536
 
 
@@ -96,9 +123,12 @@ def _output(action: dict[str, object]) -> dict[str, object]:
 
 async def test_pydantic_runtime_uses_tools_and_returns_typed_action() -> None:
     task = _task()
+    context = _context(task)
     runtime = HostedArenaAgentRuntime(
-        model=TestModel(custom_output_args=_output({"action": "pass"})),
-        context=_context(task),
+        model=_AgenticTestModel(
+            custom_output_text=json.dumps(_output({"action": "pass"}))
+        ),
+        context=context,
         actual_model="test",
     )
 
@@ -111,18 +141,21 @@ async def test_pydantic_runtime_uses_tools_and_returns_typed_action() -> None:
     assert execution.request_count >= 2
     assert execution.tool_call_count >= 1
     assert execution.usage.complete is True
+    assert context.analysis_tool_calls
 
 
 async def test_pydantic_runtime_rejects_task_incompatible_candidate() -> None:
     task = _task()
     runtime = HostedArenaAgentRuntime(
-        model=TestModel(
-            custom_output_args=_output(
+        model=_AgenticTestModel(
+            custom_output_text=json.dumps(
+                _output(
                 {
                     "action": "buy",
                     "good": "iron",
                     "limitPrice": "1.000000",
                 }
+                )
             )
         ),
         context=_context(task),

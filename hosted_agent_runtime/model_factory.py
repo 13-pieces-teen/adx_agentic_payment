@@ -36,14 +36,21 @@ class _DeepSeekOpenAIChatModel(OpenAIChatModel):
         list[ChatCompletionToolParam],
         ChatCompletionToolChoiceOptionParam | None,
     ]:
-        tools, _ = super()._get_tool_choice(
+        tools, tool_choice = super()._get_tool_choice(
             model_settings,
             model_request_parameters,
         )
-        # DeepSeek V4 thinking mode rejects the tool_choice parameter,
-        # including "auto". Filtering performed by the parent still preserves
-        # PydanticAI's output-retry narrowing when only one tool is legal.
-        return tools, None
+        extra_body = model_settings.get("extra_body")
+        thinking_type = None
+        if isinstance(extra_body, dict):
+            thinking = extra_body.get("thinking")
+            if isinstance(thinking, dict):
+                thinking_type = thinking.get("type")
+        if tools and thinking_type == "disabled":
+            return tools, "required"
+        if tools and thinking_type == "enabled":
+            return tools, None
+        return tools, tool_choice
 
     def _map_model_response(
         self,
@@ -199,6 +206,8 @@ class PydanticModelFactory:
         """Describe DeepSeek V4's thinking/tool-call wire compatibility."""
 
         return OpenAIModelProfile(
+            default_structured_output_mode="prompted",
+            supports_json_object_output=True,
             supports_thinking=True,
             openai_chat_thinking_field="reasoning_content",
             openai_chat_send_back_thinking_parts="field",
@@ -206,7 +215,7 @@ class PydanticModelFactory:
             # PydanticAI otherwise defaults this setting to OpenAI's
             # `max_completion_tokens`, which DeepSeek/LiteLLM may ignore.
             openai_chat_supports_max_completion_tokens=False,
-            openai_supports_tool_choice_required=False,
+            openai_supports_tool_choice_required=True,
             openai_system_prompt_role="system",
         )
 

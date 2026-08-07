@@ -321,6 +321,12 @@ def test_build_litellm_config_load_balances_same_alias_without_retries() -> None
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-flash",
     ]
+    assert [
+        model["litellm_params"]["extra_body"] for model in model_list
+    ] == [
+        {"thinking": {"type": "disabled"}},
+        {"thinking": {"type": "disabled"}},
+    ]
     assert config["router_settings"] == {
         "routing_strategy": "simple-shuffle",
         "num_retries": 0,
