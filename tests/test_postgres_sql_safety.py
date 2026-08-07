@@ -51,6 +51,17 @@ def test_game_start_and_final_ranking_exclude_pending_participants() -> None:
     assert "AND readiness = 'ready'" in finalize_source
 
 
+def test_initial_round_start_is_written_to_the_public_event_ledger() -> None:
+    start_source = inspect.getsource(
+        PostgresPawnhouseRepository._start_game_locked
+    )
+
+    event_index = start_source.index('event_type="round.started"')
+    world_index = start_source.index("_persist_world_snapshot")
+    assert event_index < world_index
+    assert 'source_key=f"{round_id}:started"' in start_source
+
+
 def test_no_payment_participants_become_ready_without_a_mandate() -> None:
     sources = (
         inspect.getsource(PostgresPawnhouseRepository.add_hosted_participant),

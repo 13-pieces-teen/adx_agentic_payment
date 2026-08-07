@@ -204,6 +204,12 @@
   `roundCount / roundsRemaining`、自己的历史 applied action、仅
   `inventory_committed` 的历史成交以及从 Pairing 终态幂等推导的真实
   `failedNegotiations`；Hosted/Connector retry 继续复用同一 input hash。
+  生产八回合观察进一步修复了两个系统恢复缺口：首回合启动现在与后续回合一样
+  先写入幂等 `round.started`；生产部署在迁移前停止 Hosted/Arena/Settlement
+  等任务领取 Worker。前向 migration `080` 只识别事件账本中已证明的旧
+  context-query 失败、无任何 AgentTask/业务进度的 Run，在同一事务中重置
+  Arena/Public round deadline、重排 Run 并写入 recovery queue event，不改写
+  已应用的 `079`。
 - [ ] D5a 价格与事件：先用当前 `2/5/8/3` 起始价建立对照基线，再增加冻结到
   Game 的 `price_catalog_id`、基础价格快照和 `pawnhouse-standard-v2` 事件牌组。
   新牌组降低常规事件相对私有估值分布过大的单边冲击，增加临时、传闻、基本面、

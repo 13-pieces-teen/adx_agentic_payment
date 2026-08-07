@@ -306,6 +306,12 @@ CONTEXT_LIQUIDITY_RUN_RECOVERY_SQL_PATH = (
     / "migrations"
     / "079_arena_context_liquidity_run_recovery.sql"
 )
+CONTEXT_LIQUIDITY_DEADLINE_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "080_arena_context_liquidity_deadline_recovery.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1503,6 +1509,36 @@ def test_elapsed_task_recovery_only_requeues_proven_precision_followup(
     )
     assert (
         ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_context_recovery_rearms_only_the_proven_pre_task_failure(
+    monkeypatch,
+):
+    sql = CONTEXT_LIQUIDITY_DEADLINE_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code IN (" in sql
+    assert "'runtime_undefinedcolumnerror'" in sql
+    assert "'runtime_valueerror'" in sql
+    assert "event.event_type = 'runtime.run_failed'" in sql
+    assert "event.public_payload->>'errorCode'" in sql
+    assert "'runtime_undefinedcolumnerror'" in sql
+    assert "NOT EXISTS" in sql
+    assert "FROM public.arena_agent_tasks AS task" in sql
+    assert "phase_deadline_at = (" in sql
+    assert "game.action_timeout_ms" in sql
+    assert "UPDATE public.rounds AS public_round" in sql
+    assert "SET status = 'queued'" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        CONTEXT_LIQUIDITY_DEADLINE_RECOVERY_SQL_PATH
         in migrate_module.migration_files("arena")
     )
 

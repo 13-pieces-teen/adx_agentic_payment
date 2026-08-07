@@ -12,6 +12,9 @@ WORKFLOW = (
 RELEASE = (
     ROOT / "deploy" / "scripts" / "release.sh"
 ).read_text(encoding="utf-8")
+DEPLOY = (
+    ROOT / "deploy" / "scripts" / "deploy.sh"
+).read_text(encoding="utf-8")
 GENERATE_ENV = (
     ROOT / "deploy" / "scripts" / "generate-env.sh"
 ).read_text(encoding="utf-8")
@@ -77,6 +80,25 @@ def test_release_preserves_server_only_state_and_refuses_automatic_db_rollback()
     assert 'build-connector-artifacts.sh" --verify-only' in RELEASE
     assert "END { exit 0 }" not in RELEASE
     assert 'compose_file="${repo_dir}/docker-compose.production.yml"' in RELEASE
+
+
+def test_deploy_stops_task_claiming_workers_before_migrations() -> None:
+    stop_index = DEPLOY.index("stop_background_workers")
+    migration_index = DEPLOY.index("compose run --rm migrate")
+    hosted_start_index = DEPLOY.index(
+        'compose --profile hosted up -d --scale hosted-worker='
+    )
+
+    assert stop_index < migration_index < hosted_start_index
+    for worker in (
+        "hosted-worker",
+        "credential-controller",
+        "arena-worker",
+        "settlement-worker",
+        "gamecoin-provisioner",
+        "memorial-minter",
+    ):
+        assert worker in DEPLOY[stop_index:migration_index]
 
 
 def test_release_allows_only_the_tracked_environment_templates() -> None:

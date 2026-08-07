@@ -227,8 +227,10 @@ Request 运行 Python、Connector、Settlement 与生产镜像检查；只有受
 commit 的纯 `git archive` 发布到云服务器。远端
 `deploy/scripts/release.sh` 负责校验 SHA-256、备份 PostgreSQL、保留服务器
 本地 `deploy/.env`/secret/artifact、创建回滚目录、调用权威
-`deploy/scripts/deploy.sh`，并在容器、迁移、公开健康、受保护接口和 SSE
-检查通过后写入发布身份标记。CI/CD 不创建、上传或修改支付密钥和生产环境变量。
+`deploy/scripts/deploy.sh`；部署脚本会在迁移前停止所有可领取持久化任务的旧版
+后台 Worker，避免恢复记录被旧镜像抢占，再启动新 Worker。容器、迁移、公开
+健康、受保护接口和 SSE 检查通过后才写入发布身份标记。CI/CD 不创建、上传或
+修改支付密钥和生产环境变量。
 
 ## 本地运行平台 Agent
 

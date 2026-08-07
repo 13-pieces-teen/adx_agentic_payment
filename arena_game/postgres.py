@@ -2011,6 +2011,17 @@ class PostgresPawnhouseRepository:
             round_id,
             game_id,
         )
+        await self._event(
+            connection,
+            game_id=game_id,
+            round_id=round_id,
+            event_type="round.started",
+            source_key=f"{round_id}:started",
+            public_payload={
+                "roundId": round_id,
+                "roundIndex": 1,
+            },
+        )
         snapshot = WorldState(
             {event.event_id: event for event in events},
             base_prices=dict(frozen_price_catalog.prices),

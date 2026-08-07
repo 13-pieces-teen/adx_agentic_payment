@@ -433,6 +433,30 @@ fi
 if [ "${enable_gamecoin_provisioner}" = "true" ]; then
   compose --profile gamecoin build --pull gamecoin-provisioner
 fi
+
+# Recovery migrations may requeue durable work. Stop every service that can
+# claim or advance that work before the migration becomes visible, otherwise
+# an old image can consume the recovered row during a rolling deployment.
+stop_background_workers() {
+  if [ "${enable_hosted_runtime}" = "true" ]; then
+    compose --profile hosted stop -t 30 \
+      hosted-worker credential-controller
+  fi
+  if [ "${enable_arena_worker}" = "true" ]; then
+    compose --profile arena stop -t 30 arena-worker
+  fi
+  if [ "${enable_settlement_worker}" = "true" ]; then
+    compose --profile settlement stop -t 30 settlement-worker
+  fi
+  if [ "${enable_gamecoin_provisioner}" = "true" ]; then
+    compose --profile gamecoin stop -t 30 gamecoin-provisioner
+  fi
+  if [ "${enable_memorial_minter}" = "true" ]; then
+    compose --profile memorial stop -t 30 memorial-minter
+  fi
+}
+
+stop_background_workers
 compose up -d postgres
 compose run --rm migrate
 compose up -d api connector-api
