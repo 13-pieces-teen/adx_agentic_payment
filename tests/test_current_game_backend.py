@@ -465,6 +465,9 @@ def test_successful_join_preflight_explicitly_authorizes_frontend_entry() -> Non
     assert value["eligible"] is True
     assert value["readyToJoin"] is True
     assert value["joinAuthorizationExpiresAt"] == "2026-07-26T04:10:00+00:00"
+    assert value["mandateRequirements"]["expiresAt"] == (
+        "2026-07-27T04:00:00+00:00"
+    )
     assert value["safeErrorCode"] is None
     assert value["checks"] == {
         "game": "READY",

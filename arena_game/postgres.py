@@ -8235,7 +8235,8 @@ class PostgresPawnhouseRepository:
         """Issue a short-lived, non-reserving authorization for product Join."""
 
         issued_at = now or datetime.now(timezone.utc)
-        expires_at = issued_at + timedelta(minutes=10)
+        join_authorization_expires_at = issued_at + timedelta(minutes=10)
+        mandate_expires_at = issued_at + timedelta(hours=24)
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
@@ -8415,7 +8416,7 @@ class PostgresPawnhouseRepository:
                         agent_id,
                         key_digest,
                         request_digest,
-                        expires_at,
+                        join_authorization_expires_at,
                     )
 
         assert settlement.chain_id is not None
@@ -8431,7 +8432,9 @@ class PostgresPawnhouseRepository:
             "eligible": True,
             "readyToJoin": True,
             "joinAuthorizationId": authorization_id,
-            "joinAuthorizationExpiresAt": expires_at.isoformat(),
+            "joinAuthorizationExpiresAt": (
+                join_authorization_expires_at.isoformat()
+            ),
             "checks": {
                 "game": "READY",
                 "agent": "READY",
@@ -8447,7 +8450,7 @@ class PostgresPawnhouseRepository:
                 "maxPerPaymentAtomic": "10000000",
                 "maxCumulativeAtomic": "50000000",
                 "allowedPayeeRule": "SAME_GAME_SETTLEMENT_ACCOUNT",
-                "expiresAt": expires_at.isoformat(),
+                "expiresAt": mandate_expires_at.isoformat(),
             },
             "portfolioRequirements": {
                 "initialNetWorthAtomic": str(INITIAL_NET_WORTH_ATOMIC),

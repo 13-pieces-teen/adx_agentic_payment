@@ -282,6 +282,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - [x] PaymentMandate 的 `reserve / consume / release` 与 revoke 已实现；
       unknown 使用 `submitting` ambiguity boundary 停止盲目重试，完整 reorg
       策略仍待验证；
+- [x] Join Authorization 保持 10 分钟的短期非占座凭证，用户 PaymentMandate
+      使用独立的 24 小时整局窗口；若结算尚未 reserve/签名/提交时已无有效
+      Mandate，Worker 以 `payment_mandate_not_active` 终结该笔结算并释放回合，
+      不补签、不重播链上交易；
 - [x] Official filler 的平台钱包已接入受限 PaymentMandate；停用 Official
       Agent 不得获得新 Mandate，Runtime 不接触钱包密钥或任意签名能力；
 

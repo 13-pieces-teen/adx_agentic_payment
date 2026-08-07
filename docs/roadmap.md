@@ -771,6 +771,10 @@ create game
       CHECK 和事务更新双重限制。
 - [x] 单笔 EIP-3009 模式在 `accept` 后冻结唯一 `SettlementIntent`；同一
       Game-scoped Mandate 可自动授权多笔互相独立的 Intent。
+- [x] Join Authorization 的 10 分钟有效期与 PaymentMandate 的 24 小时整局
+      有效期已拆分；自动 Worker 在 `authorization_requested` 阶段找不到有效
+      Mandate 时以 `payment_mandate_not_active` 安全终态化，不进入签名、
+      Facilitator 或链上提交。
 - [x] 增加无公网端口的可选 testnet signer service 与 Settlement Worker，自动
       reserve、签名、x402 `/verify`/`/settle`、持久化 tx hash；`submitting` 之前
       写入 lease/ambiguity boundary，未知结果不会盲目重付。

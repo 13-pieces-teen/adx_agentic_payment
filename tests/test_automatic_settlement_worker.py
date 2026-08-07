@@ -270,6 +270,28 @@ class _ConcurrentFacilitator:
         )
 
 
+def test_worker_terminalizes_authorization_when_payment_mandate_is_not_active() -> None:
+    payments = InMemoryPaymentRepository()
+    source = _Source(None)
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_Signer(),
+        coordinator=X402SettlementCoordinator(
+            payments=payments,
+            arena=_Arena(),
+            facilitator=_Facilitator(),
+        ),
+        worker_id="worker-1",
+    )
+
+    assert asyncio.run(worker.run_once()) == 1
+    assert source.failures == ["payment_mandate_not_active"]
+    assert source.claims == 0
+    assert source.statuses == []
+    assert payments.reservations == {}
+
+
 def test_worker_runs_wallet_to_x402_to_submission_without_human_gate() -> None:
     now = datetime.now(timezone.utc)
     mandate = replace(

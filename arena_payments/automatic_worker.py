@@ -155,6 +155,10 @@ class AutomaticSettlementWorker:
         terms = await self._source.settlement_terms(settlement_intent_id)
         mandate = await self._source.active_mandate(settlement_intent_id, now)
         if mandate is None:
+            await self._source.fail_settlement(
+                settlement_intent_id=settlement_intent_id,
+                safe_error_code="payment_mandate_not_active",
+            )
             return
         reservation = await self._payments.reserve_mandate(
             mandate_id=mandate.mandate_id,
