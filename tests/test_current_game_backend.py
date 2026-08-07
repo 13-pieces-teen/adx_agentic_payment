@@ -320,6 +320,28 @@ class _HistoricalGameStateConnection(_CreateConnection):
         raise AssertionError(f"Unexpected fetch query: {query}")
 
 
+class _HostedContextConnection(_CreateConnection):
+    async def fetchrow(self, query: str, *_: object):
+        self.queries.append(query)
+        if "FROM arena402.rounds AS r" in query:
+            return {
+                "round_id": "round:game-current:1",
+                "round_index": 1,
+                "phase_deadline_at": datetime(
+                    2026, 8, 8, 0, 30, tzinfo=timezone.utc
+                ),
+                "action_timeout_ms": 120_000,
+                "round_count": 8,
+            }
+        if "market.liquidity_summarized" in query:
+            return None
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+    async def fetch(self, query: str, *_: object):
+        self.queries.append(query)
+        return []
+
+
 class _JoinPreflightConnection(_CreateConnection):
     participant_count = 0
     existing_participant = None
@@ -463,6 +485,29 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
         "                        participant.agent_id,\n"
         "                        coalesce("
     ) in live_rankings_query
+
+
+def test_hosted_context_orders_liquidity_by_real_game_event_columns() -> None:
+    connection = _HostedContextConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    value = asyncio.run(
+        repository.hosted_decide_contexts(game_id="game-current")
+    )
+
+    assert value == []
+    liquidity_query = next(
+        query
+        for query in connection.queries
+        if "market.liquidity_summarized" in query
+    )
+    assert "event.created_at DESC" in liquidity_query
+    assert "event.event_sequence DESC" in liquidity_query
+    assert "event.occurred_at" not in liquidity_query
+    assert "event.event_id" not in liquidity_query
 
 
 def test_owner_game_state_projects_real_portfolios_and_reputation() -> None:

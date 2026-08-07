@@ -2677,8 +2677,8 @@ class PostgresPawnhouseRepository:
                   AND previous_round.round_index < $2
                 ORDER BY
                     previous_round.round_index DESC,
-                    event.occurred_at DESC,
-                    event.event_id DESC
+                    event.created_at DESC,
+                    event.event_sequence DESC
                 LIMIT 1
                 """,
                 game_id,
