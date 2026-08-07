@@ -9254,7 +9254,11 @@ class PostgresPawnhouseRepository:
                     GROUP BY
                         participant.game_participant_id,
                         participant.agent_id,
-                        display_name,
+                        coalesce(
+                            game_agent.config_snapshot ->> 'display_name',
+                            agent.name,
+                            participant.agent_id
+                        ),
                         balance.cash_atomic
                 )
                 SELECT

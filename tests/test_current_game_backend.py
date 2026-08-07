@@ -454,6 +454,15 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
     assert value["liveRankings"][0]["netWorthAtomic"] == "20000000"
     assert value["settlements"] == []
     assert "userId" not in json.dumps(value)
+    live_rankings_query = next(
+        query for query in connection.queries if "WITH valued AS" in query
+    )
+    assert (
+        "GROUP BY\n"
+        "                        participant.game_participant_id,\n"
+        "                        participant.agent_id,\n"
+        "                        coalesce("
+    ) in live_rankings_query
 
 
 def test_owner_game_state_projects_real_portfolios_and_reputation() -> None:
