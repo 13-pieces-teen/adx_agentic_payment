@@ -300,6 +300,12 @@ MARKET_RFQ_PROJECTION_RUN_RECOVERY_SQL_PATH = (
     / "migrations"
     / "078_arena_market_rfq_projection_run_recovery.sql"
 )
+CONTEXT_LIQUIDITY_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "079_arena_context_liquidity_run_recovery.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1648,5 +1654,33 @@ def test_phase_d_cutover_retires_only_empty_waiting_fcfs_current_game(
     )
     assert (
         ARENA_PHASE_D_EMPTY_CURRENT_GAME_CUTOVER_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_context_liquidity_recovery_only_requeues_pre_task_decide_failure(
+    monkeypatch,
+):
+    sql = CONTEXT_LIQUIDITY_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_undefinedcolumnerror'" in sql
+    assert "run.stage = 'decide'" in sql
+    assert "round.phase = 'decide'" in sql
+    assert "game.phase = 'running'" in sql
+    assert "game.market_protocol = 'agent_a2a.v1'" in sql
+    assert "NOT EXISTS" in sql
+    assert "public.arena_agent_tasks" in sql
+    assert "SET status = 'queued'" in sql
+    assert "safe_error_code = NULL" in sql
+    assert "completed_at = NULL" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        CONTEXT_LIQUIDITY_RUN_RECOVERY_SQL_PATH
         in migrate_module.migration_files("arena")
     )
