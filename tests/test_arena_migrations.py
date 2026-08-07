@@ -294,6 +294,12 @@ SETTLEMENT_ENGAGEMENT_TERMINALIZATION_SQL_PATH = (
     / "migrations"
     / "077_arena_settlement_engagement_terminalization.sql"
 )
+MARKET_RFQ_PROJECTION_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "078_arena_market_rfq_projection_run_recovery.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1516,6 +1522,35 @@ def test_projection_collision_recovery_only_requeues_fully_receipted_runs(
     )
     assert (
         ARENA_MARKET_PROJECTION_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_rfq_projection_recovery_only_requeues_mixed_projection_runs(
+    monkeypatch,
+):
+    sql = MARKET_RFQ_PROJECTION_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_pawnhouserepositoryerror'" in sql
+    assert "run.stage = 'match'" in sql
+    assert "round.phase = 'match'" in sql
+    assert "task.task_kind = 'arena.market.rfq'" in sql
+    assert "result.apply_status = 'pending'" in sql
+    assert "receipt.result_id IS NOT NULL" in sql
+    assert "task.status <> 'completed'" in sql
+    assert "result.result_id IS NULL" in sql
+    assert "SET status = 'queued'" in sql
+    assert "safe_error_code = NULL" in sql
+    assert "completed_at = NULL" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        MARKET_RFQ_PROJECTION_RUN_RECOVERY_SQL_PATH
         in migrate_module.migration_files("arena")
     )
 

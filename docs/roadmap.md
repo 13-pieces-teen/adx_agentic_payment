@@ -243,6 +243,12 @@
   尚不能关闭 D5a。生产 Official Agent 的 bootstrap/refresh 实现现已统一选择
   `arena.official-market-strategy.liquidity-v2`，但只允许在局间刷新，已加入或
   运行中的 Game 继续冻结旧 revision。生产切换仍应保留回滚点并单独验收。
+  2026-08-07 的后续 Current Game 在 Round 6 暴露 Coordinator 与后台市场投影
+  Worker 同时处理同一 RFQ Result 的竞态：后到者可能在看到回执前先看到已经递增
+  的 RFQ session，误报 `agent_market_rfq_attempt_sequence_invalid`。投影边界现
+  以 Result ID 的事务级 advisory lock 串行化，并在锁后重读 durable receipt；
+  migration `078` 只重排同时存在“已投影 RFQ”和“completed/pending RFQ”的
+  `runtime_pawnhouserepositoryerror` Match Run，不泛化恢复其他 Repository 错误。
 - [ ] D5b 容量：市场质量的功能正确性通过后，再完成 12/25/50/100 Agent 分档、
   每 Runtime/Task 至少 100 条真实终态样本、4 Facilitator shard 和
   timeout/公平性冻结。

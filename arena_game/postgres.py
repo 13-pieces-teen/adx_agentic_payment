@@ -3938,6 +3938,50 @@ class PostgresPawnhouseRepository:
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                # The coordinator and the projection worker can observe the
+                # same newly-applied Result. Serialize that Result before
+                # reading its receipt so the loser sees the winner's committed
+                # projection instead of re-running mutable RFQ checks.
+                await connection.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtextextended($1::text, 0)
+                    )
+                    """,
+                    application.result_id,
+                )
+                existing_receipt = await connection.fetchrow(
+                    """
+                    SELECT
+                        receipt.task_id,
+                        receipt.result_id,
+                        receipt.task_kind,
+                        receipt.application_outcome
+                    FROM arena402.market_projection_receipts AS receipt
+                    WHERE receipt.result_id = $1
+                    """,
+                    application.result_id,
+                )
+                if existing_receipt is not None:
+                    if (
+                        str(existing_receipt["task_id"])
+                        != application.task_id
+                        or str(existing_receipt["task_kind"])
+                        != application.kind
+                        or str(existing_receipt["application_outcome"])
+                        != application.outcome
+                    ):
+                        raise PawnhouseRepositoryError(
+                            "agent_market_projection_receipt_conflict"
+                        )
+                    return {
+                        "taskId": application.task_id,
+                        "resultId": application.result_id,
+                        "kind": application.kind,
+                        "outcome": application.outcome,
+                        "projected": True,
+                        "replayed": True,
+                    }
                 row = await connection.fetchrow(
                     """
                     SELECT

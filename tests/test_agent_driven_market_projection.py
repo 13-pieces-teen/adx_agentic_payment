@@ -62,11 +62,15 @@ class _ProjectionConnection:
         request_row=None,
         participant_busy=False,
         concurrent_claim=False,
+        projection_receipt=None,
+        rfq_attempt_count=0,
     ):
         self.authoritative_row = authoritative_row
         self.request_row = request_row
         self.participant_busy = participant_busy
         self.concurrent_claim = concurrent_claim
+        self.projection_receipt = projection_receipt
+        self.rfq_attempt_count = rfq_attempt_count
         self.calls: list[tuple[str, str, tuple[object, ...]]] = []
 
     def transaction(self):
@@ -75,6 +79,11 @@ class _ProjectionConnection:
     async def fetchrow(self, sql, *parameters):
         normalized = " ".join(sql.split())
         self.calls.append(("fetchrow", normalized, parameters))
+        if (
+            "FROM arena402.market_projection_receipts AS receipt"
+            in normalized
+        ):
+            return self.projection_receipt
         if "FROM public.arena_applied_agent_actions" in normalized:
             return self.authoritative_row
         if "INSERT INTO arena402.market_result_applications" in normalized:
@@ -132,7 +141,7 @@ class _ProjectionConnection:
                     {"intent_id": "seller-intent-1"},
                     {"intent_id": "seller-intent-2"},
                 ],
-                "attempt_count": 0,
+                "attempt_count": self.rfq_attempt_count,
                 "max_attempts": 3,
                 "status": "active",
             }
@@ -459,6 +468,77 @@ def test_one_rfq_result_projects_one_durable_attempt() -> None:
             if "UPDATE arena402.market_rfq_sessions" in call[1]
         )
         assert session_update[2] == ("buyer-intent-1", 1)
+
+    asyncio.run(scenario())
+
+
+def test_rfq_projection_replays_after_concurrent_projection_commits() -> None:
+    async def scenario() -> None:
+        result_id = "runtime:" + ("9" * 64)
+        authoritative = _row(
+            "arena.market.rfq",
+            result_id,
+            _rfq_input(),
+            {
+                "action": "request_negotiations",
+                "requests": [
+                    {
+                        "targetIntentId": "seller-intent-1",
+                        "openingPrice": "1.700000",
+                        "message": "请求协商",
+                    }
+                ],
+            },
+        )
+        connection = _ProjectionConnection(
+            authoritative,
+            projection_receipt={
+                "task_id": authoritative["task_id"],
+                "result_id": result_id,
+                "task_kind": authoritative["task_kind"],
+                "application_outcome": "candidate",
+            },
+            # The first projector already consumed attempt 1 before this
+            # projector acquired the per-Result lock.
+            rfq_attempt_count=1,
+        )
+        repository = PostgresPawnhouseRepository(
+            "",
+            pool=_Pool(connection),
+        )
+
+        receipt = await repository.project_agent_market_application(
+            _application("arena.market.rfq", result_id)
+        )
+
+        assert receipt == {
+            "taskId": "task:arena.market.rfq",
+            "resultId": result_id,
+            "kind": "arena.market.rfq",
+            "outcome": "candidate",
+            "projected": True,
+            "replayed": True,
+        }
+        lock_index = next(
+            index
+            for index, call in enumerate(connection.calls)
+            if "pg_advisory_xact_lock" in call[1]
+        )
+        receipt_index = next(
+            index
+            for index, call in enumerate(connection.calls)
+            if "FROM arena402.market_projection_receipts AS receipt"
+            in call[1]
+        )
+        assert lock_index < receipt_index
+        assert not any(
+            "FROM arena402.market_rfq_sessions" in call[1]
+            for call in connection.calls
+        )
+        assert not any(
+            "INSERT INTO arena402.market_negotiation_requests" in call[1]
+            for call in connection.calls
+        )
 
     asyncio.run(scenario())
 
