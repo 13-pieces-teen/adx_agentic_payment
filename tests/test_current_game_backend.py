@@ -406,6 +406,31 @@ def test_pairing_closed_event_has_a_stable_public_contract() -> None:
     assert arguments[4] == "pair-1:closed"
 
 
+def test_pairing_closed_event_terminalizes_the_a2a_engagement() -> None:
+    connection = _CreateConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    asyncio.run(
+        repository._pairing_closed_event(
+            connection,
+            game_id="game-1",
+            round_id="round-1",
+            pairing_id="pair-1",
+            negotiation_id="neg:pair-1",
+            status="settlement_failed",
+            settlement_intent_id="settlement:neg:pair-1",
+        )
+    )
+
+    engagement_query, engagement_arguments = connection.execute_calls[-2]
+    assert "UPDATE arena402.market_engagements" in engagement_query
+    assert "status IN (" in engagement_query
+    assert engagement_arguments == ("neg:pair-1", "settlement_failed")
+
+
 def test_pairing_closed_event_can_explain_a_safe_settlement_failure() -> None:
     connection = _CreateConnection()
     repository = PostgresPawnhouseRepository(

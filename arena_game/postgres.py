@@ -10283,6 +10283,24 @@ class PostgresPawnhouseRepository:
             payload["settlementIntentId"] = settlement_intent_id
         if safe_error_code is not None:
             payload["safeErrorCode"] = safe_error_code
+        if status in {"settled", "settlement_failed"}:
+            await connection.execute(
+                """
+                UPDATE arena402.market_engagements
+                SET status = $2,
+                    completed_at = COALESCE(
+                        completed_at,
+                        clock_timestamp()
+                    )
+                WHERE negotiation_id = $1
+                  AND status IN (
+                      'accepted_pending_settlement',
+                      'settling'
+                  )
+                """,
+                negotiation_id,
+                status,
+            )
         await self._event(
             connection,
             game_id=game_id,

@@ -288,6 +288,12 @@ SETTLEMENT_NEGOTIATION_PRIVILEGES_SQL_PATH = (
     / "migrations"
     / "076_arena_settlement_negotiation_privileges.sql"
 )
+SETTLEMENT_ENGAGEMENT_TERMINALIZATION_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "077_arena_settlement_engagement_terminalization.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -801,6 +807,30 @@ def test_settlement_role_can_terminalize_a_negotiation(
     )
     assert (
         SETTLEMENT_NEGOTIATION_PRIVILEGES_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_settlement_engagement_terminalization_is_backfilled_and_authorized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sql = SETTLEMENT_ENGAGEMENT_TERMINALIZATION_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "GRANT SELECT, UPDATE ON" in sql
+    assert "arena402.market_engagements" in sql
+    assert "TO adx_settlement;" in sql
+    assert "UPDATE arena402.market_engagements AS engagement" in sql
+    assert "intent.status = 'inventory_committed'" in sql
+    assert "'settlement_failed'" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        SETTLEMENT_ENGAGEMENT_TERMINALIZATION_SQL_PATH
         in migrate_module.migration_files("arena")
     )
 
