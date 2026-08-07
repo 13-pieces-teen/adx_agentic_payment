@@ -33,6 +33,9 @@ def inspect_portfolio(
         "taskKind": ctx.deps.task.kind,
         "roundIndex": task_input.round_index,
     }
+    if getattr(task_input, "round_count", None) is not None:
+        value["roundCount"] = task_input.round_count
+        value["roundsRemaining"] = task_input.rounds_remaining
     if hasattr(task_input, "cash"):
         value["cash"] = format(task_input.cash, "f")
     if isinstance(task_input, (ArenaDecideInputV1, ArenaMarketIntentInputV1)):
@@ -76,6 +79,14 @@ def inspect_market_history(
             item.model_dump(mode="json", by_alias=True)
             for item in task_input.market_activity
         ]
+        value["previousRoundLiquidity"] = (
+            None
+            if task_input.previous_round_liquidity is None
+            else task_input.previous_round_liquidity.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+        )
     elif isinstance(task_input, ArenaNegotiateInputV1):
         value["history"] = [
             item.model_dump(mode="json", by_alias=True)

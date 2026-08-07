@@ -68,6 +68,56 @@ class _Pool:
         return self.eligible_officials
 
 
+class _OwnerProjectionPool:
+    async def fetchrow(self, query: str, *_: object):
+        if "FROM arena402.game_participants AS participant" in query:
+            return {
+                "game_participant_id": "participant-owner",
+                "agent_id": "agent-owner",
+                "display_name": "Owner Agent",
+                "status": "completed",
+                "game_phase": "completed",
+                "initial_cash_atomic": 20_000_000,
+                "cash_atomic": 17_000_000,
+                "rank": 2,
+                "net_worth_atomic": 23_000_000,
+                "tier": "御用商人",
+                "calculated_at": datetime(
+                    2026, 7, 27, 12, tzinfo=timezone.utc
+                ),
+            }
+        if "FROM arena402.pairings" in query:
+            return {
+                "trade_attempts": 3,
+                "settled_trades": 2,
+                "failed_negotiations": 1,
+            }
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+    async def fetch(self, query: str, *_: object):
+        if "FROM arena402.holdings" in query:
+            return [
+                {
+                    "good_id": "grain",
+                    "initial_quantity": 0,
+                    "quantity": 2,
+                }
+            ]
+        if "FROM arena402.round_portfolio_snapshots" in query:
+            return [
+                {
+                    "round_id": "round-1",
+                    "round_index": 1,
+                    "cash_atomic": 17_000_000,
+                    "holdings_snapshot": {"grain": 2},
+                    "captured_at": datetime(
+                        2026, 7, 27, 11, tzinfo=timezone.utc
+                    ),
+                }
+            ]
+        raise AssertionError(f"Unexpected fetch query: {query}")
+
+
 class _Transaction:
     async def __aenter__(self):
         return self
@@ -158,6 +208,16 @@ class _HistoricalGameStateConnection(_CreateConnection):
 
     async def fetch(self, query: str, *_: object):
         self.queries.append(query)
+        if "WITH valued AS" in query:
+            return [
+                {
+                    "rank": 1,
+                    "game_participant_id": "gp:game-completed:agent-random",
+                    "agent_id": "agent_random0123456789",
+                    "display_name": "Player Merchant",
+                    "net_worth_atomic": 20_000_000,
+                }
+            ]
         if "FROM arena402.game_participants" in query:
             return [
                 {
@@ -238,6 +298,25 @@ class _HistoricalGameStateConnection(_CreateConnection):
             ]
         if "FROM arena402.final_settlement_prices" in query:
             return []
+        if "FROM arena402.price_snapshots" in query:
+            return [
+                {
+                    "round_index": 1,
+                    "good_id": "gems",
+                    "market_price_atomic": 4_000_000,
+                    "previous_market_price_atomic": 3_000_000,
+                    "final_price_atomic": 4_374_844,
+                    "supply_index_bps": 10_000,
+                    "bubble_premium_bps": 0,
+                    "committed_trade_count": 1,
+                    "last_clearing_price_atomic": 4_374_844,
+                    "created_at": datetime(
+                        2026, 7, 27, 11, 1, tzinfo=timezone.utc
+                    ),
+                }
+            ]
+        if "FROM arena402.settlement_intents AS i" in query:
+            return []
         raise AssertionError(f"Unexpected fetch query: {query}")
 
 
@@ -312,6 +391,7 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
             "marketProtocol": "agent_a2a.v1",
             "roundPhase": None,
             "joinedByMe": False,
+            "myParticipantId": None,
             "participants": [
                 {
                     "participantId": "gp:game-current:agent-1",
@@ -369,7 +449,43 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
     assert value["negotiations"][0]["status"] == "settled"
     assert value["negotiations"][0]["acceptedPriceAtomic"] == "4374844"
     assert value["marketProtocol"] == "agent_a2a.v1"
+    assert value["priceSnapshots"][0]["priceKind"] == "event_reference"
+    assert value["priceSnapshots"][0]["previousMarketPriceAtomic"] == "3000000"
+    assert value["liveRankings"][0]["netWorthAtomic"] == "20000000"
+    assert value["settlements"] == []
     assert "userId" not in json.dumps(value)
+
+
+def test_owner_game_state_projects_real_portfolios_and_reputation() -> None:
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_OwnerProjectionPool(),
+    )
+
+    value = asyncio.run(
+        repository.game_owner_state(
+            game_id="game-completed",
+            owner_user_id="owner-user",
+        )
+    )
+
+    assert value["initialPortfolio"] == {
+        "cashAtomic": "20000000",
+        "holdings": {"grain": 0},
+    }
+    assert value["finalPortfolio"] == {
+        "cashAtomic": "17000000",
+        "holdings": {"grain": 2},
+    }
+    assert value["reputation"] == {
+        "tradeAttempts": 3,
+        "settledTrades": 2,
+        "successRateBps": 6666,
+        "failedNegotiations": 1,
+    }
+    assert value["roundPortfolios"][0]["roundIndex"] == 1
+    assert value["ranking"]["netWorthAtomic"] == "23000000"
+    assert "owner-user" not in json.dumps(value)
 
 
 def test_pairing_closed_event_has_a_stable_public_contract() -> None:

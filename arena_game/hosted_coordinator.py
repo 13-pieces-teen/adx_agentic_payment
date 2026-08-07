@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from arena_agent_contracts import (
+    ArenaCompletedActionV1,
     ArenaCounterpartyQuoteV1,
     ArenaDecideInputV1,
     ArenaDecideLimitsV1,
@@ -24,6 +25,8 @@ from arena_agent_contracts import (
     ArenaPublicCounterpartyV1,
     ArenaPublicEventV1,
     ArenaReputationV1,
+    ArenaRoundLiquidityV1,
+    ArenaTradeSummaryV1,
 )
 from arena_core.application_policy import derive_application
 from arena_core.postgres_repository import PostgresArenaCoreRepository
@@ -669,6 +672,8 @@ class PawnhouseAgentRuntimeCoordinator:
             game_id=str(context["game_id"]),
             round_id=str(context["round_id"]),
             round_index=int(context["round_index"]),
+            round_count=int(context["round_count"]),
+            rounds_remaining=int(context["rounds_remaining"]),
             cash=_gold_decimal(cash_atomic),
             holdings=holdings,
             market={
@@ -682,15 +687,35 @@ class PawnhouseAgentRuntimeCoordinator:
                 ).items()
             },
             events=_public_events(list(context["events"])),
-            reputation=ArenaReputationV1(failed_negotiations=0),
+            reputation=ArenaReputationV1(
+                failed_negotiations=int(
+                    context.get("failed_negotiations", 0)
+                )
+            ),
             limits=ArenaDecideLimitsV1(
                 allowed_actions=allowed_actions,
                 allowed_goods=(
                     list(GOOD_IDS) if can_buy else sellable_goods
                 ),
             ),
-            completed_actions=[],
-            completed_trades=[],
+            completed_actions=[
+                ArenaCompletedActionV1(
+                    round_id=str(item["round_id"]),
+                    action=dict(item["action"]),
+                )
+                for item in list(context.get("completed_actions", []))
+            ],
+            completed_trades=[
+                ArenaTradeSummaryV1(
+                    round_id=str(item["round_id"]),
+                    negotiation_id=str(item["negotiation_id"]),
+                    role=str(item["role"]),
+                    good=str(item["good"]),
+                    quantity=int(item["quantity"]),
+                    price=_gold_decimal(int(item["price_atomic"])),
+                )
+                for item in list(context.get("completed_trades", []))
+            ],
             goods=[
                 ArenaGoodRuleV1(
                     good=good_id,
@@ -719,6 +744,13 @@ class PawnhouseAgentRuntimeCoordinator:
                 )
                 for item in list(context.get("market_activity", []))
             ],
+            previous_round_liquidity=(
+                None
+                if context.get("previous_round_liquidity") is None
+                else ArenaRoundLiquidityV1.model_validate(
+                    context["previous_round_liquidity"]
+                )
+            ),
             deadline_at=context["deadline_at"],
         )
 
@@ -754,6 +786,8 @@ class PawnhouseAgentRuntimeCoordinator:
             game_id=str(context["game_id"]),
             round_id=str(context["round_id"]),
             round_index=int(context["round_index"]),
+            round_count=int(context["round_count"]),
+            rounds_remaining=int(context["rounds_remaining"]),
             buyer_intent_id=str(context["buyer_intent_id"]),
             good=str(context["good"]),
             quantity=int(context["quantity"]),
@@ -773,6 +807,9 @@ class PawnhouseAgentRuntimeCoordinator:
                     quantity=int(entry["quantity"]),
                     public_price=_gold_decimal(
                         int(entry["public_price_atomic"])
+                    ),
+                    failed_negotiations=int(
+                        entry.get("failed_negotiations", 0)
                     ),
                     expires_at=entry["expires_at"],
                 )
@@ -801,6 +838,8 @@ class PawnhouseAgentRuntimeCoordinator:
             game_id=str(context["game_id"]),
             round_id=str(context["round_id"]),
             round_index=int(context["round_index"]),
+            round_count=int(context["round_count"]),
+            rounds_remaining=int(context["rounds_remaining"]),
             seller_intent_id=str(context["seller_intent_id"]),
             good=str(context["good"]),
             quantity=int(context["quantity"]),
@@ -866,6 +905,8 @@ class PawnhouseAgentRuntimeCoordinator:
             game_id=str(context["game_id"]),
             round_id=str(context["round_id"]),
             round_index=int(context["round_index"]),
+            round_count=int(context["round_count"]),
+            rounds_remaining=int(context["rounds_remaining"]),
             negotiation_id=str(context["negotiation_id"]),
             role=str(context["role"]),
             good=str(context["good"]),
@@ -880,7 +921,9 @@ class PawnhouseAgentRuntimeCoordinator:
             counterparty=ArenaPublicCounterpartyV1(
                 agent_id=str(context["counterparty_agent_id"]),
                 display_name=str(context["counterparty_name"]),
-                failed_negotiations=0,
+                failed_negotiations=int(
+                    context.get("counterparty_failed_negotiations", 0)
+                ),
             ),
             events=_public_events(list(context["events"])),
             history=history,

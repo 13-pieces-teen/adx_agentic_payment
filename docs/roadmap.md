@@ -200,6 +200,10 @@
   A2A Round close 幂等发布 `market.liquidity_summarized`，包含 participant、
   Intent、pass、按商品买卖数量、同商品反向理论容量、限价兼容理论容量和最小
   未匹配数；payload 不包含 Agent identity 或私有限价。
+  2026-08-07 已把该摘要连入下一回合不可变 AgentTask，并同时接通
+  `roundCount / roundsRemaining`、自己的历史 applied action、仅
+  `inventory_committed` 的历史成交以及从 Pairing 终态幂等推导的真实
+  `failedNegotiations`；Hosted/Connector retry 继续复用同一 input hash。
 - [ ] D5a 价格与事件：先用当前 `2/5/8/3` 起始价建立对照基线，再增加冻结到
   Game 的 `price_catalog_id`、基础价格快照和 `pawnhouse-standard-v2` 事件牌组。
   新牌组降低常规事件相对私有估值分布过大的单边冲击，增加临时、传闻、基本面、
@@ -821,7 +825,12 @@ create game
 - [x] 原 Compose 过渡壳的页面能力已迁交外部前端，本仓库已移除该壳。
 - [x] 外部前端已完成对应页面、Vercel 部署及 API/CORS 端到端切换；Phase D
       正式 Game 已验证 Intent 目录、RFQ Engagement、谈判文本、支付阶段和排名。
-- [ ] 增加 owner-only 私有投影与 Realtime 推送。
+- [x] 增加 owner-only 私有 Game 投影：认证 `GET /api/v1/games/{game_id}/me`
+      返回初始/当前/终场资产、逐回合资产快照、真实 Pairing 信誉与最终排名；
+      公共 Game state 同时投影事件参考价、已提交库存的成交统计、SettlementIntent
+      状态和实时净值，不把 accept 或 chain confirmation 冒充库存完成。
+- [ ] 在 owner-only 私有 Game 投影上增加独立 Realtime 推送；当前公共 SSE 与
+      3 秒只读状态刷新继续承担观战流，私有字段不进入公共缓存或 SSE。
 - [x] 在单机 Compose 中加入 Hosted Worker、Credential Controller 和 Arena Worker
       及独立权限。
 - [x] 增加仅供 Official Agent 使用的私有 LiteLLM Gateway：

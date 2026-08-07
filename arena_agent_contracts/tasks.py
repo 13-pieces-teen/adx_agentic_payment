@@ -160,6 +160,53 @@ class ArenaMarketActivityV1(_StrictWireModel):
     spread_bps: NonNegativeInt | None = None
 
 
+class ArenaGoodLiquiditySummaryV1(_StrictWireModel):
+    """Privacy-safe last-round liquidity for one traded good."""
+
+    buy_intent_count: NonNegativeInt
+    sell_intent_count: NonNegativeInt
+    opposite_side_capacity: NonNegativeInt
+    price_compatible_capacity: NonNegativeInt
+
+
+class ArenaRoundLiquidityV1(_StrictWireModel):
+    """Versioned public liquidity result from the previous round."""
+
+    schema_version: Literal["arena.market-liquidity.v1"]
+    round_id: Identifier
+    round_index: PositiveInt
+    participant_count: NonNegativeInt
+    intent_count: NonNegativeInt
+    pass_count: NonNegativeInt
+    opposite_side_capacity: NonNegativeInt
+    price_compatible_capacity: NonNegativeInt
+    price_compatibility_gap: NonNegativeInt
+    minimum_unmatched_intent_count: NonNegativeInt
+    by_good: dict[GoodId, ArenaGoodLiquiditySummaryV1]
+
+    @model_validator(mode="after")
+    def validate_totals(self) -> "ArenaRoundLiquidityV1":
+        if self.intent_count + self.pass_count != self.participant_count:
+            raise ValueError(
+                "intentCount plus passCount must equal participantCount"
+            )
+        if self.price_compatible_capacity > self.opposite_side_capacity:
+            raise ValueError(
+                "priceCompatibleCapacity cannot exceed oppositeSideCapacity"
+            )
+        if (
+            self.price_compatibility_gap
+            != self.opposite_side_capacity - self.price_compatible_capacity
+        ):
+            raise ValueError("priceCompatibilityGap is inconsistent")
+        if (
+            self.minimum_unmatched_intent_count
+            != self.intent_count - 2 * self.price_compatible_capacity
+        ):
+            raise ValueError("minimumUnmatchedIntentCount is inconsistent")
+        return self
+
+
 class ArenaDecideLimitsV1(_StrictWireModel):
     allowed_actions: list[AllowedDecideAction] = Field(
         default_factory=_default_allowed_actions
@@ -196,6 +243,8 @@ class ArenaDecideInputV1(_StrictWireModel):
     game_id: Identifier
     round_id: Identifier
     round_index: PositiveInt
+    round_count: PositiveInt | None = None
+    rounds_remaining: NonNegativeInt | None = None
     cash: NonNegativeFixedDecimal
     holdings: dict[GoodId, NonNegativeInt]
     market: dict[GoodId, NonNegativeFixedDecimal]
@@ -210,6 +259,7 @@ class ArenaDecideInputV1(_StrictWireModel):
     completed_trades: list[ArenaTradeSummaryV1] = Field(default_factory=list)
     goods: list[ArenaGoodRuleV1] = Field(default_factory=list)
     market_activity: list[ArenaMarketActivityV1] = Field(default_factory=list)
+    previous_round_liquidity: ArenaRoundLiquidityV1 | None = None
     deadline_at: UtcDateTime
 
     @model_validator(mode="after")
@@ -224,6 +274,20 @@ class ArenaDecideInputV1(_StrictWireModel):
             raise ValueError(
                 "eventImpliedFinal must cover the same goods as market"
             )
+        if (self.round_count is None) != (self.rounds_remaining is None):
+            raise ValueError(
+                "roundCount and roundsRemaining must be provided together"
+            )
+        if self.round_count is not None:
+            if self.round_index > self.round_count:
+                raise ValueError("roundIndex cannot exceed roundCount")
+            if self.rounds_remaining != self.round_count - self.round_index:
+                raise ValueError("roundsRemaining is inconsistent")
+        if self.previous_round_liquidity is not None:
+            if self.previous_round_liquidity.round_index != self.round_index - 1:
+                raise ValueError(
+                    "previousRoundLiquidity must describe the prior round"
+                )
         return self
 
 
@@ -274,6 +338,8 @@ class ArenaNegotiateInputV1(_StrictWireModel):
     game_id: Identifier
     round_id: Identifier
     round_index: PositiveInt
+    round_count: PositiveInt | None = None
+    rounds_remaining: NonNegativeInt | None = None
     negotiation_id: Identifier
     role: Literal["buyer", "seller"]
     good: GoodId
@@ -291,6 +357,15 @@ class ArenaNegotiateInputV1(_StrictWireModel):
 
     @model_validator(mode="after")
     def validate_turn_context(self) -> "ArenaNegotiateInputV1":
+        if (self.round_count is None) != (self.rounds_remaining is None):
+            raise ValueError(
+                "roundCount and roundsRemaining must be provided together"
+            )
+        if self.round_count is not None:
+            if self.round_index > self.round_count:
+                raise ValueError("roundIndex cannot exceed roundCount")
+            if self.rounds_remaining != self.round_count - self.round_index:
+                raise ValueError("roundsRemaining is inconsistent")
         if self.latest_counterparty_quote is not None:
             if self.latest_counterparty_quote.from_role == self.role:
                 raise ValueError("latestCounterpartyQuote must come from the counterparty")
@@ -362,6 +437,8 @@ class ArenaMarketRfqInputV1(_StrictWireModel):
     game_id: Identifier
     round_id: Identifier
     round_index: PositiveInt
+    round_count: PositiveInt | None = None
+    rounds_remaining: NonNegativeInt | None = None
     buyer_intent_id: Identifier
     good: GoodId
     quantity: OrderQuantity = 1
@@ -380,6 +457,15 @@ class ArenaMarketRfqInputV1(_StrictWireModel):
 
     @model_validator(mode="after")
     def validate_directory(self) -> "ArenaMarketRfqInputV1":
+        if (self.round_count is None) != (self.rounds_remaining is None):
+            raise ValueError(
+                "roundCount and roundsRemaining must be provided together"
+            )
+        if self.round_count is not None:
+            if self.round_index > self.round_count:
+                raise ValueError("roundIndex cannot exceed roundCount")
+            if self.rounds_remaining != self.round_count - self.round_index:
+                raise ValueError("roundsRemaining is inconsistent")
         intent_ids = [entry.intent_id for entry in self.directory]
         if len(intent_ids) != len(set(intent_ids)):
             raise ValueError("directory must not contain duplicate intent IDs")
@@ -437,6 +523,8 @@ class ArenaMarketSelectInputV1(_StrictWireModel):
     game_id: Identifier
     round_id: Identifier
     round_index: PositiveInt
+    round_count: PositiveInt | None = None
+    rounds_remaining: NonNegativeInt | None = None
     seller_intent_id: Identifier
     good: GoodId
     quantity: OrderQuantity = 1
@@ -450,6 +538,15 @@ class ArenaMarketSelectInputV1(_StrictWireModel):
 
     @model_validator(mode="after")
     def validate_requests(self) -> "ArenaMarketSelectInputV1":
+        if (self.round_count is None) != (self.rounds_remaining is None):
+            raise ValueError(
+                "roundCount and roundsRemaining must be provided together"
+            )
+        if self.round_count is not None:
+            if self.round_index > self.round_count:
+                raise ValueError("roundIndex cannot exceed roundCount")
+            if self.rounds_remaining != self.round_count - self.round_index:
+                raise ValueError("roundsRemaining is inconsistent")
         request_ids = [request.request_id for request in self.requests]
         if len(request_ids) != len(set(request_ids)):
             raise ValueError("requests must not contain duplicate request IDs")
@@ -612,12 +709,14 @@ __all__ = [
     "ArenaDecideInputV1",
     "ArenaDecideLimitsV1",
     "ArenaGoodRuleV1",
+    "ArenaGoodLiquiditySummaryV1",
     "ArenaMarketActivityV1",
     "ArenaNegotiateInputV1",
     "ArenaNegotiationMessageV1",
     "ArenaPublicCounterpartyV1",
     "ArenaPublicEventV1",
     "ArenaReputationV1",
+    "ArenaRoundLiquidityV1",
     "ArenaTradeSummaryV1",
     "Identifier",
     "PublicJsonValue",

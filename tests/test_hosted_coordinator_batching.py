@@ -60,6 +60,8 @@ def _decide_context(*, cash_atomic: int, holdings: dict[str, int]):
         "game_id": "game-1",
         "round_id": "round-1",
         "round_index": 1,
+        "round_count": 5,
+        "rounds_remaining": 4,
         "cash_atomic": cash_atomic,
         "holdings": holdings,
         "market": {
@@ -76,6 +78,10 @@ def _decide_context(*, cash_atomic: int, holdings: dict[str, int]):
         },
         "events": [],
         "market_activity": [],
+        "previous_round_liquidity": None,
+        "completed_actions": [],
+        "completed_trades": [],
+        "failed_negotiations": 0,
         "deadline_at": datetime.now(timezone.utc) + timedelta(seconds=5),
     }
 
@@ -118,6 +124,99 @@ def test_decide_view_only_advertises_actions_backed_by_frozen_assets():
     )
     assert empty.limits.allowed_actions == ["pass"]
     assert empty.limits.allowed_goods == []
+
+
+def test_decide_view_links_authoritative_history_and_round_context():
+    context = _decide_context(
+        cash_atomic=17_500_000,
+        holdings={"grain": 1, "iron": 0, "warhorse": 0, "gems": 1},
+    )
+    context.update(
+        {
+            "round_id": "round-2",
+            "round_index": 2,
+            "round_count": 5,
+            "rounds_remaining": 3,
+            "failed_negotiations": 2,
+            "completed_actions": [
+                {
+                    "round_id": "round-1",
+                    "action": {
+                        "action": "buy",
+                        "good": "grain",
+                        "limitPrice": "2.000000",
+                    },
+                }
+            ],
+            "completed_trades": [
+                {
+                    "round_id": "round-1",
+                    "negotiation_id": "negotiation-1",
+                    "role": "buyer",
+                    "good": "grain",
+                    "quantity": 1,
+                    "price_atomic": 1_750_000,
+                }
+            ],
+            "previous_round_liquidity": {
+                "schemaVersion": "arena.market-liquidity.v1",
+                "roundId": "round-1",
+                "roundIndex": 1,
+                "participantCount": 4,
+                "intentCount": 3,
+                "passCount": 1,
+                "oppositeSideCapacity": 1,
+                "priceCompatibleCapacity": 1,
+                "priceCompatibilityGap": 0,
+                "minimumUnmatchedIntentCount": 1,
+                "byGood": {
+                    "grain": {
+                        "buyIntentCount": 1,
+                        "sellIntentCount": 1,
+                        "oppositeSideCapacity": 1,
+                        "priceCompatibleCapacity": 1,
+                    },
+                    "iron": {
+                        "buyIntentCount": 0,
+                        "sellIntentCount": 0,
+                        "oppositeSideCapacity": 0,
+                        "priceCompatibleCapacity": 0,
+                    },
+                    "warhorse": {
+                        "buyIntentCount": 0,
+                        "sellIntentCount": 0,
+                        "oppositeSideCapacity": 0,
+                        "priceCompatibleCapacity": 0,
+                    },
+                    "gems": {
+                        "buyIntentCount": 0,
+                        "sellIntentCount": 1,
+                        "oppositeSideCapacity": 0,
+                        "priceCompatibleCapacity": 0,
+                    },
+                },
+            },
+        }
+    )
+
+    view = PawnhouseAgentRuntimeCoordinator._decide_view(context)
+    wire = view.model_dump(mode="json", by_alias=True)
+
+    assert wire["roundCount"] == 5
+    assert wire["roundsRemaining"] == 3
+    assert wire["reputation"] == {"failedNegotiations": 2}
+    assert wire["completedActions"][0]["roundId"] == "round-1"
+    assert wire["completedTrades"] == [
+        {
+            "roundId": "round-1",
+            "negotiationId": "negotiation-1",
+            "role": "buyer",
+            "good": "grain",
+            "quantity": 1,
+            "price": "1.750000",
+        }
+    ]
+    assert wire["previousRoundLiquidity"]["roundIndex"] == 1
 
 
 def test_agent_market_intent_survives_the_full_sequential_protocol_budget():
@@ -224,6 +323,8 @@ class _AgentMarketPawnhouse:
                 "game_id": "game-1",
                 "round_id": "round-1",
                 "round_index": 1,
+                "round_count": 5,
+                "rounds_remaining": 4,
                 "deadline_at": deadline,
                 "participant_id": "participant-1",
                 "buyer_intent_id": "buyer-intent-1",
@@ -241,6 +342,7 @@ class _AgentMarketPawnhouse:
                         "quantity": 1,
                         "public_price_atomic": 1_900_000,
                         "expires_at": deadline + timedelta(seconds=5),
+                        "failed_negotiations": 2,
                     }
                 ],
                 "events": [],
@@ -255,6 +357,8 @@ class _AgentMarketPawnhouse:
                 "game_id": "game-1",
                 "round_id": "round-1",
                 "round_index": 1,
+                "round_count": 5,
+                "rounds_remaining": 4,
                 "deadline_at": deadline,
                 "participant_id": "participant-2",
                 "seller_intent_id": "seller-intent-1",

@@ -446,8 +446,17 @@ patch 必须丢弃；timeout、rejected、defaulted 和 late 同样不得推进 
 
 ### Decide
 
-输入包含当前公开行情/事件、自己的现金/持仓/谈崩次数、允许货物、精度规则和
-绝对 deadline，不包含对手私有资产、策略、Provider、Token 或 Runtime 日志。
+输入包含当前公开行情/事件、`roundIndex / roundCount / roundsRemaining`、自己的
+现金/持仓/真实谈崩次数、过去已应用动作、仅在 `inventory_committed` 后成立的
+历史成交、上一回合的 `arena.market-liquidity.v1` 公开流动性摘要、允许货物、
+精度规则和绝对 deadline。流动性摘要只包含 participant/Intent/pass、按商品方向
+数量、同商品反向容量和限价兼容量，不包含任一 Agent identity 或私有限价。
+输入不包含对手私有资产、策略、Provider、Token 或 Runtime 日志。
+
+这些字段属于同一不可变 Task snapshot：Hosted 与 Connector 读取同一业务输入，
+Task retry、Worker 重启和 Connector reconnect 只能恢复原 `inputHash`，不得重读
+后来变化的行情、资产、信誉或历史。旧 `arena.agent-task.v1` 记录允许缺少后续增加
+的可选回合字段；当前生产协调器创建的新 Task 必须填充它们。
 
 合法候选动作是严格 union：
 

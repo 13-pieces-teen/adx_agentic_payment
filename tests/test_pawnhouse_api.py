@@ -137,6 +137,38 @@ class _Repository:
             "schemaVersion": "arena.current-game.v1",
         }
 
+    async def game_owner_state(self, *, game_id, owner_user_id):
+        return {
+            "gameId": game_id,
+            "participantId": f"gp:{game_id}:agent-1",
+            "agentId": "agent-1",
+            "displayName": "Merchant Fox",
+            "gamePhase": "completed",
+            "participantStatus": "completed",
+            "initialPortfolio": {
+                "cashAtomic": "20000000",
+                "holdings": {"grain": 0},
+            },
+            "currentPortfolio": {
+                "cashAtomic": "18000000",
+                "holdings": {"grain": 1},
+            },
+            "finalPortfolio": {
+                "cashAtomic": "18000000",
+                "holdings": {"grain": 1},
+            },
+            "roundPortfolios": [],
+            "reputation": {
+                "tradeAttempts": 1,
+                "settledTrades": 1,
+                "successRateBps": 10000,
+                "failedNegotiations": 0,
+            },
+            "ranking": {"rank": 1, "netWorthAtomic": "22000000"},
+            "schemaVersion": "arena.game-owner-state.v1",
+            "ownerUserIdObserved": owner_user_id,
+        }
+
     async def current_game_join_preflight(self, **values):
         self.preflights.append(values)
         return {
@@ -363,6 +395,23 @@ def test_current_game_projection_marks_authenticated_owner_joined() -> None:
 
     assert response.status_code == 200
     assert response.json()["game"]["joinedByMe"] is True
+
+
+def test_owner_game_projection_is_authenticated_and_private() -> None:
+    client, _ = _authenticated_client()
+    client.cookies.set("adx_session", "signed-session")
+
+    response = client.get("/api/v1/games/game_current/me")
+
+    assert response.status_code == 200
+    assert response.json()["participantId"] == (
+        "gp:game_current:agent-1"
+    )
+    assert response.json()["initialPortfolio"]["cashAtomic"] == "20000000"
+    assert response.json()["finalPortfolio"]["holdings"] == {"grain": 1}
+    assert response.json()["ownerUserIdObserved"] == "user-local"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["vary"] == "Cookie"
 
 
 def test_current_game_returns_explicit_not_found_when_pointer_is_empty() -> None:

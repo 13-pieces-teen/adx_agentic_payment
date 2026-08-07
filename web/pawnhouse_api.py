@@ -729,6 +729,30 @@ def create_pawnhouse_participation_router(
 
     router = APIRouter(tags=["pawnhouse-participation"])
 
+    @router.get("/api/v1/games/{game_id}/me")
+    async def game_owner_state(
+        game_id: _Id,
+        request: Request,
+        response: Response,
+    ) -> dict[str, object]:
+        try:
+            principal = await auth.authenticate(request)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from None
+        try:
+            value = await repository.game_owner_state(
+                game_id=game_id,
+                owner_user_id=principal.user_id,
+            )
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Cookie"
+        return value
+
     @router.post("/api/v1/games/{game_id}/join-preflight")
     async def join_preflight(
         game_id: _Id,

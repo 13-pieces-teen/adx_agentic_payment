@@ -2542,7 +2542,7 @@ class PostgresPawnhouseRepository:
                 """
                 SELECT
                     r.round_id, r.round_index, r.phase_deadline_at,
-                    g.action_timeout_ms
+                    g.action_timeout_ms, g.round_count
                 FROM arena402.rounds AS r
                 JOIN arena402.games AS g ON g.game_id = r.game_id
                 WHERE r.game_id = $1
@@ -2585,6 +2585,105 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            completed_action_rows = await connection.fetch(
+                """
+                SELECT
+                    applied.game_agent_id,
+                    applied.round_id,
+                    applied.applied_action,
+                    previous_round.round_index,
+                    applied.authoritative_entered_at
+                FROM public.arena_applied_agent_actions AS applied
+                JOIN arena402.rounds AS previous_round
+                  ON previous_round.round_id = applied.round_id
+                 AND previous_round.game_id = applied.game_id
+                WHERE applied.game_id = $1
+                  AND applied.task_kind IN (
+                      'arena.decide',
+                      'arena.market.intent'
+                  )
+                  AND applied.application_outcome IN (
+                      'candidate',
+                      'default_pass'
+                  )
+                  AND applied.applied_action IS NOT NULL
+                  AND previous_round.round_index < $2
+                ORDER BY
+                    previous_round.round_index,
+                    applied.authoritative_entered_at,
+                    applied.task_id
+                """,
+                game_id,
+                int(round_row["round_index"]),
+            )
+            completed_trade_rows = await connection.fetch(
+                """
+                SELECT
+                    intent.buyer_participant_id,
+                    intent.seller_participant_id,
+                    intent.round_id,
+                    intent.negotiation_id,
+                    intent.good_id,
+                    intent.quantity,
+                    intent.unit_price_atomic,
+                    previous_round.round_index,
+                    intent.completed_at
+                FROM arena402.settlement_intents AS intent
+                JOIN arena402.rounds AS previous_round
+                  ON previous_round.round_id = intent.round_id
+                 AND previous_round.game_id = intent.game_id
+                WHERE intent.game_id = $1
+                  AND intent.status = 'inventory_committed'
+                  AND previous_round.round_index < $2
+                ORDER BY
+                    previous_round.round_index,
+                    intent.completed_at,
+                    intent.settlement_intent_id
+                """,
+                game_id,
+                int(round_row["round_index"]),
+            )
+            failed_negotiation_rows = await connection.fetch(
+                """
+                WITH participant_failures AS (
+                    SELECT buyer_participant_id AS participant_id
+                    FROM arena402.pairings
+                    WHERE game_id = $1
+                      AND status IN ('rejected', 'timeout')
+                    UNION ALL
+                    SELECT seller_participant_id AS participant_id
+                    FROM arena402.pairings
+                    WHERE game_id = $1
+                      AND status IN ('rejected', 'timeout')
+                )
+                SELECT participant_id, count(*) AS failed_negotiations
+                FROM participant_failures
+                GROUP BY participant_id
+                """,
+                game_id,
+            )
+            previous_liquidity_row = await connection.fetchrow(
+                """
+                SELECT
+                    event.round_id,
+                    previous_round.round_index,
+                    event.public_payload
+                FROM arena402.game_events AS event
+                JOIN arena402.rounds AS previous_round
+                  ON previous_round.round_id = event.round_id
+                 AND previous_round.game_id = event.game_id
+                WHERE event.game_id = $1
+                  AND event.event_type = 'market.liquidity_summarized'
+                  AND previous_round.round_index < $2
+                ORDER BY
+                    previous_round.round_index DESC,
+                    event.occurred_at DESC,
+                    event.event_id DESC
+                LIMIT 1
+                """,
+                game_id,
+                int(round_row["round_index"]),
+            )
             activity_rows = await connection.fetch(
                 """
                 WITH decision_stats AS (
@@ -2602,25 +2701,34 @@ class PostgresPawnhouseRepository:
                      AND previous_round.game_id = e.game_id
                     WHERE e.game_id = $1
                       AND e.event_type = 'decision.applied'
-                      AND previous_round.round_index < (
+                      AND previous_round.round_index = (
                           SELECT current_round
                           FROM arena402.games
                           WHERE game_id = $1
-                      )
+                      ) - 1
                     GROUP BY e.public_payload->>'good'
                 ),
-                trade_stats AS (
+                previous_trade_stats AS (
                     SELECT
                         i.good_id,
-                        COUNT(*) AS volume,
-                        (
-                            ARRAY_AGG(
-                                i.unit_price_atomic
-                                ORDER BY r.round_index DESC,
-                                         i.completed_at DESC,
-                                         i.settlement_intent_id DESC
-                            )
-                        )[1] AS last_clearing_price_atomic
+                        COUNT(*) AS volume
+                    FROM arena402.settlement_intents AS i
+                    JOIN arena402.rounds AS r
+                      ON r.round_id = i.round_id
+                     AND r.game_id = i.game_id
+                    WHERE i.game_id = $1
+                      AND i.status = 'inventory_committed'
+                      AND r.round_index = (
+                          SELECT current_round
+                          FROM arena402.games
+                          WHERE game_id = $1
+                      ) - 1
+                    GROUP BY i.good_id
+                ),
+                latest_trade AS (
+                    SELECT DISTINCT ON (i.good_id)
+                        i.good_id,
+                        i.unit_price_atomic AS last_clearing_price_atomic
                     FROM arena402.settlement_intents AS i
                     JOIN arena402.rounds AS r
                       ON r.round_id = i.round_id
@@ -2632,17 +2740,24 @@ class PostgresPawnhouseRepository:
                           FROM arena402.games
                           WHERE game_id = $1
                       )
-                    GROUP BY i.good_id
+                    ORDER BY
+                        i.good_id,
+                        r.round_index DESC,
+                        i.completed_at DESC,
+                        i.settlement_intent_id DESC
                 )
                 SELECT
                     gg.good_id,
                     COALESCE(ds.buy_count, 0) AS buy_count,
                     COALESCE(ds.sell_count, 0) AS sell_count,
-                    COALESCE(ts.volume, 0) AS volume,
-                    ts.last_clearing_price_atomic
+                    COALESCE(pts.volume, 0) AS volume,
+                    latest.last_clearing_price_atomic
                 FROM arena402.game_goods AS gg
                 LEFT JOIN decision_stats AS ds ON ds.good_id = gg.good_id
-                LEFT JOIN trade_stats AS ts ON ts.good_id = gg.good_id
+                LEFT JOIN previous_trade_stats AS pts
+                  ON pts.good_id = gg.good_id
+                LEFT JOIN latest_trade AS latest
+                  ON latest.good_id = gg.good_id
                 WHERE gg.game_id = $1
                 ORDER BY gg.good_id
                 """,
@@ -2667,6 +2782,59 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            actions_by_participant: dict[str, list[dict[str, object]]] = {}
+            for row in completed_action_rows:
+                raw_action = row["applied_action"]
+                action = (
+                    json.loads(raw_action)
+                    if isinstance(raw_action, str)
+                    else dict(raw_action)
+                )
+                actions_by_participant.setdefault(
+                    str(row["game_agent_id"]), []
+                ).append(
+                    {
+                        "round_id": str(row["round_id"]),
+                        "round_index": int(row["round_index"]),
+                        "action": action,
+                    }
+                )
+            trades_by_participant: dict[str, list[dict[str, object]]] = {}
+            for row in completed_trade_rows:
+                for participant_key, role in (
+                    ("buyer_participant_id", "buyer"),
+                    ("seller_participant_id", "seller"),
+                ):
+                    trades_by_participant.setdefault(
+                        str(row[participant_key]), []
+                    ).append(
+                        {
+                            "round_id": str(row["round_id"]),
+                            "round_index": int(row["round_index"]),
+                            "negotiation_id": str(row["negotiation_id"]),
+                            "role": role,
+                            "good": str(row["good_id"]),
+                            "quantity": int(row["quantity"]),
+                            "price_atomic": int(row["unit_price_atomic"]),
+                        }
+                    )
+            failures_by_participant = {
+                str(row["participant_id"]): int(row["failed_negotiations"])
+                for row in failed_negotiation_rows
+            }
+            previous_round_liquidity: dict[str, object] | None = None
+            if previous_liquidity_row is not None:
+                raw_payload = previous_liquidity_row["public_payload"]
+                payload = (
+                    json.loads(raw_payload)
+                    if isinstance(raw_payload, str)
+                    else dict(raw_payload)
+                )
+                previous_round_liquidity = {
+                    **payload,
+                    "roundId": str(previous_liquidity_row["round_id"]),
+                    "roundIndex": int(previous_liquidity_row["round_index"]),
+                }
             contexts: list[dict[str, object]] = []
             for participant in participants:
                 holding_rows = await connection.fetch(
@@ -2683,6 +2851,11 @@ class PostgresPawnhouseRepository:
                         "game_id": game_id,
                         "round_id": round_row["round_id"],
                         "round_index": round_row["round_index"],
+                        "round_count": int(round_row["round_count"]),
+                        "rounds_remaining": (
+                            int(round_row["round_count"])
+                            - int(round_row["round_index"])
+                        ),
                         "deadline_at": round_row["phase_deadline_at"],
                         "action_timeout_ms": int(
                             round_row["action_timeout_ms"]
@@ -2743,6 +2916,24 @@ class PostgresPawnhouseRepository:
                             }
                             for row in activity_rows
                         ],
+                        "previous_round_liquidity": (
+                            None
+                            if previous_round_liquidity is None
+                            else dict(previous_round_liquidity)
+                        ),
+                        "completed_actions": list(
+                            actions_by_participant.get(
+                                str(participant["game_participant_id"]), []
+                            )
+                        ),
+                        "completed_trades": list(
+                            trades_by_participant.get(
+                                str(participant["game_participant_id"]), []
+                            )
+                        ),
+                        "failed_negotiations": failures_by_participant.get(
+                            str(participant["game_participant_id"]), 0
+                        ),
                         "events": [
                             {
                                 "event_id": row["event_id"],
@@ -2988,7 +3179,10 @@ class PostgresPawnhouseRepository:
         async with pool.acquire() as connection:
             round_row = await connection.fetchrow(
                 """
-                SELECT round.round_index, round.phase_deadline_at
+                SELECT
+                    round.round_index,
+                    round.phase_deadline_at,
+                    game.round_count
                 FROM arena402.rounds AS round
                 JOIN arena402.games AS game
                   ON game.game_id = round.game_id
@@ -3033,7 +3227,19 @@ class PostgresPawnhouseRepository:
                     intent.*,
                     participant.agent_id,
                     COALESCE(agent.name, participant.agent_id)
-                        AS display_name
+                        AS display_name,
+                    (
+                        SELECT count(*)
+                        FROM arena402.pairings AS prior_pairing
+                        WHERE prior_pairing.game_id = intent.game_id
+                          AND prior_pairing.status IN ('rejected', 'timeout')
+                          AND (
+                              prior_pairing.buyer_participant_id =
+                                  intent.game_participant_id
+                              OR prior_pairing.seller_participant_id =
+                                  intent.game_participant_id
+                          )
+                    ) AS failed_negotiations
                 FROM arena402.market_intents AS intent
                 JOIN arena402.game_participants AS participant
                   ON participant.game_participant_id =
@@ -3050,6 +3256,17 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
                 round_id,
+            )
+            event_rows = await connection.fetch(
+                """
+                SELECT event_id, public_snapshot, revealed_at
+                FROM arena402.event_occurrences
+                WHERE game_id = $1
+                  AND round_index <= $2
+                ORDER BY round_index, event_id
+                """,
+                game_id,
+                int(round_row["round_index"]),
             )
         contexts: list[dict[str, object]] = []
         for buyer in buyers:
@@ -3072,6 +3289,9 @@ class PostgresPawnhouseRepository:
                         "quantity": int(seller["quantity"]),
                         "public_price_atomic": int(
                             seller["public_price_atomic"]
+                        ),
+                        "failed_negotiations": int(
+                            seller["failed_negotiations"]
                         ),
                         "expires_at": seller["expires_at"],
                     }
@@ -3149,6 +3369,11 @@ class PostgresPawnhouseRepository:
                     "game_id": game_id,
                     "round_id": round_id,
                     "round_index": int(round_row["round_index"]),
+                    "round_count": int(round_row["round_count"]),
+                    "rounds_remaining": (
+                        int(round_row["round_count"])
+                        - int(round_row["round_index"])
+                    ),
                     "deadline_at": round_row["phase_deadline_at"],
                     "participant_id": str(
                         buyer["game_participant_id"]
@@ -3187,7 +3412,18 @@ class PostgresPawnhouseRepository:
                         }
                         for prior in prior_rows
                     ],
-                    "events": [],
+                    "events": [
+                        {
+                            "event_id": row["event_id"],
+                            "payload": (
+                                json.loads(row["public_snapshot"])
+                                if isinstance(row["public_snapshot"], str)
+                                else dict(row["public_snapshot"])
+                            ),
+                            "occurred_at": row["revealed_at"],
+                        }
+                        for row in event_rows
+                    ],
                     "config_snapshot": (
                         json.loads(config)
                         if isinstance(config, str)
@@ -3211,7 +3447,8 @@ class PostgresPawnhouseRepository:
             SELECT
                 round.round_index,
                 round.phase_deadline_at,
-                game.action_timeout_ms
+                game.action_timeout_ms,
+                game.round_count
             FROM arena402.rounds AS round
             JOIN arena402.games AS game
               ON game.game_id = round.game_id
@@ -3281,6 +3518,17 @@ class PostgresPawnhouseRepository:
                 round_id,
             )
         }
+        event_rows = await pool.fetch(
+            """
+            SELECT event_id, public_snapshot, revealed_at
+            FROM arena402.event_occurrences
+            WHERE game_id = $1
+              AND round_index <= $2
+            ORDER BY round_index, event_id
+            """,
+            game_id,
+            int(round_row["round_index"]),
+        )
         contexts: list[dict[str, object]] = []
         for buyer in buyers:
             prior_rows = await pool.fetch(
@@ -3329,6 +3577,11 @@ class PostgresPawnhouseRepository:
                     "game_id": game_id,
                     "round_id": round_id,
                     "round_index": int(round_row["round_index"]),
+                    "round_count": int(round_row["round_count"]),
+                    "rounds_remaining": (
+                        int(round_row["round_count"])
+                        - int(round_row["round_index"])
+                    ),
                     "deadline_at": min(
                         round_row["phase_deadline_at"],
                         buyer["deadline_at"],
@@ -3374,7 +3627,18 @@ class PostgresPawnhouseRepository:
                         }
                         for prior in prior_rows
                     ],
-                    "events": [],
+                    "events": [
+                        {
+                            "event_id": row["event_id"],
+                            "payload": (
+                                json.loads(row["public_snapshot"])
+                                if isinstance(row["public_snapshot"], str)
+                                else dict(row["public_snapshot"])
+                            ),
+                            "occurred_at": row["revealed_at"],
+                        }
+                        for row in event_rows
+                    ],
                     "config_snapshot": (
                         json.loads(config)
                         if isinstance(config, str)
@@ -3399,7 +3663,8 @@ class PostgresPawnhouseRepository:
                 SELECT
                     round.round_index,
                     round.phase_deadline_at,
-                    game.action_timeout_ms
+                    game.action_timeout_ms,
+                    game.round_count
                 FROM arena402.rounds AS round
                 JOIN arena402.games AS game
                   ON game.game_id = round.game_id
@@ -3445,6 +3710,17 @@ class PostgresPawnhouseRepository:
                 game_id,
                 round_id,
             )
+            event_rows = await connection.fetch(
+                """
+                SELECT event_id, public_snapshot, revealed_at
+                FROM arena402.event_occurrences
+                WHERE game_id = $1
+                  AND round_index <= $2
+                ORDER BY round_index, event_id
+                """,
+                game_id,
+                int(round_row["round_index"]),
+            )
             contexts: list[dict[str, object]] = []
             for seller in sellers:
                 requests = await connection.fetch(
@@ -3479,6 +3755,11 @@ class PostgresPawnhouseRepository:
                         "game_id": game_id,
                         "round_id": round_id,
                         "round_index": int(round_row["round_index"]),
+                        "round_count": int(round_row["round_count"]),
+                        "rounds_remaining": (
+                            int(round_row["round_count"])
+                            - int(round_row["round_index"])
+                        ),
                         "deadline_at": min(
                             round_row["phase_deadline_at"],
                             datetime.now(timezone.utc)
@@ -3520,7 +3801,18 @@ class PostgresPawnhouseRepository:
                             }
                             for row in requests
                         ],
-                        "events": [],
+                        "events": [
+                            {
+                                "event_id": row["event_id"],
+                                "payload": (
+                                    json.loads(row["public_snapshot"])
+                                    if isinstance(row["public_snapshot"], str)
+                                    else dict(row["public_snapshot"])
+                                ),
+                                "occurred_at": row["revealed_at"],
+                            }
+                            for row in event_rows
+                        ],
                         "config_snapshot": (
                             json.loads(config)
                             if isinstance(config, str)
@@ -5203,7 +5495,21 @@ class PostgresPawnhouseRepository:
             )
             counterparty = await connection.fetchrow(
                 """
-                SELECT p.agent_id, a.name
+                SELECT
+                    p.agent_id,
+                    a.name,
+                    (
+                        SELECT count(*)
+                        FROM arena402.pairings AS prior_pairing
+                        WHERE prior_pairing.game_id = p.game_id
+                          AND prior_pairing.status IN ('rejected', 'timeout')
+                          AND (
+                              prior_pairing.buyer_participant_id =
+                                  p.game_participant_id
+                              OR prior_pairing.seller_participant_id =
+                                  p.game_participant_id
+                          )
+                    ) AS failed_negotiations
                 FROM arena402.game_participants AS p
                 LEFT JOIN public.arena_agents AS a
                   ON a.agent_id = p.agent_id
@@ -5239,14 +5545,19 @@ class PostgresPawnhouseRepository:
                 """,
                 negotiation["pairing_id"],
             )
-            round_index = await connection.fetchval(
+            round_context = await connection.fetchrow(
                 """
-                SELECT round_index
-                FROM arena402.rounds
-                WHERE round_id = $1
+                SELECT round.round_index, game.round_count
+                FROM arena402.rounds AS round
+                JOIN arena402.games AS game
+                  ON game.game_id = round.game_id
+                WHERE round.round_id = $1
                 """,
                 negotiation["round_id"],
             )
+            if round_context is None:
+                raise PawnhouseRepositoryError("negotiation_round_missing")
+            round_index = int(round_context["round_index"])
             event_rows = await connection.fetch(
                 """
                 SELECT event_id, public_snapshot, revealed_at
@@ -5271,11 +5582,18 @@ class PostgresPawnhouseRepository:
             "game_id": negotiation["game_id"],
             "round_id": negotiation["round_id"],
             "round_index": round_index,
+            "round_count": int(round_context["round_count"]),
+            "rounds_remaining": (
+                int(round_context["round_count"]) - round_index
+            ),
             "negotiation_id": negotiation_id,
             "participant_id": participant_id,
             "counterparty_id": counterparty_id,
             "counterparty_agent_id": counterparty["agent_id"],
             "counterparty_name": counterparty["name"] or "Arena Agent",
+            "counterparty_failed_negotiations": int(
+                counterparty["failed_negotiations"]
+            ),
             "role": role,
             "good": good_id,
             "quantity": int(pairing["quantity"]),
@@ -7972,24 +8290,26 @@ class PostgresPawnhouseRepository:
             """,
             game["game_id"],
         )
-        joined_by_me = False
+        owner_participant_id: str | None = None
         if owner_user_id is not None:
-            joined_by_me = bool(
-                await pool.fetchval(
+            raw_owner_participant_id = await pool.fetchval(
                     """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM arena402.game_participants
-                        WHERE game_id = $1
-                          AND user_id = $2
-                          AND status <> 'cancelled'
-                          AND readiness <> 'withdrawn'
-                    )
+                    SELECT game_participant_id
+                    FROM arena402.game_participants
+                    WHERE game_id = $1
+                      AND user_id = $2
+                      AND status <> 'cancelled'
+                      AND readiness <> 'withdrawn'
                     """,
                     game["game_id"],
                     owner_user_id,
                 )
+            owner_participant_id = (
+                None
+                if raw_owner_participant_id is None
+                else str(raw_owner_participant_id)
             )
+        joined_by_me = owner_participant_id is not None
 
         phase = str(game["phase"])
         if phase in {"registration", "portfolio_setup", "portfolio_locked"}:
@@ -8114,6 +8434,7 @@ class PostgresPawnhouseRepository:
                     else None
                 ),
                 "joinedByMe": joined_by_me,
+                "myParticipantId": owner_participant_id,
                 "participants": public_participants,
                 "matchmaking": {
                     "targetSeats": int(game["start_threshold"]),
@@ -8537,6 +8858,179 @@ class PostgresPawnhouseRepository:
             "schemaVersion": "arena.game-join-preflight.v1",
         }
 
+    async def game_owner_state(
+        self,
+        *,
+        game_id: str,
+        owner_user_id: str,
+    ) -> dict[str, object]:
+        """Return one authenticated participant's Arena-owned portfolio view."""
+
+        pool = self._require_pool()
+        participant = await pool.fetchrow(
+            """
+            SELECT
+                participant.game_participant_id,
+                participant.agent_id,
+                coalesce(
+                    game_agent.config_snapshot ->> 'display_name',
+                    agent.name,
+                    participant.agent_id
+                ) AS display_name,
+                participant.status,
+                game.phase AS game_phase,
+                balance.initial_cash_atomic,
+                balance.cash_atomic,
+                ranking.rank,
+                ranking.net_worth_atomic,
+                ranking.tier,
+                ranking.calculated_at
+            FROM arena402.game_participants AS participant
+            JOIN arena402.games AS game
+              ON game.game_id = participant.game_id
+            JOIN arena402.balances AS balance
+              ON balance.game_participant_id =
+                 participant.game_participant_id
+            LEFT JOIN public.game_agents AS game_agent
+              ON game_agent.game_agent_id =
+                 participant.game_participant_id
+            LEFT JOIN public.arena_agents AS agent
+              ON agent.agent_id = participant.agent_id
+            LEFT JOIN arena402.rankings AS ranking
+              ON ranking.game_id = participant.game_id
+             AND ranking.game_participant_id =
+                 participant.game_participant_id
+            WHERE participant.game_id = $1
+              AND participant.user_id = $2
+              AND participant.status <> 'cancelled'
+              AND participant.readiness <> 'withdrawn'
+            """,
+            game_id,
+            owner_user_id,
+        )
+        if participant is None:
+            raise PawnhouseRepositoryError("game_participant_not_found")
+        participant_id = str(participant["game_participant_id"])
+        holding_rows = await pool.fetch(
+            """
+            SELECT good_id, initial_quantity, quantity
+            FROM arena402.holdings
+            WHERE game_participant_id = $1
+            ORDER BY good_id
+            """,
+            participant_id,
+        )
+        snapshot_rows = await pool.fetch(
+            """
+            SELECT
+                round_id,
+                round_index,
+                cash_atomic,
+                holdings_snapshot,
+                captured_at
+            FROM arena402.round_portfolio_snapshots
+            WHERE game_id = $1
+              AND game_participant_id = $2
+            ORDER BY round_index
+            """,
+            game_id,
+            participant_id,
+        )
+        reputation = await pool.fetchrow(
+            """
+            SELECT
+                count(*) AS trade_attempts,
+                count(*) FILTER (
+                    WHERE status = 'settled'
+                ) AS settled_trades,
+                count(*) FILTER (
+                    WHERE status IN ('rejected', 'timeout')
+                ) AS failed_negotiations
+            FROM arena402.pairings
+            WHERE game_id = $1
+              AND (
+                  buyer_participant_id = $2
+                  OR seller_participant_id = $2
+              )
+            """,
+            game_id,
+            participant_id,
+        )
+        assert reputation is not None
+        trade_attempts = int(reputation["trade_attempts"])
+        settled_trades = int(reputation["settled_trades"])
+        initial_portfolio = {
+            "cashAtomic": str(int(participant["initial_cash_atomic"])),
+            "holdings": {
+                str(row["good_id"]): int(row["initial_quantity"])
+                for row in holding_rows
+            },
+        }
+        current_portfolio = {
+            "cashAtomic": str(int(participant["cash_atomic"])),
+            "holdings": {
+                str(row["good_id"]): int(row["quantity"])
+                for row in holding_rows
+            },
+        }
+        ranking = (
+            None
+            if participant["rank"] is None
+            else {
+                "rank": int(participant["rank"]),
+                "netWorthAtomic": str(
+                    int(participant["net_worth_atomic"])
+                ),
+                "tier": str(participant["tier"]),
+                "calculatedAt": participant[
+                    "calculated_at"
+                ].isoformat(),
+            }
+        )
+        return {
+            "gameId": game_id,
+            "participantId": participant_id,
+            "agentId": str(participant["agent_id"]),
+            "displayName": str(participant["display_name"]),
+            "gamePhase": str(participant["game_phase"]),
+            "participantStatus": str(participant["status"]),
+            "initialPortfolio": initial_portfolio,
+            "currentPortfolio": current_portfolio,
+            "finalPortfolio": (
+                current_portfolio
+                if str(participant["game_phase"]) == "completed"
+                else None
+            ),
+            "roundPortfolios": [
+                {
+                    "roundId": str(row["round_id"]),
+                    "roundIndex": int(row["round_index"]),
+                    "cashAtomic": str(int(row["cash_atomic"])),
+                    "holdings": (
+                        json.loads(row["holdings_snapshot"])
+                        if isinstance(row["holdings_snapshot"], str)
+                        else dict(row["holdings_snapshot"])
+                    ),
+                    "capturedAt": row["captured_at"].isoformat(),
+                }
+                for row in snapshot_rows
+            ],
+            "reputation": {
+                "tradeAttempts": trade_attempts,
+                "settledTrades": settled_trades,
+                "successRateBps": (
+                    None
+                    if trade_attempts == 0
+                    else settled_trades * 10_000 // trade_attempts
+                ),
+                "failedNegotiations": int(
+                    reputation["failed_negotiations"]
+                ),
+            },
+            "ranking": ranking,
+            "schemaVersion": "arena.game-owner-state.v1",
+        }
+
     async def game_state(self, game_id: str) -> dict[str, object]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -8647,6 +9141,160 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            price_snapshots = await connection.fetch(
+                """
+                SELECT
+                    snapshot.round_index,
+                    snapshot.good_id,
+                    snapshot.market_price_atomic,
+                    coalesce(
+                        (
+                            SELECT previous.market_price_atomic
+                            FROM arena402.price_snapshots AS previous
+                            WHERE previous.game_id = snapshot.game_id
+                              AND previous.good_id = snapshot.good_id
+                              AND previous.round_index < snapshot.round_index
+                            ORDER BY previous.round_index DESC
+                            LIMIT 1
+                        ),
+                        game_good.initial_price_atomic
+                    ) AS previous_market_price_atomic,
+                    snapshot.final_price_atomic,
+                    snapshot.supply_index_bps,
+                    snapshot.bubble_premium_bps,
+                    snapshot.created_at,
+                    count(intent.settlement_intent_id) FILTER (
+                        WHERE intent.status = 'inventory_committed'
+                    ) AS committed_trade_count,
+                    (
+                        array_agg(
+                            intent.unit_price_atomic
+                            ORDER BY
+                                intent.completed_at DESC,
+                                intent.settlement_intent_id DESC
+                        ) FILTER (
+                            WHERE intent.status = 'inventory_committed'
+                        )
+                    )[1] AS last_clearing_price_atomic
+                FROM arena402.price_snapshots AS snapshot
+                JOIN arena402.game_goods AS game_good
+                  ON game_good.game_id = snapshot.game_id
+                 AND game_good.good_id = snapshot.good_id
+                LEFT JOIN arena402.rounds AS round
+                  ON round.game_id = snapshot.game_id
+                 AND round.round_index = snapshot.round_index
+                LEFT JOIN arena402.settlement_intents AS intent
+                  ON intent.game_id = snapshot.game_id
+                 AND intent.round_id = round.round_id
+                 AND intent.good_id = snapshot.good_id
+                WHERE snapshot.game_id = $1
+                GROUP BY
+                    snapshot.game_id,
+                    snapshot.round_index,
+                    snapshot.good_id,
+                    snapshot.market_price_atomic,
+                    game_good.initial_price_atomic,
+                    snapshot.final_price_atomic,
+                    snapshot.supply_index_bps,
+                    snapshot.bubble_premium_bps,
+                    snapshot.created_at
+                ORDER BY snapshot.round_index, snapshot.good_id
+                """,
+                game_id,
+            )
+            live_rankings = await connection.fetch(
+                """
+                WITH valued AS (
+                    SELECT
+                        participant.game_participant_id,
+                        participant.agent_id,
+                        coalesce(
+                            game_agent.config_snapshot ->> 'display_name',
+                            agent.name,
+                            participant.agent_id
+                        ) AS display_name,
+                        balance.cash_atomic
+                        + coalesce(
+                            sum(
+                                holding.quantity
+                                * coalesce(
+                                    latest_price.market_price_atomic,
+                                    game_good.initial_price_atomic
+                                )
+                            ),
+                            0
+                        ) AS net_worth_atomic
+                    FROM arena402.game_participants AS participant
+                    JOIN arena402.balances AS balance
+                      ON balance.game_participant_id =
+                         participant.game_participant_id
+                    JOIN arena402.holdings AS holding
+                      ON holding.game_participant_id =
+                         participant.game_participant_id
+                     AND holding.game_id = participant.game_id
+                    JOIN arena402.game_goods AS game_good
+                      ON game_good.game_id = holding.game_id
+                     AND game_good.good_id = holding.good_id
+                    LEFT JOIN LATERAL (
+                        SELECT snapshot.market_price_atomic
+                        FROM arena402.price_snapshots AS snapshot
+                        WHERE snapshot.game_id = participant.game_id
+                          AND snapshot.good_id = holding.good_id
+                          AND snapshot.round_index <= $2
+                        ORDER BY snapshot.round_index DESC
+                        LIMIT 1
+                    ) AS latest_price ON TRUE
+                    LEFT JOIN public.game_agents AS game_agent
+                      ON game_agent.game_agent_id =
+                         participant.game_participant_id
+                    LEFT JOIN public.arena_agents AS agent
+                      ON agent.agent_id = participant.agent_id
+                    WHERE participant.game_id = $1
+                      AND participant.status <> 'cancelled'
+                    GROUP BY
+                        participant.game_participant_id,
+                        participant.agent_id,
+                        display_name,
+                        balance.cash_atomic
+                )
+                SELECT
+                    row_number() OVER (
+                        ORDER BY
+                            net_worth_atomic DESC,
+                            game_participant_id
+                    ) AS rank,
+                    game_participant_id,
+                    agent_id,
+                    display_name,
+                    net_worth_atomic
+                FROM valued
+                ORDER BY rank
+                """,
+                game_id,
+                int(game["current_round"]),
+            )
+            settlement_rows = await connection.fetch(
+                """
+                SELECT
+                    i.*,
+                    s.tx_hash,
+                    s.submission_source,
+                    a.approval_source,
+                    c.block_number,
+                    c.block_hash,
+                    c.confirmation_count
+                FROM arena402.settlement_intents AS i
+                LEFT JOIN arena402.settlement_submissions AS s
+                  ON s.settlement_intent_id = i.settlement_intent_id
+                LEFT JOIN arena402.settlement_approvals AS a
+                  ON a.settlement_intent_id = i.settlement_intent_id
+                LEFT JOIN arena402.settlement_confirmations AS c
+                  ON c.settlement_intent_id = i.settlement_intent_id
+                WHERE i.game_id = $1
+                ORDER BY i.created_at, i.settlement_intent_id
+                """,
+                game_id,
+            )
         return {
             "gameId": game["game_id"],
             "phase": game["phase"],
@@ -8722,6 +9370,48 @@ class PostgresPawnhouseRepository:
                     ),
                 }
                 for row in negotiations
+            ],
+            "settlements": [
+                self._settlement_public(row) for row in settlement_rows
+            ],
+            "priceSnapshots": [
+                {
+                    "roundIndex": int(row["round_index"]),
+                    "goodId": str(row["good_id"]),
+                    "marketPriceAtomic": str(
+                        int(row["market_price_atomic"])
+                    ),
+                    "previousMarketPriceAtomic": str(
+                        int(row["previous_market_price_atomic"])
+                    ),
+                    "eventImpliedFinalPriceAtomic": str(
+                        int(row["final_price_atomic"])
+                    ),
+                    "supplyIndexBps": int(row["supply_index_bps"]),
+                    "bubblePremiumBps": int(row["bubble_premium_bps"]),
+                    "priceKind": "event_reference",
+                    "committedTradeCount": int(
+                        row["committed_trade_count"]
+                    ),
+                    "lastClearingAtomic": (
+                        None
+                        if row["last_clearing_price_atomic"] is None
+                        else str(int(row["last_clearing_price_atomic"]))
+                    ),
+                    "createdAt": row["created_at"].isoformat(),
+                }
+                for row in price_snapshots
+            ],
+            "liveRankings": [
+                {
+                    "rank": int(row["rank"]),
+                    "participantId": str(row["game_participant_id"]),
+                    "agentId": str(row["agent_id"]),
+                    "displayName": str(row["display_name"]),
+                    "netWorthAtomic": str(int(row["net_worth_atomic"])),
+                    "valuationPriceKind": "latest_event_reference",
+                }
+                for row in live_rankings
             ],
             "finalPrices": {
                 str(row["good_id"]): str(int(row["price_atomic"]))
