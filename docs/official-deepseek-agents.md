@@ -165,5 +165,13 @@ not silently rewrite an already-running Official pool. Existing Agents are
 frozen to their joined Provider/config, and production cutover must happen
 between Games after the new LiteLLM-backed pool has validated `ready`.
 
+The maintained bootstrap and strategy-refresh commands now select the
+versioned liquidity treatment
+`arena.official-market-strategy.liquidity-v2`. The refresh reuses each
+Official Agent's validated provider credential and changes only the active
+strategy revision for future Game joins. Verify the Current Game has no
+participants before retiring it; a joined or running Game must retain its
+frozen strategy revisions.
+
 This setup does not broadcast a chain transaction. Settlement remains behind
 PaymentMandate validation, confirmation, and idempotent inventory commit.

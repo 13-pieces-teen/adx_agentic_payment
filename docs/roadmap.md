@@ -240,7 +240,9 @@
   P50/P95/P99 为 `9.1s/21.4s/28.1s`，Harness 退出码 0。前一复验局为
   126 completed、1 structured-output default、0 timeout、11 Deal，说明当前
   已达到受控线上评测门槛，但仍需多 seed 统计 default、成交随机性和调用成本，
-  尚不能关闭 D5a。生产切换应保留回滚点并单独验收。
+  尚不能关闭 D5a。生产 Official Agent 的 bootstrap/refresh 实现现已统一选择
+  `arena.official-market-strategy.liquidity-v2`，但只允许在局间刷新，已加入或
+  运行中的 Game 继续冻结旧 revision。生产切换仍应保留回滚点并单独验收。
 - [ ] D5b 容量：市场质量的功能正确性通过后，再完成 12/25/50/100 Agent 分档、
   每 Runtime/Task 至少 100 条真实终态样本、4 Facilitator shard 和
   timeout/公平性冻结。

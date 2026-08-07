@@ -17,13 +17,17 @@ from hosted_agent_control_plane.services import HostedAgentService
 from hosted_agent_runtime.production_providers import (
     build_production_capability_registry,
 )
-from scripts.bootstrap_official_agent_pool import (
-    OFFICIAL_STRATEGY_RELEASE,
-    _strategy,
+from hosted_agent_runtime.official_market_strategy import (
+    OFFICIAL_MARKET_STRATEGY_RELEASE_V2,
+    official_market_strategy_v2,
 )
 
 
-STRATEGY_VERSION = OFFICIAL_STRATEGY_RELEASE
+STRATEGY_VERSION = OFFICIAL_MARKET_STRATEGY_RELEASE_V2
+
+
+def _strategy(index: int) -> str:
+    return official_market_strategy_v2(index).instructions
 
 
 def _required_environment(name: str) -> str:

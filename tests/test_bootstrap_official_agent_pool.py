@@ -15,6 +15,7 @@ from scripts.refresh_official_agent_strategies import (
     STRATEGY_VERSION,
     _parser as _refresh_parser,
     _select_official_rows,
+    _strategy as _refresh_strategy,
     _update_idempotency_key,
 )
 
@@ -36,36 +37,31 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
     second_cycle = [_strategy(index) for index in range(11, 21)]
 
     assert len(set(first_cycle)) == 10
-    assert second_cycle == first_cycle
-    assert all("fairValue" in strategy for strategy in first_cycle)
+    assert len(set(first_cycle + second_cycle)) == 20
+    assert all("adjusted private fair value" in strategy for strategy in first_cycle)
     assert all("eventImpliedFinal" in strategy for strategy in first_cycle)
-    assert all("private reservation" in strategy for strategy in first_cycle)
+    assert all("private adjustment" in strategy for strategy in first_cycle)
     assert all("public archetype" in strategy for strategy in first_cycle)
     assert len(
         {official_strategy_archetype(index) for index in range(1, 11)}
     ) == 3
     assert all("cash reserve" in strategy for strategy in first_cycle)
-    assert all("inventory target" in strategy for strategy in first_cycle)
-    assert any("BUY_BIASED" in strategy for strategy in first_cycle)
-    assert any("SELL_BIASED" in strategy for strategy in first_cycle)
-    assert any("TWO_SIDED" in strategy for strategy in first_cycle)
-    assert all("expired event price" in strategy for strategy in first_cycle)
+    assert all("inventory utility center" in strategy for strategy in first_cycle)
     assert all(
-        "build the legal candidate set" in strategy for strategy in first_cycle
-    )
-    assert all("zero-holding good" in strategy for strategy in first_cycle)
-    assert all("next legal good" in strategy for strategy in first_cycle)
-    assert all(
-        "Strategy release pydantic-agent-v4" in strategy
-        for strategy in first_cycle
-    )
-    assert all(
-        "excess-inventory sell is a qualifying rebalancing action"
+        (
+            "Strategy release "
+            "arena.official-market-strategy.liquidity-v2"
+        )
         in strategy
         for strategy in first_cycle
     )
     assert all(
-        "must not pass while a legal numeric or rebalancing action qualifies"
+        "inventory utility center is not a hard prohibition"
+        in strategy
+        for strategy in first_cycle
+    )
+    assert all(
+        "Evaluate every legal good before passing"
         in strategy
         for strategy in first_cycle
     )
@@ -73,13 +69,23 @@ def test_official_agents_cycle_through_ten_numeric_market_profiles() -> None:
         len(strategy.encode("utf-8")) <= MAX_STRATEGY_BYTES
         for strategy in first_cycle
     )
+    assert [
+        _refresh_strategy(index) for index in range(1, 21)
+    ] == first_cycle + second_cycle
 
 
 def test_official_strategy_refresh_has_a_versioned_stable_idempotency_key() -> None:
-    assert STRATEGY_VERSION == "pydantic-agent-v4"
+    assert (
+        STRATEGY_VERSION
+        == "arena.official-market-strategy.liquidity-v2"
+    )
     assert (
         _update_idempotency_key("agent-official-001")
-        == "official-strategy-pydantic-agent-v4-agent-official-001"
+        == (
+            "official-strategy-"
+            "arena.official-market-strategy.liquidity-v2-"
+            "agent-official-001"
+        )
     )
 
 

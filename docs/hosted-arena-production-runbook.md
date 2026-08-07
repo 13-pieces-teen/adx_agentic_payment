@@ -646,8 +646,10 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
 5. release wrapper 将受保护变量 `PROD_CURRENT_GAME_ROUND_COUNT`（默认 8）和
    `PROD_CURRENT_GAME_MARKET_PROTOCOL`（默认 `fcfs.v1`，只允许
    `fcfs.v1 | agent_a2a.v1`）写入新 release 的 server-only `.env`，并在
-   Runtime 启动后幂等刷新 `market-v5` 官方策略；不重新读取 Provider key，也
-   不广播链上交易。协议变更只影响发布后创建的下一局。
+   Runtime 启动后幂等刷新
+   `arena.official-market-strategy.liquidity-v2` 官方策略；不重新读取
+   Provider key，也不广播链上交易。策略和协议变更只影响发布后加入的新一局，
+   已有 Game 的冻结 Strategy Revision 不变。
 6. migration checksum、Connector artifact、预期容器、公开 `/api/health`、
    未认证受保护接口 `401`、Current Game 与可用时的 SSE content type 全部
    通过后，才写 `DEPLOYED_GIT_SHA` 和 `DEPLOYED_ARCHIVE_SHA256`。

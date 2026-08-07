@@ -1,4 +1,4 @@
-"""Experimental official-Agent market strategies for isolated Arena A/Bs."""
+"""Versioned official-Agent market strategies for Arena games and A/Bs."""
 
 from __future__ import annotations
 
@@ -16,8 +16,12 @@ from .strategy import (
 )
 
 
-EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2: Final = (
+OFFICIAL_MARKET_STRATEGY_RELEASE_V2: Final = (
     "arena.official-market-strategy.liquidity-v2"
+)
+# Compatibility alias retained for existing experiment manifests.
+EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2: Final = (
+    OFFICIAL_MARKET_STRATEGY_RELEASE_V2
 )
 
 
@@ -50,7 +54,7 @@ def _agent_good_offsets(index: int) -> Mapping[GoodId, int]:
     for good in GOOD_IDS:
         digest = hashlib.sha256(
             (
-                f"{EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2}\0"
+                f"{OFFICIAL_MARKET_STRATEGY_RELEASE_V2}\0"
                 f"{index}\0{good}"
             ).encode("utf-8")
         ).digest()
@@ -75,7 +79,7 @@ def official_market_strategy_v2(index: int) -> OfficialMarketStrategy:
     )
     variant = (
         "You are an official Arena 402 market participant. "
-        f"Strategy release {EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2}. "
+        f"Strategy release {OFFICIAL_MARKET_STRATEGY_RELEASE_V2}. "
         f"Base private valuation adjustment {profile_adjustment_bps:+d}bps; "
         f"cash reserve target {cash_reserve_percent}% of marked net worth; "
         f"inventory utility center {inventory_target}; deterministic "
@@ -105,7 +109,7 @@ def official_market_strategy_v2(index: int) -> OfficialMarketStrategy:
     )
     archetype = official_strategy_archetype(index)
     return OfficialMarketStrategy(
-        release_id=EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2,
+        release_id=OFFICIAL_MARKET_STRATEGY_RELEASE_V2,
         archetype=archetype,
         agent_good_offsets_bps=offsets,
         instructions=render_strategy_revision(
@@ -117,6 +121,7 @@ def official_market_strategy_v2(index: int) -> OfficialMarketStrategy:
 
 __all__ = [
     "EXPERIMENTAL_OFFICIAL_STRATEGY_RELEASE_V2",
+    "OFFICIAL_MARKET_STRATEGY_RELEASE_V2",
     "OfficialMarketStrategy",
     "official_market_strategy_v2",
 ]

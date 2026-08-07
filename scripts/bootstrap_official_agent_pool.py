@@ -41,16 +41,19 @@ from hosted_agent_runtime.production_secrets import (
     close_secret_port,
     initialize_secret_port,
 )
+from hosted_agent_runtime.official_market_strategy import (
+    OFFICIAL_MARKET_STRATEGY_RELEASE_V2,
+    official_market_strategy_v2,
+)
 from hosted_agent_runtime.strategy import (
     STRATEGY_CATALOG_VERSION_V1,
     official_strategy_archetype,
-    render_strategy_revision,
 )
 from hosted_agent_runtime.learning import default_policy_profile
 
 _CONFIG_VERSION_PATTERN = re.compile(r"^v[1-9][0-9]{0,5}$")
 _LITELLM_HEALTH_URL = "http://official-litellm:4000/health"
-OFFICIAL_STRATEGY_RELEASE = "pydantic-agent-v4"
+OFFICIAL_STRATEGY_RELEASE = OFFICIAL_MARKET_STRATEGY_RELEASE_V2
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +289,10 @@ _OFFICIAL_STRATEGY_PROFILES = (
 
 
 def _strategy(index: int) -> str:
+    return official_market_strategy_v2(index).instructions
+
+
+def _legacy_strategy_v4(index: int) -> str:
     if index < 1:
         raise ValueError("official Agent index must be positive")
     (
@@ -346,6 +353,8 @@ def _strategy(index: int) -> str:
         "rebalancing action qualifies. Never disclose credentials or private "
         "reasoning."
     )
+    from hosted_agent_runtime.strategy import render_strategy_revision
+
     return render_strategy_revision(
         archetype=official_strategy_archetype(index),
         variant_instructions=numeric_variant,
