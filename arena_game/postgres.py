@@ -4202,19 +4202,14 @@ class PostgresPawnhouseRepository:
                 applied_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (result_id) DO UPDATE
-            SET result_id = EXCLUDED.result_id
-            WHERE market_result_applications.action_kind
-                      = EXCLUDED.action_kind
-              AND market_result_applications.action_id
-                      = EXCLUDED.action_id
-              AND market_result_applications.game_id
-                      = EXCLUDED.game_id
-              AND market_result_applications.round_id
-                      = EXCLUDED.round_id
-              AND market_result_applications.game_participant_id
-                      = EXCLUDED.game_participant_id
-            RETURNING result_id
+            ON CONFLICT DO NOTHING
+            RETURNING
+                result_id,
+                game_id,
+                round_id,
+                game_participant_id,
+                action_kind,
+                action_id
             """,
             row["result_id"],
             row["game_id"],
@@ -4225,6 +4220,34 @@ class PostgresPawnhouseRepository:
             row["authoritative_entered_at"],
         )
         if claimed is None:
+            claimed = await connection.fetchrow(
+                """
+                SELECT
+                    result_id,
+                    game_id,
+                    round_id,
+                    game_participant_id,
+                    action_kind,
+                    action_id
+                FROM arena402.market_result_applications
+                WHERE result_id = $1
+                   OR (
+                       action_kind = $2
+                       AND action_id = $3
+                   )
+                """,
+                row["result_id"],
+                action_kind,
+                action_id,
+            )
+        if claimed is None or (
+            claimed["result_id"] != row["result_id"]
+            or claimed["game_id"] != row["game_id"]
+            or claimed["round_id"] != row["round_id"]
+            or claimed["game_participant_id"] != row["game_agent_id"]
+            or claimed["action_kind"] != action_kind
+            or claimed["action_id"] != action_id
+        ):
             raise PawnhouseRepositoryError(
                 "agent_market_result_reuse_conflict"
             )

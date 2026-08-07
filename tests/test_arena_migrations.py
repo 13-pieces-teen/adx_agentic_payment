@@ -276,6 +276,12 @@ ARENA_PHASE_D_EMPTY_CURRENT_GAME_CUTOVER_SQL_PATH = (
     / "migrations"
     / "074_arena_phase_d_empty_current_game_cutover.sql"
 )
+ARENA_MARKET_PROJECTION_RUN_RECOVERY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "075_arena_market_projection_run_recovery.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1427,6 +1433,31 @@ def test_elapsed_task_recovery_only_requeues_proven_precision_followup(
     )
     assert (
         ARENA_ELAPSED_TASK_RUN_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_projection_collision_recovery_only_requeues_fully_receipted_runs(
+    monkeypatch,
+):
+    sql = ARENA_MARKET_PROJECTION_RUN_RECOVERY_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "safe_error_code = 'runtime_uniqueviolationerror'" in sql
+    assert "task.task_kind = 'arena.market.intent'" in sql
+    assert "result.apply_status <> 'applied'" in sql
+    assert "receipt.result_id IS NULL" in sql
+    assert "SET status = 'queued'" in sql
+    assert "safe_error_code = NULL" in sql
+    assert "completed_at = NULL" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        ARENA_MARKET_PROJECTION_RUN_RECOVERY_SQL_PATH
         in migrate_module.migration_files("arena")
     )
 

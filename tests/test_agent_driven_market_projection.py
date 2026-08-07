@@ -61,10 +61,12 @@ class _ProjectionConnection:
         *,
         request_row=None,
         participant_busy=False,
+        concurrent_claim=False,
     ):
         self.authoritative_row = authoritative_row
         self.request_row = request_row
         self.participant_busy = participant_busy
+        self.concurrent_claim = concurrent_claim
         self.calls: list[tuple[str, str, tuple[object, ...]]] = []
 
     def transaction(self):
@@ -76,7 +78,29 @@ class _ProjectionConnection:
         if "FROM public.arena_applied_agent_actions" in normalized:
             return self.authoritative_row
         if "INSERT INTO arena402.market_result_applications" in normalized:
-            return {"result_id": self.authoritative_row["result_id"]}
+            if self.concurrent_claim:
+                return None
+            return {
+                "result_id": self.authoritative_row["result_id"],
+                "game_id": self.authoritative_row["game_id"],
+                "round_id": self.authoritative_row["round_id"],
+                "game_participant_id": self.authoritative_row[
+                    "game_agent_id"
+                ],
+                "action_kind": parameters[4],
+                "action_id": parameters[5],
+            }
+        if "FROM arena402.market_result_applications" in normalized:
+            return {
+                "result_id": self.authoritative_row["result_id"],
+                "game_id": self.authoritative_row["game_id"],
+                "round_id": self.authoritative_row["round_id"],
+                "game_participant_id": self.authoritative_row[
+                    "game_agent_id"
+                ],
+                "action_kind": parameters[1],
+                "action_id": parameters[2],
+            }
         if "INSERT INTO arena402.market_projection_receipts" in normalized:
             return {"result_id": self.authoritative_row["result_id"]}
         if "INSERT INTO arena402.market_intents" in normalized:
@@ -301,6 +325,48 @@ def test_intent_projection_persists_private_limit_but_never_emits_it() -> None:
         public_payload = json.loads(str(event[2][3]))
         assert public_payload["publicPriceAtomic"] == 1_800_000
         assert "limit" not in str(public_payload).lower()
+
+    asyncio.run(scenario())
+
+
+def test_intent_projection_recovers_when_another_worker_claimed_the_action() -> None:
+    async def scenario() -> None:
+        result_id = "runtime:" + ("8" * 64)
+        connection = _ProjectionConnection(
+            _row(
+                "arena.market.intent",
+                result_id,
+                _intent_input(),
+                {
+                    "action": "buy",
+                    "good": "grain",
+                    "publicPrice": "1.800000",
+                    "limitPrice": "2.000000",
+                    "message": "希望买入粮草。",
+                },
+            ),
+            concurrent_claim=True,
+        )
+        repository = PostgresPawnhouseRepository(
+            "",
+            pool=_Pool(connection),
+        )
+
+        receipt = await repository.project_agent_market_application(
+            _application("arena.market.intent", result_id)
+        )
+
+        assert receipt["projected"] is True
+        claim_insert = next(
+            call
+            for call in connection.calls
+            if "INSERT INTO arena402.market_result_applications" in call[1]
+        )
+        assert "ON CONFLICT DO NOTHING" in claim_insert[1]
+        assert any(
+            "FROM arena402.market_result_applications" in call[1]
+            for call in connection.calls
+        )
 
     asyncio.run(scenario())
 
