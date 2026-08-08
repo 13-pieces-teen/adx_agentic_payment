@@ -273,6 +273,117 @@ def test_worker_prioritizes_arena_tasks_before_validation_jobs() -> None:
     assert repository.claim_order == ["tasks", "validations", "learning"]
 
 
+def test_worker_refills_a_finished_task_slot_before_slower_tasks_finish() -> None:
+    class _RefillRepository(_Repository):
+        def __init__(self, tasks: list[ClaimedTask]) -> None:
+            super().__init__()
+            self._tasks = tasks
+            self.started: list[str] = []
+            self._started = {
+                task.task.task_id: asyncio.Event() for task in tasks
+            }
+            self._release = {
+                task.task.task_id: asyncio.Event() for task in tasks
+            }
+
+        async def claim_tasks(
+            self,
+            *_: object,
+            limit: int,
+            **__: object,
+        ) -> tuple[ClaimedTask, ...]:
+            self.claim_order.append("tasks")
+            claimed = tuple(self._tasks[:limit])
+            del self._tasks[:limit]
+            return claimed
+
+        async def submit_result(
+            self,
+            worker_id: str,
+            result: AgentTaskResultV1,
+            **_: object,
+        ) -> str:
+            assert worker_id == "worker-refill"
+            self.started.append(result.task_id)
+            self._started[result.task_id].set()
+            await self._release[result.task_id].wait()
+            return "accepted"
+
+        async def wait_started(self, task_id: str) -> None:
+            await self._started[task_id].wait()
+
+        def release(self, task_id: str) -> None:
+            self._release[task_id].set()
+
+    def claimed_task(task_id: str) -> ClaimedTask:
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=10)
+        participant = decide_input(deadline=deadline)
+        task = ArenaAgentTaskV1(
+            task_id=task_id,
+            kind="arena.decide",
+            schema_version=AGENT_TASK_SCHEMA_VERSION_V1,
+            game_id=participant.game_id,
+            round_id=participant.round_id,
+            game_agent_id=f"game-agent-{task_id}",
+            deadline_at=deadline,
+            idempotency_key=(
+                f"{participant.game_id}:{participant.round_id}:"
+                f"game-agent-{task_id}:decide"
+            ),
+            input_hash=sha256_identifier(participant),
+            input=participant,
+        )
+        return ClaimedTask(
+            task=task,
+            deadline_at=deadline,
+            provider="official-deepseek",
+            secret_ref=f"arena402/hosted-model/{task_id}",
+            runtime_config={},
+            attempt_count=1,
+            recovery_disposition="terminal_failed",
+            first_attempt_number=None,
+        )
+
+    async def scenario() -> None:
+        repository = _RefillRepository(
+            [
+                claimed_task("task-refill-1"),
+                claimed_task("task-refill-2"),
+                claimed_task("task-refill-3"),
+            ]
+        )
+        worker = DurableHostedWorker(
+            repository=repository,  # type: ignore[arg-type]
+            providers=ProductionProviderBundle(
+                registry=CapabilityRegistry(),
+                adapters={},
+            ),
+            secret_reader=_Reader(),
+            worker_id="worker-refill",
+            task_concurrency=2,
+        )
+        running = asyncio.create_task(worker.run_forever(poll_seconds=0.01))
+        try:
+            await asyncio.gather(
+                repository.wait_started("task-refill-1"),
+                repository.wait_started("task-refill-2"),
+            )
+            repository.release("task-refill-1")
+            await asyncio.wait_for(
+                repository.wait_started("task-refill-3"),
+                timeout=1.0,
+            )
+            assert "task-refill-2" in repository.started
+        finally:
+            worker.stop()
+            repository.release("task-refill-1")
+            repository.release("task-refill-2")
+            repository.release("task-refill-3")
+            await running
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("recovery_disposition", "expected_error"),
     [

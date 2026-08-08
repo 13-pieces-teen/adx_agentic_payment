@@ -649,6 +649,12 @@ class DurableHostedWorker:
         )
         processed += len(tasks)
 
+        processed += await self._run_background_once()
+        return processed
+
+    async def _run_background_once(self) -> int:
+        processed = 0
+
         validations = await self._repository.claim_validations(
             self._worker_id,
             limit=2,
@@ -718,24 +724,64 @@ class DurableHostedWorker:
                 )
 
     async def run_forever(self, poll_seconds: float = 1.0) -> None:
-        while not self._stopping.is_set():
-            try:
-                count = await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # A temporary PostgreSQL outage must not terminate the durable
-                # process. Claimed work is recovered by its lease.
-                _LOGGER.error("hosted_worker_cycle_failed")
-                count = 0
-            if count == 0:
+        active: set[asyncio.Task[None]] = set()
+        try:
+            while not self._stopping.is_set():
+                claimed_count = 0
                 try:
-                    await asyncio.wait_for(
-                        self._stopping.wait(),
-                        timeout=poll_seconds,
+                    available_slots = self._task_concurrency - len(active)
+                    if available_slots > 0:
+                        claimed = await self._repository.claim_tasks(
+                            self._worker_id,
+                            limit=available_slots,
+                            lease_seconds=self._lease_seconds,
+                        )
+                        for task in claimed:
+                            active.add(
+                                asyncio.create_task(
+                                    self._execute_task_safely(task),
+                                    name=(
+                                        "hosted-agent-task:"
+                                        f"{task.task.task_id}"
+                                    ),
+                                )
+                            )
+                        claimed_count = len(claimed)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A temporary PostgreSQL outage must not terminate the
+                    # durable process. Claimed work is recovered by its lease.
+                    _LOGGER.error("hosted_worker_cycle_failed")
+
+                if active:
+                    done, _ = await asyncio.wait(
+                        active,
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
-                except TimeoutError:
-                    pass
+                    active.difference_update(done)
+                    for completed in done:
+                        await completed
+                    continue
+
+                count = claimed_count
+                try:
+                    count += await self._run_background_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _LOGGER.error("hosted_worker_cycle_failed")
+                if count == 0:
+                    try:
+                        await asyncio.wait_for(
+                            self._stopping.wait(),
+                            timeout=poll_seconds,
+                        )
+                    except TimeoutError:
+                        pass
+        finally:
+            if active:
+                await asyncio.gather(*active)
 
     def stop(self) -> None:
         self._stopping.set()

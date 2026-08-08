@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -39,6 +40,24 @@ from .postgres import PawnhouseRepositoryError, PostgresPawnhouseRepository
 
 _LOGGER = logging.getLogger(__name__)
 _GOLD_SCALE = 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskWaitRef:
+    task_id: str
+    deadline_at: datetime
+
+
+def _wait_task_id(task: Any) -> str:
+    if isinstance(task, _TaskWaitRef):
+        return task.task_id
+    return str(task.task.task_id)
+
+
+def _wait_task_deadline(task: Any) -> datetime:
+    if isinstance(task, _TaskWaitRef):
+        return task.deadline_at
+    return task.task.deadline_at
 
 
 def _gold_decimal(atomic: int) -> str:
@@ -452,15 +471,10 @@ class PawnhouseAgentRuntimeCoordinator:
                         round_id=round_id,
                     )
                 )
-                await asyncio.gather(
-                    *(
-                        self._run_negotiation(
-                            negotiation_id,
-                            run_id=run_id,
-                            lease_epoch=lease_epoch,
-                        )
-                        for negotiation_id in negotiation_ids
-                    )
+                await self._run_agent_market_negotiations(
+                    negotiation_ids,
+                    run_id=run_id,
+                    lease_epoch=lease_epoch,
                 )
                 fallback_contexts = (
                     await self._pawnhouse.agent_market_fallback_rfq_contexts(
@@ -501,7 +515,15 @@ class PawnhouseAgentRuntimeCoordinator:
         run_id: str,
         lease_epoch: int,
     ) -> None:
-        async for _, result in self._iter_terminal_results(tasks):
+        wait_refs = [
+            _TaskWaitRef(
+                task_id=str(task.task.task_id),
+                deadline_at=task.task.deadline_at,
+            )
+            for task in tasks
+        ]
+        tasks.clear()
+        async for _, result in self._iter_terminal_results(wait_refs):
             await self._pawnhouse.renew_hosted_run_lease(
                 runtime_run_id=run_id,
                 worker_id=self._worker_id,
@@ -545,6 +567,66 @@ class PawnhouseAgentRuntimeCoordinator:
                 action=action,
             )
 
+    async def _run_agent_market_negotiations(
+        self,
+        negotiation_ids: list[str],
+        *,
+        run_id: str,
+        lease_epoch: int,
+    ) -> None:
+        """Run independent A2A negotiations through one dynamic wait set."""
+
+        pending: dict[str, tuple[str, Any]] = {}
+
+        async def enqueue_next(negotiation_id: str) -> None:
+            context = await self._pawnhouse.hosted_negotiation_context(
+                negotiation_id=negotiation_id
+            )
+            if context is None:
+                return
+            task = await self._factory.create_negotiate_task(
+                game_agent_id=str(context["participant_id"]),
+                participant_view=self._negotiate_view(context),
+                config_snapshot=dict(context["config_snapshot"]),
+            )
+            pending[str(task.task.task_id)] = (negotiation_id, task)
+
+        for negotiation_id in negotiation_ids:
+            await enqueue_next(negotiation_id)
+
+        while pending:
+            results = await self._poll_terminal_results(
+                {
+                    task_id: task
+                    for task_id, (_, task) in pending.items()
+                }
+            )
+            if not results:
+                continue
+
+            for task_id, result in results.items():
+                owned = pending.pop(task_id, None)
+                if owned is None:
+                    continue
+                negotiation_id, task = owned
+                await self._pawnhouse.renew_hosted_run_lease(
+                    runtime_run_id=run_id,
+                    worker_id=self._worker_id,
+                    lease_epoch=lease_epoch,
+                    lease_seconds=self._lease_seconds,
+                )
+                application = derive_application(task.task, result.result)
+                await self._arena_core.apply_result(
+                    result_id=result.result.result_id,
+                    server_clock=lambda: datetime.now(timezone.utc),
+                )
+                await self._pawnhouse.apply_hosted_negotiation_action(
+                    negotiation_id=negotiation_id,
+                    result_id=result.result.result_id,
+                    action=application.action,
+                )
+                await enqueue_next(negotiation_id)
+
     async def _wait_and_consume(
         self,
         task: Any,
@@ -573,47 +655,55 @@ class PawnhouseAgentRuntimeCoordinator:
     async def _iter_terminal_results(self, tasks: list[Any]):
         """Yield terminal task results without per-task polling.
 
-        The Result Sink timestamp remains authoritative for FCFS ordering; the
+        The Result Sink timestamp remains authoritative audit evidence; this
         generator only changes when independent results become available to
         the idempotent Arena applicator.
         """
-        pending = {task.task.task_id: task for task in tasks}
+        pending = {_wait_task_id(task): task for task in tasks}
         while pending:
-            results = await self._arena_core.get_results_for_tasks(
-                list(pending)
-            )
+            results = await self._poll_terminal_results(pending)
             for task_id, result in results.items():
                 task = pending.pop(task_id, None)
                 if task is not None:
                     yield task, result
-            if not pending:
-                break
 
-            now = datetime.now(timezone.utc)
-            expired = [
-                task
-                for task in pending.values()
-                if now >= task.task.deadline_at
-            ]
-            if expired:
-                await self._arena_core.finalize_expired(
-                    server_clock=lambda: datetime.now(timezone.utc),
-                    limit=max(50, len(expired)),
-                )
-                finalized = await self._arena_core.get_results_for_tasks(
-                    [task.task.task_id for task in expired]
-                )
-                missing = [
-                    task.task.task_id
-                    for task in expired
-                    if task.task.task_id not in finalized
-                ]
-                if missing:
-                    raise PawnhouseRepositoryError(
-                        "terminal_runtime_result_missing"
-                    )
-                continue
+    async def _poll_terminal_results(
+        self,
+        pending: dict[str, Any],
+    ) -> dict[str, Any]:
+        results = await self._arena_core.get_results_for_tasks(
+            list(pending)
+        )
+        if results:
+            return results
+
+        now = datetime.now(timezone.utc)
+        expired = [
+            task
+            for task in pending.values()
+            if now >= _wait_task_deadline(task)
+        ]
+        if not expired:
             await asyncio.sleep(0.05)
+            return {}
+
+        await self._arena_core.finalize_expired(
+            server_clock=lambda: datetime.now(timezone.utc),
+            limit=max(50, len(expired)),
+        )
+        finalized = await self._arena_core.get_results_for_tasks(
+            [_wait_task_id(task) for task in expired]
+        )
+        missing = [
+            _wait_task_id(task)
+            for task in expired
+            if _wait_task_id(task) not in finalized
+        ]
+        if missing:
+            raise PawnhouseRepositoryError(
+                "terminal_runtime_result_missing"
+            )
+        return finalized
 
     async def _consume_and_apply_decision(
         self,

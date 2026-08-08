@@ -76,7 +76,10 @@ class BuiltPydanticModel:
     _client: AsyncOpenAI
 
     async def close(self) -> None:
-        await self._client.close()
+        # The HTTP transport is process-owned by PydanticModelFactory.  Keep
+        # task credentials on the short-lived SDK client only, and clear them
+        # as soon as the task finishes without tearing down the shared pool.
+        self._client.api_key = ""
 
 
 class PydanticModelFactory:
@@ -84,6 +87,26 @@ class PydanticModelFactory:
 
     def __init__(self, registry: CapabilityRegistry) -> None:
         self._registry = registry
+        # This client deliberately has no Authorization/default credential
+        # header. AsyncOpenAI adds the per-task key when it builds a request.
+        # Pooling here avoids one TCP/TLS pool per AgentTask.
+        self._http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(90.0, connect=10.0),
+            follow_redirects=False,
+            trust_env=False,
+            limits=httpx.Limits(
+                max_connections=32,
+                max_keepalive_connections=16,
+                keepalive_expiry=30.0,
+            ),
+        )
+        self._closed = False
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._http_client.aclose()
 
     def build(
         self,
@@ -95,6 +118,8 @@ class PydanticModelFactory:
         remaining_timeout_ms: int,
         requested_max_output_tokens: int,
     ) -> BuiltPydanticModel:
+        if self._closed:
+            raise RuntimeError("Pydantic model factory is closed")
         if not api_key:
             raise ValueError("Hosted model credential is empty")
         resolved = self._registry.resolve(
@@ -108,24 +133,12 @@ class PydanticModelFactory:
             provider_id
         )
         timeout_seconds = max(0.001, resolved.request_timeout_ms / 1000)
-        http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                timeout_seconds,
-                connect=min(10.0, timeout_seconds),
-            ),
-            follow_redirects=False,
-            trust_env=False,
-            limits=httpx.Limits(
-                max_connections=8,
-                max_keepalive_connections=4,
-            ),
-        )
         client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             timeout=timeout_seconds,
             max_retries=0,
-            http_client=http_client,
+            http_client=self._http_client,
         )
         extra_body: object | None = None
         if thinking_dialect == "deepseek":

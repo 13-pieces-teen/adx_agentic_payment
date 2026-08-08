@@ -2793,6 +2793,23 @@ class PostgresPawnhouseRepository:
                 """,
                 game_id,
             )
+            holding_rows = await connection.fetch(
+                """
+                SELECT game_participant_id, good_id, quantity
+                FROM arena402.holdings
+                WHERE game_participant_id = ANY($1::text[])
+                ORDER BY game_participant_id, good_id
+                """,
+                [
+                    str(participant["game_participant_id"])
+                    for participant in participants
+                ],
+            )
+            holdings_by_participant: dict[str, dict[str, int]] = {}
+            for row in holding_rows:
+                holdings_by_participant.setdefault(
+                    str(row["game_participant_id"]), {}
+                )[str(row["good_id"])] = int(row["quantity"])
             actions_by_participant: dict[str, list[dict[str, object]]] = {}
             for row in completed_action_rows:
                 raw_action = row["applied_action"]
@@ -2848,15 +2865,7 @@ class PostgresPawnhouseRepository:
                 }
             contexts: list[dict[str, object]] = []
             for participant in participants:
-                holding_rows = await connection.fetch(
-                    """
-                    SELECT good_id, quantity
-                    FROM arena402.holdings
-                    WHERE game_participant_id = $1
-                    ORDER BY good_id
-                    """,
-                    participant["game_participant_id"],
-                )
+                participant_id = str(participant["game_participant_id"])
                 contexts.append(
                     {
                         "game_id": game_id,
@@ -2871,14 +2880,11 @@ class PostgresPawnhouseRepository:
                         "action_timeout_ms": int(
                             round_row["action_timeout_ms"]
                         ),
-                        "participant_id": participant[
-                            "game_participant_id"
-                        ],
+                        "participant_id": participant_id,
                         "cash_atomic": int(participant["cash_atomic"]),
-                        "holdings": {
-                            row["good_id"]: int(row["quantity"])
-                            for row in holding_rows
-                        },
+                        "holdings": dict(
+                            holdings_by_participant.get(participant_id, {})
+                        ),
                         "market": {
                             row["good_id"]: int(
                                 row["market_price_atomic"]
@@ -3279,9 +3285,10 @@ class PostgresPawnhouseRepository:
                 game_id,
                 int(round_row["round_index"]),
             )
-        contexts: list[dict[str, object]] = []
+
+        directories_by_buyer: dict[str, list[dict[str, object]]] = {}
         for buyer in buyers:
-            directory = []
+            directory: list[dict[str, object]] = []
             for seller in sellers:
                 if (
                     str(seller["good_id"]) != str(buyer["good_id"])
@@ -3307,36 +3314,97 @@ class PostgresPawnhouseRepository:
                         "expires_at": seller["expires_at"],
                     }
                 )
-            session = await pool.fetchrow(
-                """
-                INSERT INTO arena402.market_rfq_sessions (
+            directories_by_buyer[str(buyer["intent_id"])] = directory
+
+        if not buyers:
+            return []
+
+        buyer_intent_ids = [str(buyer["intent_id"]) for buyer in buyers]
+        session_rows = await pool.fetch(
+            """
+            WITH session_input AS (
+                SELECT *
+                FROM unnest(
+                    $1::text[],
+                    $2::text[],
+                    $3::text[],
+                    $4::timestamptz[]
+                ) AS input(
                     buyer_intent_id,
-                    game_id,
-                    round_id,
                     buyer_participant_id,
-                    frozen_directory,
+                    frozen_directory_json,
                     deadline_at
                 )
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-                ON CONFLICT (buyer_intent_id) DO UPDATE
-                SET buyer_intent_id = EXCLUDED.buyer_intent_id
-                RETURNING
-                    frozen_directory,
-                    attempt_count,
-                    max_attempts,
-                    status,
-                    deadline_at
-                """,
-                buyer["intent_id"],
+            )
+            INSERT INTO arena402.market_rfq_sessions (
+                buyer_intent_id,
                 game_id,
                 round_id,
-                buyer["game_participant_id"],
-                json.dumps(
-                    directory,
-                    default=lambda value: value.isoformat(),
-                ),
-                buyer["expires_at"],
+                buyer_participant_id,
+                frozen_directory,
+                deadline_at
             )
+            SELECT
+                input.buyer_intent_id,
+                $5,
+                $6,
+                input.buyer_participant_id,
+                input.frozen_directory_json::jsonb,
+                input.deadline_at
+            FROM session_input AS input
+            ON CONFLICT (buyer_intent_id) DO UPDATE
+            SET buyer_intent_id = EXCLUDED.buyer_intent_id
+            RETURNING
+                buyer_intent_id,
+                frozen_directory,
+                attempt_count,
+                max_attempts,
+                status,
+                deadline_at
+            """,
+            buyer_intent_ids,
+            [
+                str(buyer["game_participant_id"])
+                for buyer in buyers
+            ],
+            [
+                json.dumps(
+                    directories_by_buyer[buyer_intent_id],
+                    default=lambda value: value.isoformat(),
+                )
+                for buyer_intent_id in buyer_intent_ids
+            ],
+            [buyer["expires_at"] for buyer in buyers],
+            game_id,
+            round_id,
+        )
+        sessions_by_buyer = {
+            str(session["buyer_intent_id"]): session
+            for session in session_rows
+        }
+        prior_rows = await pool.fetch(
+            """
+            SELECT
+                buyer_intent_id,
+                attempt_sequence,
+                seller_intent_id,
+                status
+            FROM arena402.market_negotiation_requests
+            WHERE buyer_intent_id = ANY($1::text[])
+            ORDER BY buyer_intent_id, attempt_sequence
+            """,
+            buyer_intent_ids,
+        )
+        prior_by_buyer: dict[str, list[Any]] = {}
+        for prior in prior_rows:
+            prior_by_buyer.setdefault(
+                str(prior["buyer_intent_id"]), []
+            ).append(prior)
+
+        contexts: list[dict[str, object]] = []
+        for buyer in buyers:
+            buyer_intent_id = str(buyer["intent_id"])
+            session = sessions_by_buyer.get(buyer_intent_id)
             if (
                 session is None
                 or str(session["status"]) != "active"
@@ -3344,28 +3412,18 @@ class PostgresPawnhouseRepository:
                 >= int(session["max_attempts"])
             ):
                 continue
-            prior_rows = await pool.fetch(
-                """
-                SELECT
-                    attempt_sequence,
-                    seller_intent_id,
-                    status
-                FROM arena402.market_negotiation_requests
-                WHERE buyer_intent_id = $1
-                ORDER BY attempt_sequence
-                """,
-                buyer["intent_id"],
-            )
+            buyer_prior_rows = prior_by_buyer.get(buyer_intent_id, [])
             if any(
                 str(prior["status"]) in {"pending", "engaged"}
-                for prior in prior_rows
+                for prior in buyer_prior_rows
             ):
                 continue
             frozen = session["frozen_directory"]
             if isinstance(frozen, str):
                 frozen = json.loads(frozen)
             attempted_targets = {
-                str(prior["seller_intent_id"]) for prior in prior_rows
+                str(prior["seller_intent_id"])
+                for prior in buyer_prior_rows
             }
             directory = [
                 dict(entry)
@@ -3421,7 +3479,7 @@ class PostgresPawnhouseRepository:
                                 else str(prior["status"])
                             ),
                         }
-                        for prior in prior_rows
+                        for prior in buyer_prior_rows
                     ],
                     "events": [
                         {
@@ -3732,34 +3790,58 @@ class PostgresPawnhouseRepository:
                 game_id,
                 int(round_row["round_index"]),
             )
+            request_rows = await connection.fetch(
+                """
+                SELECT
+                    request.seller_intent_id,
+                    request.request_id,
+                    buyer_participant.agent_id AS buyer_agent_id,
+                    COALESCE(
+                        buyer_agent.name,
+                        buyer_participant.agent_id
+                    ) AS buyer_display_name,
+                    request.opening_price_atomic,
+                    request.public_message,
+                    request.created_at
+                FROM arena402.market_negotiation_requests AS request
+                JOIN arena402.game_participants AS buyer_participant
+                  ON buyer_participant.game_participant_id =
+                     request.buyer_participant_id
+                 AND buyer_participant.game_id = request.game_id
+                LEFT JOIN public.arena_agents AS buyer_agent
+                  ON buyer_agent.agent_id = buyer_participant.agent_id
+                WHERE request.seller_intent_id = ANY($1::text[])
+                  AND request.status = 'pending'
+                ORDER BY
+                    request.seller_intent_id,
+                    request.created_at,
+                    request.request_id
+                """,
+                [str(seller["intent_id"]) for seller in sellers],
+            )
+            requests_by_seller_intent: dict[
+                str, list[dict[str, object]]
+            ] = {}
+            for row in request_rows:
+                requests_by_seller_intent.setdefault(
+                    str(row["seller_intent_id"]), []
+                ).append(
+                    {
+                        "request_id": str(row["request_id"]),
+                        "buyer_agent_id": str(row["buyer_agent_id"]),
+                        "buyer_display_name": str(
+                            row["buyer_display_name"]
+                        ),
+                        "opening_price_atomic": int(
+                            row["opening_price_atomic"]
+                        ),
+                        "message": str(row["public_message"]),
+                        "received_at": row["created_at"],
+                    }
+                )
             contexts: list[dict[str, object]] = []
             for seller in sellers:
-                requests = await connection.fetch(
-                    """
-                    SELECT
-                        request.request_id,
-                        buyer_participant.agent_id AS buyer_agent_id,
-                        COALESCE(
-                            buyer_agent.name,
-                            buyer_participant.agent_id
-                        ) AS buyer_display_name,
-                        request.opening_price_atomic,
-                        request.public_message,
-                        request.created_at
-                    FROM arena402.market_negotiation_requests AS request
-                    JOIN arena402.game_participants AS buyer_participant
-                      ON buyer_participant.game_participant_id =
-                         request.buyer_participant_id
-                     AND buyer_participant.game_id = request.game_id
-                    LEFT JOIN public.arena_agents AS buyer_agent
-                      ON buyer_agent.agent_id =
-                         buyer_participant.agent_id
-                    WHERE request.seller_intent_id = $1
-                      AND request.status = 'pending'
-                    ORDER BY request.created_at, request.request_id
-                    """,
-                    seller["intent_id"],
-                )
+                seller_intent_id = str(seller["intent_id"])
                 config = seller["config_snapshot"]
                 contexts.append(
                     {
@@ -3783,7 +3865,7 @@ class PostgresPawnhouseRepository:
                         "participant_id": str(
                             seller["game_participant_id"]
                         ),
-                        "seller_intent_id": str(seller["intent_id"]),
+                        "seller_intent_id": seller_intent_id,
                         "good": str(seller["good_id"]),
                         "quantity": int(seller["quantity"]),
                         "public_price_atomic": int(
@@ -3795,23 +3877,11 @@ class PostgresPawnhouseRepository:
                         "inventory_available": int(
                             seller["inventory_available"]
                         ),
-                        "requests": [
-                            {
-                                "request_id": str(row["request_id"]),
-                                "buyer_agent_id": str(
-                                    row["buyer_agent_id"]
-                                ),
-                                "buyer_display_name": str(
-                                    row["buyer_display_name"]
-                                ),
-                                "opening_price_atomic": int(
-                                    row["opening_price_atomic"]
-                                ),
-                                "message": str(row["public_message"]),
-                                "received_at": row["created_at"],
-                            }
-                            for row in requests
-                        ],
+                        "requests": list(
+                            requests_by_seller_intent.get(
+                                seller_intent_id, []
+                            )
+                        ),
                         "events": [
                             {
                                 "event_id": row["event_id"],
@@ -3939,6 +4009,36 @@ class PostgresPawnhouseRepository:
                     round_id,
                 )
                 negotiation_ids: list[str] = []
+                good_ids = sorted(
+                    {str(row["good_id"]) for row in rows}
+                )
+                max_sequences = {
+                    str(sequence_row["good_id"]): int(
+                        sequence_row["max_sequence"]
+                    )
+                    for sequence_row in (
+                        await connection.fetch(
+                            """
+                            SELECT
+                                good_id,
+                                COALESCE(max(pairing_sequence), 0)
+                                    AS max_sequence
+                            FROM arena402.pairings
+                            WHERE round_id = $1
+                              AND good_id = ANY($2::text[])
+                            GROUP BY good_id
+                            """,
+                            round_id,
+                            good_ids,
+                        )
+                        if good_ids
+                        else []
+                    )
+                }
+                next_sequence_by_good = {
+                    good_id: max_sequences.get(good_id, 0) + 1
+                    for good_id in good_ids
+                }
                 for row in rows:
                     buyer_entry_id = (
                         f"pool:market:{row['engagement_id']}:buyer"
@@ -4000,18 +4100,9 @@ class PostgresPawnhouseRepository:
                             row["engagement_id"],
                         )
                     pairing_id = f"pairing:{row['engagement_id']}"
-                    sequence = int(
-                        await connection.fetchval(
-                            """
-                            SELECT COALESCE(max(pairing_sequence), 0) + 1
-                            FROM arena402.pairings
-                            WHERE round_id = $1
-                              AND good_id = $2
-                            """,
-                            round_id,
-                            row["good_id"],
-                        )
-                    )
+                    good_id = str(row["good_id"])
+                    sequence = next_sequence_by_good[good_id]
+                    next_sequence_by_good[good_id] = sequence + 1
                     await connection.execute(
                         """
                         INSERT INTO arena402.pairings (

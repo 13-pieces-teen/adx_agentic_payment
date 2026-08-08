@@ -100,6 +100,45 @@ def test_factory_builds_only_allowlisted_official_model() -> None:
         assert mapped["content"] == ""
     finally:
         asyncio.run(built.close())
+        asyncio.run(factory.close())
+
+
+def test_factory_reuses_sanitized_transport_until_factory_close() -> None:
+    factory = PydanticModelFactory(
+        build_production_capability_registry(include_official=True)
+    )
+    first = factory.build(
+        provider_id="official-deepseek",
+        model_id="deepseek-v4-flash",
+        api_key="first-task-key",
+        thinking_enabled=False,
+        remaining_timeout_ms=15_000,
+        requested_max_output_tokens=256,
+    )
+    second = factory.build(
+        provider_id="official-deepseek",
+        model_id="deepseek-v4-flash",
+        api_key="second-task-key",
+        thinking_enabled=False,
+        remaining_timeout_ms=15_000,
+        requested_max_output_tokens=256,
+    )
+
+    transport = first._client._client
+    assert second._client._client is transport
+    assert transport.headers.get("Authorization") is None
+
+    asyncio.run(first.close())
+    assert first._client.api_key == ""
+    assert transport.is_closed is False
+    assert second._client.api_key == "second-task-key"
+
+    asyncio.run(second.close())
+    assert second._client.api_key == ""
+    assert transport.is_closed is False
+
+    asyncio.run(factory.close())
+    assert transport.is_closed is True
 
 
 def test_factory_fails_closed_for_unregistered_provider() -> None:
@@ -107,12 +146,15 @@ def test_factory_fails_closed_for_unregistered_provider() -> None:
         build_production_capability_registry(include_official=True)
     )
 
-    with pytest.raises((CapabilityError, ValueError)):
-        factory.build(
-            provider_id="attacker-endpoint",
-            model_id="deepseek-v4-flash",
-            api_key="test-only-key",
-            thinking_enabled=False,
-            remaining_timeout_ms=15_000,
-            requested_max_output_tokens=256,
-        )
+    try:
+        with pytest.raises((CapabilityError, ValueError)):
+            factory.build(
+                provider_id="attacker-endpoint",
+                model_id="deepseek-v4-flash",
+                api_key="test-only-key",
+                thinking_enabled=False,
+                remaining_timeout_ms=15_000,
+                requested_max_output_tokens=256,
+            )
+    finally:
+        asyncio.run(factory.close())

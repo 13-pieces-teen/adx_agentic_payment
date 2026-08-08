@@ -4,6 +4,14 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from arena_agent_contracts import (
+    AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+    AGENT_TASK_SCHEMA_VERSION_V1,
+    AgentTaskResultV1,
+    ArenaAgentTaskV1,
+    ProposeAction,
+)
+from arena_core.hashing import sha256_identifier
 from arena_game.hosted_coordinator import PawnhouseAgentRuntimeCoordinator
 
 
@@ -441,6 +449,250 @@ def test_agent_market_coordinator_runs_all_agent_authored_stages() -> None:
         "result:task:arena.market.rfq",
         "result:task:arena.market.select",
     ]
+
+
+class _BatchNegotiationFactory:
+    async def create_negotiate_task(
+        self,
+        *,
+        game_agent_id,
+        participant_view,
+        **_,
+    ):
+        task_id = (
+            f"task:{participant_view.negotiation_id}:"
+            f"{participant_view.turn_sequence}"
+        )
+        return SimpleNamespace(
+            task=ArenaAgentTaskV1(
+                task_id=task_id,
+                kind="arena.negotiate",
+                schema_version=AGENT_TASK_SCHEMA_VERSION_V1,
+                game_id=participant_view.game_id,
+                round_id=participant_view.round_id,
+                game_agent_id=game_agent_id,
+                negotiation_id=participant_view.negotiation_id,
+                deadline_at=participant_view.deadline_at,
+                idempotency_key=(
+                    f"{participant_view.game_id}:"
+                    f"{participant_view.round_id}:"
+                    f"{participant_view.negotiation_id}:"
+                    f"{participant_view.turn_sequence}:"
+                    f"{game_agent_id}:negotiate"
+                ),
+                input_hash=sha256_identifier(participant_view),
+                input=participant_view,
+            )
+        )
+
+
+class _BatchNegotiationCore:
+    def __init__(self, *, stagger_results: bool) -> None:
+        self.stagger_results = stagger_results
+        self.calls: list[list[str]] = []
+        self.applied: list[str] = []
+
+    def _result(self, task_id: str):
+        action = None
+        status = "timed_out"
+        if self.stagger_results and "negotiation-fast" in task_id:
+            status = "succeeded"
+            action = ProposeAction(
+                action="propose",
+                price=(
+                    "1.800000" if task_id.endswith(":1") else "1.900000"
+                ),
+                message="Continue the negotiation.",
+            )
+        return SimpleNamespace(
+            result=AgentTaskResultV1(
+                result_id=f"result:{task_id}",
+                task_id=task_id,
+                schema_version=AGENT_TASK_RESULT_SCHEMA_VERSION_V1,
+                status=status,
+                action=action,
+            )
+        )
+
+    async def get_results_for_tasks(self, task_ids):
+        task_ids = list(task_ids)
+        self.calls.append(task_ids)
+        fast_first = "task:negotiation-fast:1"
+        fast_second = "task:negotiation-fast:2"
+        slow_first = "task:negotiation-slow:1"
+        if self.stagger_results and {
+            fast_first,
+            slow_first,
+        }.issubset(task_ids):
+            return {fast_first: self._result(fast_first)}
+        if self.stagger_results and {
+            fast_second,
+            slow_first,
+        }.issubset(task_ids):
+            return {
+                fast_second: self._result(fast_second),
+                slow_first: self._result(slow_first),
+            }
+        return {task_id: self._result(task_id) for task_id in task_ids}
+
+    async def apply_result(self, *, result_id, **_):
+        self.applied.append(result_id)
+
+    async def finalize_expired(self, **_):
+        raise AssertionError("future tasks must not be finalized")
+
+
+class _BatchNegotiationPawnhouse:
+    def __init__(self, *, fast_turns: int) -> None:
+        self.fast_turns = fast_turns
+        self.completed_turns = {
+            "negotiation-fast": 0,
+            "negotiation-slow": 0,
+        }
+
+    async def agent_market_round_phase(self, **_):
+        return "negotiate"
+
+    async def mark_hosted_run_running(self, **_):
+        return None
+
+    async def agent_market_select_contexts(self, **_):
+        return []
+
+    async def materialize_agent_market_engagements(self, **_):
+        return []
+
+    async def active_hosted_negotiation_ids(self, **_):
+        return ["negotiation-fast", "negotiation-slow"]
+
+    async def hosted_negotiation_context(self, *, negotiation_id):
+        completed = self.completed_turns[negotiation_id]
+        max_turns = self.fast_turns if negotiation_id.endswith("fast") else 1
+        if completed >= max_turns:
+            return None
+        turn = completed + 1
+        is_seller_turn = turn == 2
+        return {
+            "game_id": "game-1",
+            "round_id": "round-1",
+            "round_index": 1,
+            "round_count": 5,
+            "rounds_remaining": 4,
+            "negotiation_id": negotiation_id,
+            "participant_id": f"participant:{negotiation_id}:{turn}",
+            "role": "seller" if is_seller_turn else "buyer",
+            "good": "grain",
+            "quantity": 1,
+            "limit_price_atomic": (
+                1_500_000 if is_seller_turn else 2_000_000
+            ),
+            "cash_atomic": 20_000_000,
+            "inventory_available": 1 if is_seller_turn else 0,
+            "counterparty_agent_id": f"agent:{negotiation_id}",
+            "counterparty_name": "Counterparty",
+            "events": [],
+            "history": (
+                [
+                    {
+                        "turn_sequence": 1,
+                        "from_role": "buyer",
+                        "action": "propose",
+                        "price_atomic": 1_800_000,
+                        "message": "Continue the negotiation.",
+                    }
+                ]
+                if is_seller_turn
+                else []
+            ),
+            "latest_quote": (
+                {
+                    "turn_sequence": 1,
+                    "from_role": "buyer",
+                    "price_atomic": 1_800_000,
+                }
+                if is_seller_turn
+                else None
+            ),
+            "turn_sequence": turn,
+            "remaining_turns": max_turns - completed,
+            "deadline_at": datetime.now(timezone.utc) + timedelta(seconds=5),
+            "config_snapshot": {"provider": "fake"},
+        }
+
+    async def renew_hosted_run_lease(self, **_):
+        return None
+
+    async def apply_hosted_negotiation_action(
+        self,
+        *,
+        negotiation_id,
+        result_id,
+        **_,
+    ):
+        expected_turn = self.completed_turns[negotiation_id] + 1
+        assert result_id.endswith(f":{expected_turn}")
+        self.completed_turns[negotiation_id] = expected_turn
+
+    async def agent_market_fallback_rfq_contexts(self, **_):
+        return []
+
+
+def test_agent_market_negotiations_wait_for_results_in_one_batch() -> None:
+    async def scenario():
+        core = _BatchNegotiationCore(stagger_results=False)
+        pawnhouse = _BatchNegotiationPawnhouse(fast_turns=1)
+        coordinator = PawnhouseAgentRuntimeCoordinator(
+            pawnhouse=pawnhouse,
+            arena_core=core,
+        )
+        coordinator._factory = _BatchNegotiationFactory()
+        await coordinator._process(
+            run_id="run-1",
+            game_id="game-1",
+            round_id="round-1",
+            lease_epoch=1,
+            market_protocol="agent_a2a.v1",
+        )
+        return core
+
+    core = asyncio.run(scenario())
+    assert len(core.calls) == 1
+    assert set(core.calls[0]) == {
+        "task:negotiation-fast:1",
+        "task:negotiation-slow:1",
+    }
+    assert len(core.applied) == 2
+
+
+def test_fast_negotiation_advances_without_waiting_for_slower_peer() -> None:
+    async def scenario():
+        core = _BatchNegotiationCore(stagger_results=True)
+        pawnhouse = _BatchNegotiationPawnhouse(fast_turns=2)
+        coordinator = PawnhouseAgentRuntimeCoordinator(
+            pawnhouse=pawnhouse,
+            arena_core=core,
+        )
+        coordinator._factory = _BatchNegotiationFactory()
+        await coordinator._run_agent_market_negotiations(
+            ["negotiation-fast", "negotiation-slow"],
+            run_id="run-1",
+            lease_epoch=1,
+        )
+        return core, pawnhouse
+
+    core, pawnhouse = asyncio.run(scenario())
+    assert any(
+        set(call)
+        == {
+            "task:negotiation-fast:2",
+            "task:negotiation-slow:1",
+        }
+        for call in core.calls
+    )
+    assert pawnhouse.completed_turns == {
+        "negotiation-fast": 2,
+        "negotiation-slow": 1,
+    }
 
 
 def test_agent_market_coordinator_dispatches_agent_selected_fallback() -> None:

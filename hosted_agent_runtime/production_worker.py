@@ -33,6 +33,7 @@ async def main() -> None:
     repository = PostgresHostedWorkerRepository(database_url)
     providers = build_production_provider_bundle()
     reader = build_production_secret_reader(database_url)
+    model_factory = PydanticModelFactory(providers.registry)
     worker = DurableHostedWorker(
         repository=repository,
         providers=providers,
@@ -44,7 +45,7 @@ async def main() -> None:
         task_concurrency=int(
             os.getenv("ADX_HOSTED_WORKER_TASK_CONCURRENCY", "5")
         ),
-        model_factory=PydanticModelFactory(providers.registry),
+        model_factory=model_factory,
     )
     try:
         await repository.initialize()
@@ -62,6 +63,7 @@ async def main() -> None:
             )
         )
     finally:
+        await model_factory.close()
         await providers.close()
         await close_secret_port(reader)
         await repository.close()
