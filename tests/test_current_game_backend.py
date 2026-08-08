@@ -506,6 +506,8 @@ def test_hosted_context_orders_liquidity_by_real_game_event_columns() -> None:
     )
     assert "event.created_at DESC" in liquidity_query
     assert "event.event_sequence DESC" in liquidity_query
+    assert "previous_round.round_index = $2 - 1" in liquidity_query
+    assert "previous_round.round_index < $2" not in liquidity_query
     assert "event.occurred_at" not in liquidity_query
     assert "event.event_id" not in liquidity_query
 

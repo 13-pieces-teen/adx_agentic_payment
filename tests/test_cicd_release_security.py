@@ -83,11 +83,16 @@ def test_release_preserves_server_only_state_and_refuses_automatic_db_rollback()
 
 
 def test_deploy_stops_task_claiming_workers_before_migrations() -> None:
-    stop_index = DEPLOY.index("stop_background_workers")
+    stop_definition_index = DEPLOY.index("stop_background_workers() {")
+    stop_index = DEPLOY.index(
+        "\nstop_background_workers\n",
+        stop_definition_index,
+    )
     migration_index = DEPLOY.index("compose run --rm migrate")
     hosted_start_index = DEPLOY.index(
         'compose --profile hosted up -d --scale hosted-worker='
     )
+    stop_function = DEPLOY[stop_definition_index:stop_index]
 
     assert stop_index < migration_index < hosted_start_index
     for worker in (
@@ -98,7 +103,15 @@ def test_deploy_stops_task_claiming_workers_before_migrations() -> None:
         "gamecoin-provisioner",
         "memorial-minter",
     ):
-        assert worker in DEPLOY[stop_index:migration_index]
+        assert worker in stop_function
+    for enable_flag in (
+        "enable_hosted_runtime",
+        "enable_arena_worker",
+        "enable_settlement_worker",
+        "enable_gamecoin_provisioner",
+        "enable_memorial_minter",
+    ):
+        assert enable_flag not in stop_function
 
 
 def test_release_allows_only_the_tracked_environment_templates() -> None:

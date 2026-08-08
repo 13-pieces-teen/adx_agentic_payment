@@ -414,6 +414,29 @@ def test_owner_game_projection_is_authenticated_and_private() -> None:
     assert response.headers["vary"] == "Cookie"
 
 
+def test_owner_game_projection_returns_not_found_for_nonparticipant() -> None:
+    class _MissingParticipantRepository(_Repository):
+        async def game_owner_state(self, *, game_id, owner_user_id):
+            raise PawnhouseRepositoryError("game_participant_not_found")
+
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_participation_router(
+            repository=_MissingParticipantRepository(),  # type: ignore[arg-type]
+            auth=_Auth(),  # type: ignore[arg-type]
+        )
+    )
+    client = TestClient(app)
+    client.cookies.set("adx_session", "signed-session")
+
+    response = client.get("/api/v1/games/game_current/me")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {"code": "game_participant_not_found"}
+    }
+
+
 def test_current_game_returns_explicit_not_found_when_pointer_is_empty() -> None:
     class _EmptyRepository(_Repository):
         async def current_game(self, *, owner_user_id=None):

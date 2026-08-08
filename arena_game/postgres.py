@@ -2685,7 +2685,7 @@ class PostgresPawnhouseRepository:
                  AND previous_round.game_id = event.game_id
                 WHERE event.game_id = $1
                   AND event.event_type = 'market.liquidity_summarized'
-                  AND previous_round.round_index < $2
+                  AND previous_round.round_index = $2 - 1
                 ORDER BY
                     previous_round.round_index DESC,
                     event.created_at DESC,

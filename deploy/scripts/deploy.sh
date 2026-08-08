@@ -438,22 +438,15 @@ fi
 # claim or advance that work before the migration becomes visible, otherwise
 # an old image can consume the recovered row during a rolling deployment.
 stop_background_workers() {
-  if [ "${enable_hosted_runtime}" = "true" ]; then
-    compose --profile hosted stop -t 30 \
-      hosted-worker credential-controller
-  fi
-  if [ "${enable_arena_worker}" = "true" ]; then
-    compose --profile arena stop -t 30 arena-worker
-  fi
-  if [ "${enable_settlement_worker}" = "true" ]; then
-    compose --profile settlement stop -t 30 settlement-worker
-  fi
-  if [ "${enable_gamecoin_provisioner}" = "true" ]; then
-    compose --profile gamecoin stop -t 30 gamecoin-provisioner
-  fi
-  if [ "${enable_memorial_minter}" = "true" ]; then
-    compose --profile memorial stop -t 30 memorial-minter
-  fi
+  # Stop containers from the previous release even when the new environment
+  # disables their profile. The enable flags below govern restarts, not the
+  # safety barrier before migrations.
+  compose --profile hosted stop -t 30 \
+    hosted-worker credential-controller
+  compose --profile arena stop -t 30 arena-worker
+  compose --profile settlement stop -t 30 settlement-worker
+  compose --profile gamecoin stop -t 30 gamecoin-provisioner
+  compose --profile memorial stop -t 30 memorial-minter
 }
 
 stop_background_workers

@@ -262,6 +262,7 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
         if code
         in {
             "game_not_found",
+            "game_participant_not_found",
             "current_game_not_found",
             "inventory_commit_not_found",
             "participant_not_found",

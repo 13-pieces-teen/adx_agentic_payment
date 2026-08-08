@@ -312,6 +312,12 @@ CONTEXT_LIQUIDITY_DEADLINE_RECOVERY_SQL_PATH = (
     / "migrations"
     / "080_arena_context_liquidity_deadline_recovery.sql"
 )
+CONTEXT_LIQUIDITY_RUNTIME_KIND_REPAIR_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "081_arena_context_liquidity_runtime_kind_repair.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -1539,6 +1545,31 @@ def test_context_recovery_rearms_only_the_proven_pre_task_failure(
     )
     assert (
         CONTEXT_LIQUIDITY_DEADLINE_RECOVERY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
+
+
+def test_context_recovery_runtime_kind_repair_uses_authoritative_run(
+    monkeypatch,
+):
+    sql = CONTEXT_LIQUIDITY_RUNTIME_KIND_REPAIR_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "UPDATE arena402.game_events AS event" in sql
+    assert "FROM arena402.runtime_runs AS run" in sql
+    assert "event.source_idempotency_key" in sql
+    assert "run.runtime_run_id || ':recovery:080'" in sql
+    assert "to_jsonb(run.runtime_kind)" in sql
+    assert "run.runtime_kind IN ('hosted', 'mixed')" in sql
+    assert "'runtimeKind', 'hosted'" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        CONTEXT_LIQUIDITY_RUNTIME_KIND_REPAIR_SQL_PATH
         in migrate_module.migration_files("arena")
     )
 
