@@ -1,26 +1,30 @@
 # Arena 402 Hosted 上线部署与实现方案
 
-> 状态：2026-07-25 批准的 Hosted testnet 上线目标；2026-08-06 开始接入
-> Phase D 版本化 `agent_a2a.v1` Current Game。当前生产默认仍为 `fcfs.v1`。
+> 状态：Phase D 生产功能链已验收。正式 Current Game
+> `game-20260806-110040-099857d6f841` 冻结 `agent_a2a.v1`，由一名真实 Codex
+> Connector 与九名 DeepSeek Hosted Agent 完成八回合、三笔 `arena402-g` 链上
+> 确认和库存提交；`fcfs.v1` 仅保留为显式兼容/下一局回滚协议。
 >
 > 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排，
 > 并已把生产 Current Game 硬上限配置为 100、Hosted Worker 配置为
 > 4 副本 × 25 task slot、Facilitator 配置为 4 个独立 EOA shard。
 > 平台 `user_id` 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
 > 隔离的 PostgreSQL 密文 signer、自动提交编排、只读链上确认和确认后库存提交。
-> 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自动链路已通过
-> Fake E2E；100 Agent、四 shard live testnet、公共 Facilitator、新鲜 testnet
-> 交易与完整生产 E2E 尚未验收。旧 2C4G 证据不能用于证明当前配置容量。
+> 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自建
+> Facilitator 的自动真实 testnet 链路、生产 Current Game、Official pool、外部
+> 前端投影、备份与回滚已验收；100 Agent、四 shard 故障恢复、公共 Facilitator
+> 和活动局中途整机重启仍未验收。旧 2C4G 证据不能用于证明当前配置容量。
 
 ## 1. 上线目标
 
 首发只交付一个清晰闭环：
 
 ```text
-用户创建 Hosted Agent
+用户创建 Hosted Agent 或连接 Local Agent
   -> 加入 testnet Game，并一次性同意该局自动支付
-  -> 最多 100 个 Hosted Agent 参加；4 个 Hosted Worker 各有 25 个 task slot
-  -> 每种货物按数据库时间 FCFS 配对
+  -> 最多 100 个 Hosted/Local Agent 参加；4 个 Hosted Worker 各有 25 个 task slot
+  -> Agent 发布 Intent、读取目录、选择对手并发送 / 选择 RFQ
+  -> Arena 校验并占位唯一 Engagement
   -> 最多三轮公开协商
   -> accept 后自动 reserve 支付额度
   -> 平台 testnet guest wallet 自动签署 EIP-3009
@@ -34,10 +38,10 @@
 
 生产配置目标：
 
-- Current Game 默认开赛阈值 10 个 Hosted Agent，硬上限 100；
+- Current Game 默认开赛阈值 10 个 Ready Hosted/Local Agent，硬上限 100；
 - Current Game 默认 8 回合；代码继续支持 1–10 回合；
-- `ADX_CURRENT_GAME_MARKET_PROTOCOL` 只允许 `fcfs.v1 | agent_a2a.v1`；部署值只在
-  创建下一局时冻结，不能改写活动或历史 Game；
+- `ADX_CURRENT_GAME_MARKET_PROTOCOL` 只允许 `fcfs.v1 | agent_a2a.v1`；正式生产值
+  为 `agent_a2a.v1`，部署值只在创建下一局时冻结，不能改写活动或历史 Game；
 - Decide Task 同批创建，Hosted Worker 以 4 副本 × 25 task slot 起步；
 - 同一组协商严格顺序执行，不同 pairing 可并发，但仍受 Provider 配额和数据库
   barrier 约束；
@@ -579,10 +583,11 @@ authorization_valid_after + 420` 秒；剩余 180 秒用于等待过期区块再
 
 不上线第二套通用 Round watchdog。
 
-FCFS key 明确定义为数据库 Result Sink 写入的
-`(result_received_at, pool_entry_id)`，不是 Task 创建顺序。100 个理论 task slot
-不能消除 Provider 限流、进程调度或网络导致的 launch skew；在 100 Agent
-launch-skew 验收前，不把该生产配置作为正式 Tournament 公平性证明。
+当前 `agent_a2a.v1` 仍以 Result Sink 数据库接收时间审计 Task、Intent、RFQ 与
+Select，但 Arena 不按该时间替 Agent 选择对手。legacy `fcfs.v1` 的 key 仍严格为
+`(result_received_at, pool_entry_id)`。100 个理论 task slot 不能消除 Provider
+限流、进程调度或网络导致的 launch skew；在 100 Agent 验收前，不把该生产配置
+作为正式 Tournament 公平性证明。
 
 磁盘边界：
 
@@ -644,8 +649,9 @@ ADX_ARENA_AUTOMATIC_PAYMENTS_ENABLED=false
    `deploy/secrets/` 和已验证 Connector artifacts，最后调用
    `deploy.sh`。
 5. release wrapper 将受保护变量 `PROD_CURRENT_GAME_ROUND_COUNT`（默认 8）和
-   `PROD_CURRENT_GAME_MARKET_PROTOCOL`（默认 `fcfs.v1`，只允许
-   `fcfs.v1 | agent_a2a.v1`）写入新 release 的 server-only `.env`，并在
+   `PROD_CURRENT_GAME_MARKET_PROTOCOL`（正式生产显式配置为 `agent_a2a.v1`；
+   workflow 的未配置安全回退仍是 `fcfs.v1`，只允许两者）写入新 release 的
+   server-only `.env`，并在
    Runtime 启动后幂等刷新
    `arena.official-market-strategy.liquidity-v2` 官方策略；不重新读取
    Provider key，也不广播链上交易。策略和协议变更只影响发布后加入的新一局，
@@ -670,7 +676,7 @@ PROD_SSH_PORT=22
 PROD_RELEASE_DIR=/home/ubuntu/adx_agentic_payment
 PROD_EXPECTED_PUBLIC_IP=<optional expected IPv4>
 PROD_CURRENT_GAME_ROUND_COUNT=8
-PROD_CURRENT_GAME_MARKET_PROTOCOL=fcfs.v1
+PROD_CURRENT_GAME_MARKET_PROTOCOL=agent_a2a.v1
 ```
 
 `PROD_SSH_KNOWN_HOSTS` 必须从独立可信通道核对服务器 host key；workflow
@@ -747,19 +753,21 @@ schema 兼容性，再决定只回滚代码还是按备份恢复数据。
    - 真实 Provider、四 shard 自动 testnet 支付、多回合排名、发布证据和活动
      文档同步。
 
-不并行实现 Local Connector、Native A2A、主网或多局调度。
+Local Connector 已作为 Phase D mixed-Runtime 路径进入生产验收。Native A2A、
+主网和多局调度仍不属于本 runbook 的当前交付范围。
 
 ## 10. 上线完成定义
 
-只有以下完整路径在部署环境中通过，才算 Hosted 上线完成：
+Phase D 已通过以下 mixed-Runtime 完整路径；后续发布不得用较弱的 Hosted-only
+演示替代它：
 
 ```text
 login
-  -> create 10 Hosted Agents
-  -> credentials ready
+  -> connect one real Codex Agent and select nine Official Hosted Agents
+  -> Connector, credentials and official pool ready
   -> join one Game and create automatic Mandates
   -> start
-  -> multi-round Decide/Pair/Negotiate
+  -> eight-round Intent/RFQ/Select/Engage/Negotiate
   -> automatic EIP-3009 payments
   -> confirmed inventory commits
   -> final ranking

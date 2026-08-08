@@ -1,14 +1,15 @@
 # Arena 402 本地 Agent Connector 产品与技术规格
 
-> 文档状态：Self-hosted beta 规格，与当前仓库实现同步
-> 最后更新：2026-07-25
+> 文档状态：Local Connector 规格，与当前生产功能链和仓库实现同步
+> 最后更新：2026-08-08
 > 适用范围：用户本地 Agent Runtime 接入 Arena 402 的出站 Connector
-> 对应计划：[`local-agent-connector-implementation-plan.md`](./local-agent-connector-implementation-plan.md)
-> 部署手册：[`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)
+> 当前路线图：[`roadmap.md`](./roadmap.md)
+> 部署手册：[`hosted-arena-production-runbook.md`](./hosted-arena-production-runbook.md)
+> 安装器：[`../deploy/install/README.md`](../deploy/install/README.md)
 > 统一 Runtime 目标：[`hosted-arena-agent-spec.md`](./hosted-arena-agent-spec.md)
 > 前端边界：产品 UI 已迁移到
 > [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)；
-> 本仓库不包含 Next.js 服务，外部 Vercel/API 完整验收仍需按路线图推进
+> 本仓库不包含 Next.js 服务；Vercel→生产 API 基础联调和 Phase D Game 投影已验收
 
 ## 1. 核心结论
 
@@ -16,8 +17,8 @@ Arena 402 本地 Agent Connector 是独立的**设备与 Runtime 控制面**。�
 
 当前仓库已经具备一条不依赖 Supabase 的 self-hosted beta 路径：
 
-- PostgreSQL 持久化 Connector 用户、邀请、会话、Pairing、Device、Runtime、Binding、Command、Event 与 Audit；
-- 一次性 invite、注册、登录、会话恢复、退出和 CSRF 防护；
+- PostgreSQL 持久化 Connector 用户、可选邀请、会话、Pairing、Device、Runtime、Binding、Command、Event 与 Audit；
+- 默认开放的用户名/密码注册、可选 invite 与 GitHub OAuth、登录、会话恢复、退出和 CSRF 防护；
 - 以认证用户为隔离键的 Device/Binding/Command/Event/Audit 对象级授权；
 - 生产专用 Router、生产配置 fail-closed、公开认证与 Pairing 入口限流；
 - Pairing 过期清理和待处理 Pairing 总量上限；
@@ -34,15 +35,17 @@ Local Arena Agent 身份创建、Connector-owned Arena session lifecycle、lease
 AgentTask 自动调度与 mixed-Runtime 回合编排也已接入。Connector 的成功回执仍不能
 证明候选动作合法、Agent 已成交或链上支付已确认。
 
-这表示“控制面代码与单机部署路径已具备”，不表示某台真实服务器已经部署完成，也不表示已经通过外部网络端到端验收。
+生产后端、公开注册、Connector 控制面和 Phase D mixed-Runtime Game 已完成实机
+功能链验收；该结论不扩展为多 API 实例、高可用、公共 Facilitator 或容量验收。
 
 当前实现仍有五个明确边界：
 
 1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
-2. Arena 的 Game/Round/Pool/Negotiation/Inventory 已由 PostgreSQL 持久化；
+2. Arena 的 Game/Round/Market/Negotiation/Inventory 已由 PostgreSQL 持久化；
    Connector terminal Result 只能进入 Arena-owned Result Sink，不能直接修改这些
-   状态；真实 Codex 已完成 payment-disabled 完整自动比赛，Claude Code 仍受外部
-   API/证书路径阻塞，payment-enabled 与外部部署 E2E 尚未验收。
+   状态；真实 Codex 已完成 payment-disabled、mixed-Runtime 恢复以及正式
+   payment-enabled `arena402-g` Game。Claude Code 的外部 API/证书问题仍不阻塞
+   已完成的 Codex 验收。
 3. Runtime task 默认 detection-only；fixed-argv Codex/Claude runner 不具备完整的平台审批闭环。
 4. 安装包目前有 HTTPS 传输与 SHA-256 校验，但签名发布、SBOM、独立信任根和安全自动更新仍是后续。
 5. Connector WSS 已实现版本化 `arena.agent-task.v1` /
@@ -479,15 +482,19 @@ private chain-of-thought。
 - 数据库备份/恢复、升级/回滚、SSH/UFW hardening 脚本；
 - Windows/Linux AMD64/ARM64 Connector artifacts 与 installer。
 
-完整服务器操作、TLS 选择和外部验收步骤见 [`self-hosted-connector-deployment.md`](./self-hosted-connector-deployment.md)。
+完整服务器操作、发布身份、备份/回滚和外部验收步骤见
+[`hosted-arena-production-runbook.md`](./hosted-arena-production-runbook.md)；本地安装器
+见 [`../deploy/install/README.md`](../deploy/install/README.md)。
 
-当前状态是“部署资产已实现并完成静态/本地构建验证”；真实腾讯云主机部署、真实公网 IP TLS、外部电脑安装和 WSS E2E 仍必须在目标环境执行后才能标记完成。
+当前生产后端、WSS Connector 路径和 Phase D mixed-Runtime Game 已有实机证据；
+跨平台安装器、活动局中途整机重启、多实例 WSS ownership 和容量仍应按各自证据
+单独声明，不能由一次生产 Game 推断。
 
 ## 12. 当前实现矩阵
 
 | 范围 | 主要路径 | 当前状态 |
 |---|---|---|
-| Self-hosted Auth | `connector_gateway/auth.py`、`repository.py`、`postgres_repository.py` | 已实现 invite/register/login/session/logout、Argon2id、签名 Session Cookie、CSRF、session revoke |
+| Self-hosted Auth | `connector_gateway/auth.py`、`repository.py`、`postgres_repository.py` | 已实现公开用户名/密码注册、可选 invite、GitHub OAuth、login/session/logout、Argon2id、签名 Session Cookie、CSRF、session revoke |
 | Production config | `connector_gateway/config.py`、`production.py`、`web/api.py` | 已实现 fail-closed；遗留 Supabase 工厂已删除 |
 | Tenant-like object auth | `connector_gateway/api.py`、`web/api.py` | 已实现 user-owner scope 和跨用户对象隐藏；组织 tenant/RBAC 未实现 |
 | PostgreSQL persistence | `db/migrations/002_connector_gateway.sql`、`020_connector_agent_task_results.sql`、`persistent_service.py` | 已实现 beta 持久化与重启恢复；terminal AgentTaskResult 使用独立 immutable inbox；Event/Audit 增量且有界，其余 mutable state snapshot/upsert、单 worker |
@@ -496,12 +503,12 @@ private chain-of-thought。
 | Local Connector | `connector/` | 已实现 discovery、pair/connect/run、WSS、outbox/receipt、owned child；默认 detection-only |
 | Onboarding | 外部 `sunruize93-cmyk/arena402`、`deploy/install/` | 已实现浏览器授权、Windows Scheduled Task、Linux systemd user service |
 | Frontend | 外部 `sunruize93-cmyk/arena402` | 产品 UI 的唯一代码源；本仓库只维护后端契约 |
-| Self-hosted deployment | `docker-compose.production.yml`、`deploy/` | 已实现单机部署资产、域名/IP TLS 和安装包托管；真实服务器 E2E 待执行 |
+| Self-hosted deployment | `docker-compose.production.yml`、`deploy/` | 单机生产后端、发布身份、备份/回滚和 Phase D Game 已验收；高可用、多实例 WSS 与容量未验收 |
 | Arena business durability | `arena_game/`、`arena_core/`、`db/migrations/006_*`–`012_*` | Game/Round/Pool/Pairing/Negotiation/Inventory/Ranking 已持久化；Connector 仍不可直接写入 |
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |
 | Signed release / SBOM | `deploy/artifacts/` | 未实现；当前仅 HTTPS + SHA-256 |
 | Native A2A Endpoint | 未接入 | 第二方案，后续独立实现 |
-| Arena typed task/result | `arena_agent_contracts/`、`arena_core/`、`connector_gateway/arena_adapter.py`、`connector/` | 统一 schema、Local identity/join、自动 Session、leased dispatcher、typed WSS、durable terminal Result、Result Sink 与 mixed-Runtime 编排已实现；真实 Codex payment-disabled Deal、多卖方 fallback 和隔离恢复矩阵已验收，外部部署与 payment-enabled 仍待验收 |
+| Arena typed task/result | `arena_agent_contracts/`、`arena_core/`、`connector_gateway/arena_adapter.py`、`connector/` | 统一 schema、Local identity/join、自动 Session、leased dispatcher、typed WSS、durable terminal Result、Result Sink 与 mixed-Runtime 编排已实现；真实 Codex payment-disabled Deal、多卖方 fallback、隔离恢复矩阵及正式 payment-enabled Phase D Game 已验收 |
 
 ## 13. 验收门槛
 
@@ -531,25 +538,23 @@ Set-Location connector
 go test -count=1 ./...
 go vet ./...
 go build ./...
-
-Set-Location ../frontend
-npm ci
-npm run build
 ```
+
+产品前端测试和构建在外部 `sunruize93-cmyk/arena402` 仓库独立执行；本仓库不得
+引用已删除的 `frontend/` 路径作为后端验收命令。
 
 还应在有 Docker daemon 的环境执行 Compose config、镜像构建、migration 和容器 health check。
 
-### 13.3 尚未完成的真实环境验收
+### 13.3 仍需独立验收的环境边界
 
-- [ ] 在目标服务器完成 Docker/Caddy/PostgreSQL 部署。
-- [ ] 从公网验证 HTTPS/WSS；若使用裸 IP，验证 short-lived IP certificate 与续期 timer。
-- [ ] 从服务器之外的 Windows/Linux 电脑运行一行安装。
-- [ ] 完成 invite 注册/登录、浏览器批准、Device online 和 Runtime inventory。
-- [ ] 重启 API/PostgreSQL 后验证状态恢复与未确认 Command 重排。
-- [ ] 撤销 Device 后验证活跃 WSS 关闭、旧 token 无法重连。
-- [ ] 验证主机只开放预期的 22/80/443，3000/5432/8000 不可公网访问。
+- [ ] 分别保存 Windows/Linux 公共安装器下载、哈希、授权和自启动证据。
+- [ ] 活动 Game 中途执行整机重启并验证 WSS、Task lease、Result outbox、Settlement
+      与 Arena projection 恢复；两局之间重启不能替代本项。
+- [ ] 多 API 实例前实现共享 WSS ownership 与限流，并完成故障转移。
+- [ ] 完成 12/25/50/100 Agent 分档及每 Runtime/Task 的正式 P95/P99 校准。
+- [ ] 公共第三方 Facilitator 兼容验收。
 
-在这些项目完成前，文档和发布说明不得声称“已部署到腾讯云”或“真实外部用户 E2E 已通过”。
+这些边界不能由单机 Phase D Game、协议 E2E 或安装器构建成功推断。
 
 ### 13.4 Arena Runtime 接线验收
 
@@ -560,7 +565,8 @@ npm run build
 - [x] dispatch ACK、terminal Result 和 Arena apply ACK 可独立恢复；
 - [x] 普通 stdout、`runtime.message` 和 Event 不会被解析为业务结果；只有
       Runtime 的显式 terminal structured result 进入 action parser；
-- [x] FCFS 只使用 Result Sink 数据库时间；
+- [x] 冻结为 `fcfs.v1` 的历史/回滚 Game 只使用 Result Sink 数据库时间；
+      `agent_a2a.v1` 则由 Agent 通过 Intent/RFQ/Select 选择对手；
 - [x] late/duplicate Result 不重复入池或写协商；
 - [x] Connector 断线超过 deadline 后由独立 Finalizer 产生明确 default；
 - [x] 同局各 Runtime 使用相同的 `action_timeout_ms`；真实负载校准仍待执行；

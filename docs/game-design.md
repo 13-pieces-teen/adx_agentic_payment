@@ -1,7 +1,8 @@
 # Arena 402：王城典当行游戏机制
 
 > 状态：王城典当行新业务内核的当前游戏契约；后端已完成 1–10 回合可配置自动编排、
-> Hosted/rule Runtime 接线、FCFS、多组协商、Round close、终场估值与排名。
+> Hosted/Local/rule Runtime 接线、当前 `agent_a2a.v1` Agent-driven 市场、legacy
+> `fcfs.v1` 回放、多组协商、Round close、终场估值与排名。
 > Local Connector 的 identity、冻结 route、Connector-owned session、数据库 Task
 > dispatcher、typed Task/Result、Result Sink 和 Hosted/Connector mixed-Runtime
 > 回合编排已接线；PaymentMandate 与 x402 V2 自动链路已实现并通过 Fake E2E。
@@ -25,8 +26,9 @@
 
 ## 一句话规则
 
-> 你的 AI 是个倒爷。每回合决定买、卖或观望；进入市场后按先到先得配对，
-> 最多执行 3 个合并的协商行动；N 回合后按最终结算价清算，净资产最高者获胜。
+> 你的 AI 是个倒爷。每回合决定买、卖或观望，查看冻结市场目录并自主选择交易
+> 对手；进入 Engagement 后最多执行 3 个合并的协商行动；N 回合后按最终结算价
+> 清算，净资产最高者获胜。
 
 从产品叙事看，王城典当行既是一场游戏，也是一套受控的 Agent 能力比较场：同一
 规则下，模型、策略、速度、风险判断和谈判质量会共同形成可回放的差异。结算层则
@@ -200,8 +202,9 @@ PydanticAI Hosted Agent instructions 要求 Agent 把 `market` 视为当前公�
 Runtime 提交候选 Result 后，Arena Result Sink 在持久化前处理公开输出并使用数据库
 时钟记录 `result_received_at`。Result Consumer 完成 schema、阶段、资产和货物校验
 后，才使用该时间生成权威 `enteredAt`。Runtime 自报完成时间、Provider 时间或
-Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 Deadline Finalizer
-收敛为唯一 `pass`，不能阻塞整轮。
+Connector Event 都不能改变权威接收顺序；在 legacy `fcfs.v1` 中只有该数据库时间
+决定 FCFS。晚到、超时或无效响应由独立 Deadline Finalizer 收敛为唯一 `pass`，
+不能阻塞整轮。
 
 ### 4. Pair
 
@@ -216,7 +219,10 @@ Connector Event 都不能决定 FCFS。晚到、超时或无效响应由独立 D
 > 与真实 Runtime E2E 已验证直接接受、反价、拒绝和顺序 fallback。
 > 旧 Game 保持创建时冻结的协议版本，不能原地改义。
 
-每个货物分别建立买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为
+#### Legacy `fcfs.v1` 行为
+
+以下规则只用于创建时冻结 `fcfs.v1` 的历史或显式回滚 Game。每个货物分别建立
+买方池与卖方池，均按 `enteredAt` 升序排列。Arena 只为
 限价区间有交集的订单创建 Pairing：买方存在 `limitPrice` 时成交价不得高于该值，
 卖方存在 `limitPrice` 时成交价不得低于该值；双方都有限价时必须满足
 `buyer.limitPrice >= seller.limitPrice`。
@@ -271,7 +277,7 @@ Runtime 重试；token/tool 预算耗尽仍是不可重试的预算失败。Deep
 `max_completion_tokens`。
 
 `failedNegotiations` 是对手可见的模糊信号，不直接扣分、不扣现金，也不改变
-FCFS 顺序。它可能代表强硬谈判，也可能代表低成交能力。
+当前冻结协议下的目录、选择或顺序。它可能代表强硬谈判，也可能代表低成交能力。
 
 支付授权、提交或链上确认失败属于 settlement failure，不增加
 `failedNegotiations`；它必须单独记录，且本回合不得把未付款交易计为成交。
@@ -534,7 +540,8 @@ Runtime Result 使用 `arena.agent-result.v1`，且 dispatch ACK 与 Result 分�
 
 按优先级可降级：
 
-1. 实时入池改为固定时间窗后的批量 FCFS；
+1. 在不让 Arena 代替 Agent 选择对手的前提下，把 Intent/RFQ 处理改为固定有界
+   时间窗或 wave；
 2. 在并行逐笔提交和 Facilitator shard 仍不足时，将逐笔链上提交改为一笔包含
    多笔点对点 transfer 的批量交易；每笔 accepted
    trade 仍须独立映射到该批量交易中的具体 transfer 事件；
@@ -557,5 +564,6 @@ trade 对应一笔点对点转账；如果启用批量 fallback，每笔交易�
 | 货物种类 | 正式 MVP schema 保留 4 种；演示可只激活 1 种 |
 | 单局目标时长 | Current Game 按 8 回合计算；固定 Demo 仍为 5 回合 |
 
-参数调整不得改变本文的核心边界：公平开局、FCFS、有限轮协商、外生价值锚、
-净资产排名和成交后真实链上结算。
+参数调整不得改变本文的核心边界：公平开局、按 Game 冻结市场协议、当前
+`agent_a2a.v1` 的 Agent 自主选人、有限轮协商、外生价值锚、净资产排名和成交后
+真实链上结算。

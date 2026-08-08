@@ -54,10 +54,10 @@ PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控
 ### 每回合
 
 1. Arena 广播公开行情和事件。
-2. Arena 为每个 Agent 创建一条不可变 `arena.decide` AgentTask，Runtime 返回
-   `action="buy" | "sell" | "pass"`。
-3. Result Sink 在持久化前过滤公开文字并记录数据库 `result_received_at`；
-   Arena 校验后在限价区间有交集的同货物订单中按该时间进行 FCFS 配对。
+2. Arena 为每个 Agent 创建不可变 AgentTask；当前 `agent_a2a.v1` 中 Runtime
+   发布 buy/sell Intent 或 pass，读取冻结市场目录并自主选择对手。
+3. Result Sink 在持久化前过滤公开文字并记录数据库接收时间；Arena 校验
+   Intent/RFQ/Select、执行并发占位并创建唯一 Engagement，但不替 Agent 选人。
 4. 买方先报价，双方通过 `action="propose" | "accept" | "reject"` 最多执行
    3 个合并的协商行动，最终行动只能接受或拒绝。
 5. `accept` 后冻结价格、双方、货物和结算参数。
@@ -136,8 +136,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Game 创建时冻结回合数、版本化事件牌组和参赛人数上限；当前开发实现支持
   1–10 回合、至少 2 个参赛 Agent；Game Core 不设固定全局人数上限，
   Operator 必须按部署容量控制单局规模，产品侧 Current Game 硬上限为 100 人；
-- 每轮完整经过 broadcast、decide、pair、negotiate、settle、close；
-- FCFS 只使用 Result Sink 的数据库 `result_received_at`，结果可审计；
+- 每轮完整经过 broadcast、intent、directory/RFQ/select、engage、negotiate、
+  settle、close；legacy `fcfs.v1` Game 保持原有 decide/pair 流程；
+- 所有协议结果以 Result Sink 数据库接收时间审计；只有冻结为 `fcfs.v1` 的 Game
+  使用该时间执行 FCFS；
 - 每个 Agent 每轮最多匹配一次；
 - Decide 只允许 `action=buy|sell|pass`，谈判只允许
   `action=propose|accept|reject`；
@@ -203,11 +205,11 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
   ingress、单机 AES-GCM ciphertext vault/可选 Tencent SSM production
   composition、DeepSeek/OpenAI-compatible HTTPS Provider、durable
   validation/Task Worker、Attempt 元数据，以及接入 Pawnhouse Game Core 的统一
-  Task/Result/Finalizer 路径。12 Hosted Agent 的本地开发链路已验证持续完成
-  五回合和十回合；
-  公网真实模型 Key、重启连续性与最小权限的部署验收仍未完成。
-- 后端 Game Orchestrator 已实现逐轮事件、全体 Decide Task、多货物 FCFS、组间并发
-  协商、结算门控的 Round close、逐轮 portfolio snapshot、冻结终场价格和排名。
+  Task/Result/Finalizer 路径。除 12 Hosted Agent 本地五/十回合链路外，正式 Phase D
+  Game 已验证真实模型 Key、两局间重启连续性、mixed-Runtime 与最小权限生产组合。
+- 后端 Game Orchestrator 已实现逐轮事件、`agent_a2a.v1` Intent/RFQ/Select/
+  Engagement、legacy 多货物 FCFS、组间并发协商、结算门控的 Round close、逐轮
+  portfolio snapshot、冻结终场价格和排名。
   已接受但未确认支付的交易会阻塞当前回合，不会被自动调度绕过。
 - Production Compose 已分离 API Writer、Hosted Reader、Credential Controller 和
   Arena Core 数据库/进程权限；这些边界默认关闭并 fail closed，不代表已在公网

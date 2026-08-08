@@ -1,20 +1,15 @@
 # Agent-Driven A2A Market Implementation Plan
 
-> Status: approved target; Phase A persistence, projection, opt-in round
-> orchestration, Phase B Hosted/Local task support, and the Phase C
-> payment-disabled Deal foundation were implemented on 2026-08-04. On
-> 2026-08-06 Phase D was approved and implementation began: converge the
-> PydanticAI Hosted Runtime, Codex Connector, `agent_a2a.v1`, testnet
-> settlement, and cross-game learning in one versioned Current Game. Current
-> Game still remains on `fcfs.v1`. A payment-disabled game with two independent
-> Codex Connector Agents has completed Intent, RFQ, selection, bounded
-> negotiation, and an immutable Deal with distinct proposal/acceptance Result
-> provenance. A deterministic three-Hosted-Agent Fake E2E has also completed
-> first-seller rejection and second-seller fallback with durable restart
-> evidence. Hosted + real Codex mixed fallback, in-flight Connector restart,
-> deadline-default injection, lease-expiry takeover, and durable terminal
-> Result-outbox replay are complete. All-real Codex multi-seller fallback is
-> also complete. Payment-enabled A2A remains incomplete.
+> Status: approved and implemented through Phase D. Production Current Game is
+> frozen on `agent_a2a.v1`; `fcfs.v1` remains a compatibility and rollback
+> protocol for games that explicitly froze it. Phase A persistence/projection,
+> Phase B Hosted/Local tasks, Phase C Deal provenance, mixed-Runtime fallback
+> and recovery, and payment-enabled Phase D are complete. Formal Game
+> `game-20260806-110040-099857d6f841` combined one real Codex Connector with
+> nine DeepSeek Hosted Agents for eight rounds and committed three
+> `arena402-g` trades only after chain confirmation. Public Facilitator
+> compatibility, D5b 12/25/50/100-Agent capacity calibration, active-Game
+> whole-host restart, and Phase E Native A2A remain separate acceptance items.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
 > counterparties, choose whom to approach, select which request to engage, and
@@ -496,10 +491,10 @@ The target is accepted only when:
 
 ## 11. Compatibility and rollout
 
-The existing FCFS Current Game remains the active implementation until the
-Agent-driven path has durable persistence and real-Agent E2E evidence. The new
-path is introduced under an explicit frozen Game matching/protocol version,
-for example:
+`fcfs.v1` remains immutable for historical Games and as an explicit next-Game
+rollback option. New Games freeze the deployment-selected protocol without
+reinterpreting active or historical Games; the accepted Phase D production
+Game uses `agent_a2a.v1`:
 
 ```text
 market_protocol = fcfs.v1

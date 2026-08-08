@@ -1,17 +1,20 @@
 # Arena 402 Hosted Arena Agent Implementation Plan
 
-> 文档状态：Runtime v2 直接替换已完成本地隔离验收；2026-08-06 已批准并开始
-> Phase D 统一自主交易比赛。旧 Phase 0–6 作为已完成 foundation 保留；Runtime
-> v2 权威实现记录见第 22 节，跨 Runtime 产品切换见
+> 文档状态：Runtime v2 与 Phase D 统一自主交易比赛已经完成生产功能链验收。
+> 正式八回合 `agent_a2a.v1` Game 已组合真实 Codex Connector 与九名 DeepSeek
+> Hosted Agent，并完成三笔 `arena402-g` 确认门控库存提交和赛后学习。旧
+> Phase 0–6 作为已完成 foundation 保留；Runtime v2 权威实现记录见第 22 节，
+> 跨 Runtime 产品切换见
 > [`agent-driven-a2a-market-implementation-plan.md`](./agent-driven-a2a-market-implementation-plan.md)
-> 最后更新：2026-08-06
+> 最后更新：2026-08-08
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
-> 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本计划同步
-> 本地 Runtime 参考：[Local Agent Connector Implementation Plan](./local-agent-connector-implementation-plan.md)
+> 当前游戏规则：[Game Design](./game-design.md)
+> 本地 Runtime 参考：[Local Agent Connector Spec](./local-agent-connector-spec.md)
 > 前端边界：产品 UI 只在外部 `sunruize93-cmyk/arena402` 维护；本仓库不包含
-> Web 服务。后端 GitHub OAuth/Session 契约已实现，Vercel→腾讯云公网联调尚未验收
-> 设计优先级：以本计划定义的最终 Hosted/Local 统一 Runtime 目标为准；现有
-> Game Design 是待同步的背景输入，不是限制目标架构调整的硬约束
+> Web 服务。公开注册、GitHub OAuth/Session、Vercel→生产 API 基础联调与 Phase D
+> Game 投影已验收；活动局中途整机重启和分档容量仍待验收
+> 设计优先级：Game Design 维护业务契约，本计划维护 Hosted/Local 统一 Runtime
+> 的实现与验收顺序
 
 ## 1. 交付策略
 

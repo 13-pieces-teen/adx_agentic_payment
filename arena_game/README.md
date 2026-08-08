@@ -38,19 +38,19 @@ in-memory matching/ELO prototype has been removed. PostgreSQL persistence begins
 `db/migrations/006_arena_world_game_core.sql` under the isolated `arena402`
 schema.
 
-The Current Game still uses the frozen `fcfs.v1` path. The
-`AgentDrivenMarket` state machine is a protocol oracle for early invariant and
-Fake E2E validation; it contains no target-selection or negotiation strategy
-and is not evidence of autonomous Agent behavior. The
+Production Current Game has switched to the frozen `agent_a2a.v1` path;
+`fcfs.v1` remains immutable for historical Games and available as an explicit
+next-Game rollback protocol. The `AgentDrivenMarket` state machine remains a
+protocol oracle rather than an Agent strategy. The
 `arena.market.intent/rfq/select` task kinds now pass through the shared Hosted
 Driver, Local Connector task envelope, Result Sink, and Deadline Finalizer.
 A recoverable Worker projects applied Results into
 MarketIntent/RFQ/Engagement state, and an opt-in `agent_a2a.v1` orchestrator
 drives intent → RFQ → select → bounded negotiation. Agent-selected
 Engagements alone can materialize the compatibility Pairing/Negotiation path,
-and accepted negotiations freeze Deal provenance. This remains outside the
-`fcfs.v1` Current Game until a real Agent completes Engagement, negotiation,
-and Deal E2E.
+and accepted negotiations freeze Deal provenance. Real Connector-only,
+mixed-Runtime recovery, and the formal payment-enabled Phase D Game have
+completed this path; public Facilitator and capacity acceptance remain separate.
 
 ## Core invariants
 

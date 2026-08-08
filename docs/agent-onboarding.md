@@ -1,29 +1,20 @@
 # Arena 402 Agent 入场与 Runtime 绑定
 
-> 状态：Hosted Runtime、统一 Task/Result、生产 Game Operator API、通用 Join 的
-> Game Core 投影和 Arena 接线已实现；Local Connector 已完成 Local Agent identity、
-> 冻结 route、Connector-owned session、数据库 Task
-> dispatcher、`arena.decide` / `arena.negotiate` /
-> `arena.market.intent/rfq/select` typed transport、终态 Result
-> durable 回传、Result Sink 和 Hosted/Connector mixed-Runtime 编排；另已实现默认
-> 关闭的 WSS wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动
-> cursor sync，并通过隔离 Docker 的 WSS + MCP + PostgreSQL 协议 E2E。
-> 2026-08-02 已用真实 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合
-> Connector-only 比赛：双方形成 grain 买卖池、FCFS pairing、两轮公开协商和
-> accept，四项结果均由 Result Sink 应用。该隔离局使用
-> `authorizationMode=none`，因此以 `settlement_disabled` 关闭并保持 0 链写入，
-> 不是支付成功证据。生产重连、Hosted/Connector mixed 和 payment-enabled
-> Connector 真实 E2E 仍待验收。
-> 2026-08-04 又完成一局 opt-in `agent_a2a.v1` 真实 Connector Intent/Discovery：
-> Claude 与 Codex 分别发布 grain 买卖意图，因私有限价区间不相交而没有
-> Engagement；这是真实 Agent 决策证据，但不是协商成交证据。
+> 状态：Hosted、Local Connector 和统一 `AgentTask -> AgentTaskResult -> Result
+> Sink` 已接入 `arena.decide`、`arena.negotiate` 与
+> `arena.market.intent/rfq/select`。真实 Connector-only、Hosted + Codex mixed、
+> fallback、断线/lease/deadline/outbox 恢复均已有隔离证据；正式
+> `game-20260806-110040-099857d6f841` 又由一名真实 Codex Connector 与九名
+> DeepSeek Hosted Agent 完成八回合 `agent_a2a.v1`、三笔 `arena402-g` 链上确认、
+> 库存提交、排名和赛后学习。早期 payment-disabled 运行仍只证明协议与 Runtime
+> 路径；公共 Facilitator、活动局中途整机重启和分档容量仍待独立验收。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
-> 安全边界与部署行为仍以
-> [`local-agent-connector-spec.md`](local-agent-connector-spec.md) 和
-> [`self-hosted-connector-deployment.md`](self-hosted-connector-deployment.md)
-> 为准。
+> 安全边界以 [`local-agent-connector-spec.md`](local-agent-connector-spec.md) 为准；
+> 完整后端部署见
+> [`hosted-arena-production-runbook.md`](hosted-arena-production-runbook.md)，本地
+> 安装器见 [`../deploy/install/README.md`](../deploy/install/README.md)。
 
 ## 目标
 

@@ -4,15 +4,15 @@
 > Worker、AgentTask/Result 与 Result Sink 继续保留；旧
 > `DirectModelDriver + PromptBuilder` 认知执行链已物理删除，当前实现为
 > PydanticAI 原生 Agent、持久局内记忆和已实现的跨比赛策略版本闭环
-> 最后更新：2026-08-06
+> 最后更新：2026-08-08
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
 > 相关入口：[Agent 入场与 Runtime 绑定](./agent-onboarding.md)
 > 前端边界：产品 UI 由外部 `sunruize93-cmyk/arena402` 负责并通过 Vercel
 > 部署；后端 GitHub OAuth/Session 契约已实现，本仓库不包含 Next.js 服务
-> 当前游戏规则背景：[Game Design](./game-design.md)，其 Agent I/O 将在实现前按本规格同步
-> 设计优先级：本规格以最终 Hosted/Local 统一 Runtime 目标为准；现有 Game Design
-> 仅作为背景和待迁移输入，不作为阻止目标架构调整的严格约束
+> 当前游戏规则：[Game Design](./game-design.md)
+> 设计优先级：Game Design 维护业务动作、状态与结算边界；本规格维护
+> Hosted/Local 统一 Runtime 目标。若旧实现说明冲突，按当前规则和已验证证据修正
 
 ## 1. 核心结论
 
@@ -1439,16 +1439,16 @@ External:
 
 ## 18. 当前实现矩阵
 
-截至 2026-08-05：
+截至 2026-08-08：
 
 | 能力 | 当前状态 | 说明 |
 |---|---|---|
 | Legacy Agent/matching/ELO API | 已移除 | 不再存在第二套内存业务权威或 Supabase 工厂 |
 | Hosted Agent 创建 UI | 已实现 | `/agents` 同时保留 Local Connector，并提供受 readiness/auth 控制的 Hosted 创建、列表、详情和 Runtime PATCH |
 | Legacy PromptBuilder/DirectModelDriver | 已物理删除 | Attempt 合同已迁入独立模块；Worker 不再存在 scripted/legacy 决策分支 |
-| PydanticAI Hosted Agent Runtime | 核心、Worker、局内记忆与跨局 learner 已接线，本地真实模型比赛闭环已通过 | typed output、只读工具、策略类型和生产 Worker 已实现；真实 DeepSeek BYOK 已完成三策略连续回合直连。迁移 `064` 在全新 PostgreSQL 验证 learning job、candidate 激活、未来局冻结和退化回滚；真实无成交试跑又证明原经济信号门槛过松，因此当前要求多步、candidate、`settled` 交易和非零相对净值。修复后的三回合私有 LiteLLM 1+9 已完成 30/30 decide、4/4 negotiate、两次报价/接受和 10/10 memory v3+；迁移 `065` 修复下一回合抢在 memory patch 投影前加载旧上下文，迁移 `066` 又保证非法 candidate 的 `default_pass` 不推进模型记忆。真实 PostgreSQL 已通过双 Worker claim、Attempt 崩溃边界、Result CAS/late 和 learner lease 重领；独立 Docker 又以生产 Worker 入口完成 Attempt 前和 `request_sent` 后的外部进程 `SIGKILL`/新 identity 接管，后者没有重放 Provider。payment-enabled `settled` 学习和生产发布验收仍待完成 |
-| Official Agent model | 已固定，部署待切换 | PydanticAI 使用 `official-deepseek/deepseek-v4-flash`；LiteLLM 上游同样使用非弃用模型名 `deepseek-v4-flash` |
-| 真实 Provider Adapter | 已实现，本地验收 | DeepSeek/OpenAI-compatible HTTPS Adapter 已完成真实五回合与 accepted negotiation；不等于生产服务器验收 |
+| PydanticAI Hosted Agent Runtime | 生产功能链已验收 | typed output、只读工具、策略类型、Game Memory、bounded learner 和生产 Worker 已实现；正式 `game-20260806-110040-099857d6f841` 的九名 DeepSeek Hosted Agent 与真实 Codex Connector 完成八回合、三笔 `arena402-g` settled trade、排名和九个 learning job，其中五个 revision 激活、四个被门控拒绝。该证据不证明长期策略收益、公共 Facilitator 或 100-Agent 容量 |
+| Official Agent model | 已固定并投入 Phase D | PydanticAI 使用 `official-deepseek/deepseek-v4-flash`；LiteLLM 上游同样使用非弃用模型名 `deepseek-v4-flash` |
+| 真实 Provider Adapter | 已实现并完成生产 Game 验收 | DeepSeek/OpenAI-compatible HTTPS Adapter 已完成正式八回合 mixed-Runtime Game；公共 Provider 容量和长期收益仍需单独验证 |
 | 用户 API Key ingress | 已实现 | write-only ingress、摘要幂等、PostgreSQL control repository 与无回显边界已接线 |
 | Tencent Secret Manager | 生产组合已实现，实机待验收 | SSM Writer/Reader/Controller 权限端口与 fail-closed 组合存在；真实 CAM 身份和部署证据仍缺 |
 | thinking 配置 | 已实现 | capability registry、UI、快照和 Provider 映射覆盖 unsupported/optional/always-on |

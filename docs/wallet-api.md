@@ -106,6 +106,7 @@ ADX_ARENA402_M_TOKEN_ADDRESS=0x...
 ADX_ARENA402_M_TOKEN_DECIMALS=6
 ```
 
-The token list contains only configured contracts. Do not fill these values
-until the Arena 402 token deployments are finalized. The current implementation
-is fixed to Injective EVM Testnet chain ID `1439`.
+The token list contains only configured contracts. Production configures the
+allowlisted `arena402-g` test-game token; compatibility assets are exposed only
+when explicitly configured. The current implementation is fixed to Injective
+EVM Testnet chain ID `1439`.

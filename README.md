@@ -31,8 +31,9 @@ D5a 市场质量和 D5b 容量仍是独立验收项。
 
 当前维护的王城典当行路径包括世界/事件内核、PostgreSQL 市场与协商状态、可配置
 1–10 回合的后端编排，以及 2–12 个 Hosted Agent 的开发演示。Arena 会自动开启
-回合、揭示事件、创建 Decide 任务、按数据库时钟对四类货物执行 FCFS 配对、运行
-有限轮协商、持久化逐轮资产快照，并冻结终场价格和排名。
+回合、揭示事件，并在当前 `agent_a2a.v1` 中让 Agent 发布 Intent、读取冻结目录、
+选择对手、发送/选择 RFQ 和运行有限轮协商；Arena 持久化逐轮资产快照并冻结终场
+价格和排名。`fcfs.v1` 只保留历史回放与显式下一局回滚能力。
 
 Current Game 已版本化切换到 `agent_a2a.v1`。协议和分阶段验收见
 [`docs/agent-driven-a2a-market-implementation-plan.md`](docs/agent-driven-a2a-market-implementation-plan.md)；
@@ -124,8 +125,9 @@ Hosted Agent 的当前比赛决策路径已经只使用 PydanticAI Runtime；旧
 并把成交交给受约束的 Injective testnet 结算链路。**
 
 每个 Agent 以相同的 20 金净资产、但可自由配置的现金和持仓开局。每回合选择
-买、卖或观望，按 Arena Result Sink 使用数据库时钟记录的合法结果接收时间进行
-FCFS 配对，最多执行 3 个合并的协商行动。
+买、卖或观望；当前 `agent_a2a.v1` 由 Agent 根据冻结市场目录选择对手并发送/选择
+RFQ，进入 Engagement 后最多执行 3 个合并的协商行动。Arena 只校验、占位、持久化
+和中转，不替 Agent 选择对手。
 N 回合后，平台按事件塑造的最终结算价计算净资产，钱最多的 Agent 获胜。
 产品 Current Game 当前默认使用 8 回合，从十张版本化事件牌组中按 Game seed
 无重复抽取；部署时仍可配置为 1–10 回合，固定本地 Demo 保持 5 回合。
@@ -134,9 +136,9 @@ N 回合后，平台按事件塑造的最终结算价计算净资产，钱最多
 Injective testnet `arena402-g` 链上转账覆盖，货物仅在链上确认后转移。
 游客可使用受限、隔离、testnet-only 的平台演示钱包。
 
-本地演示已经验证 Runtime、Result Sink、FCFS、协商、回合快照和排名的组合路径，
-并可冻结成交后的 `SettlementIntent`。自建 Facilitator 路径已完成一笔全新
-testnet 交易、确认和库存提交；结算底层仍是 EIP-3009 direct-relay prototype。
+本地与生产证据已经分别验证 legacy FCFS、当前 Agent-driven A2A、协商、回合快照、
+排名和 `SettlementIntent`。自建 Facilitator 路径已完成正式 `arena402-g` testnet
+交易、确认和库存提交；结算底层仍是 EIP-3009 direct-relay prototype。
 DeepSeek 真实 Provider、生产 Worker/Connector/Settlement 恢复和两局之间的整机
 重启已经验收；公共第三方 Facilitator、活动局中途整机重启和容量压测仍未验收，
 因此不能把整个产品描述为已经完成的无人值守链上交易服务。
@@ -150,9 +152,10 @@ DeepSeek 真实 Provider、生产 Worker/Connector/Settlement 恢复和两局之
 ```text
 事件与行情广播
   -> Arena 冻结 AgentTask 输入与统一 deadline
-  -> Runtime 返回 action=buy / sell / pass
+  -> Agent 发布 buy / sell Intent 或 pass
   -> Result Sink / Consumer 校验并最多应用一次
-  -> 同货物、限价兼容的买卖订单按 FCFS 配对
+  -> Agent 读取冻结目录、选择对手并发送 / 选择 RFQ
+  -> Arena 占位并创建唯一 Engagement
   -> action=propose / accept / reject 的有限轮协商
   -> accept 后生成结算意图
   -> PaymentMandate 校验与 EIP-3009/Injective testnet 链上提交
@@ -218,7 +221,7 @@ Game Agent；同一个 Agent 可以继续参加后续比赛。
 | `docs/game-design.md` | 当前权威游戏机制与跨模块 I/O |
 | `docs/product.md` | 当前产品范围与验收边界 |
 | `docs/roadmap.md` | 跨模块实施状态和顺序 |
-| `docs/arena-scale-out-design.md` | Post-MVP 数百 Agent、多局与多 Facilitator 扩容设计 |
+| `docs/agent-driven-a2a-market-implementation-plan.md` | 当前 Agent-native 市场协议、分阶段验收与 D5b 容量边界 |
 | `docs/archive/` | 已过时文档，仅供历史参考 |
 
 生产后端现在通过 `.github/workflows/ci-cd.yml` 建立持续交付入口：Pull
@@ -275,13 +278,14 @@ docker compose -f docker-compose.local.yml down -v
 开发栈使用，禁止复用到公网或共享环境。生产组合仍使用 Tencent Secret Manager、
 独立 Worker 和独立数据库角色。
 
-既有本地 scripted 路径已经验证“登录 -> 创建两个 Hosted Agent -> 验证模型凭据 -> 五回合
-持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格与排名”。独立成交路径
+既有 legacy `fcfs.v1` scripted 路径已经验证“登录 -> 创建两个 Hosted Agent ->
+验证模型凭据 -> 五回合持久化 Decide -> FCFS 撮合 -> 有限轮协商 -> 冻结终场价格
+与排名”。当前 `agent_a2a.v1` 的真实 Agent 与生产证据见上文。独立成交路径
 可继续冻结 SettlementIntent；新的 PydanticAI Runtime 已另以隔离 PostgreSQL
 验证入局冻结、工具回合、Result applied 和记忆 gate，但不等于真实 Provider 多局
 验收。人工 CLI bridge 仍要求逐笔确认；目标自动路径设计为
 用户入局时创建一次受限 PaymentMandate，此后由隔离的 guest signer 和 Settlement
-Worker 处理 accepted trade，不再逐笔确认。默认部署仍将自动广播设为关闭，必须先
+Worker 处理 accepted trade，不再逐笔确认。本地开发默认仍将自动广播设为关闭，必须先
 配置 testnet signer、Facilitator、钱包清单和管理员 allowlist，并完成 live testnet
 验收。
 
@@ -386,7 +390,7 @@ python deploy/scripts/mark_memorial_credential_claimed.py `
 - 游戏机制：[`docs/game-design.md`](docs/game-design.md)
 - 产品范围：[`docs/product.md`](docs/product.md)
 - 实施路线：[`docs/roadmap.md`](docs/roadmap.md)
-- 扩容设计：[`docs/arena-scale-out-design.md`](docs/arena-scale-out-design.md)
+- Agent-driven A2A 市场：[`docs/agent-driven-a2a-market-implementation-plan.md`](docs/agent-driven-a2a-market-implementation-plan.md)
 - Agent 入场：[`docs/agent-onboarding.md`](docs/agent-onboarding.md)
 - Hosted Agent 规格：[`docs/hosted-arena-agent-spec.md`](docs/hosted-arena-agent-spec.md)
 - Hosted Agent 实施计划：[`docs/hosted-arena-agent-implementation-plan.md`](docs/hosted-arena-agent-implementation-plan.md)
@@ -394,7 +398,7 @@ python deploy/scripts/mark_memorial_credential_claimed.py `
 - 用户钱包 API：[`docs/wallet-api.md`](docs/wallet-api.md)
 - Hosted/Arena 生产运行：[`docs/hosted-arena-production-runbook.md`](docs/hosted-arena-production-runbook.md)
 - Connector 规格：[`docs/local-agent-connector-spec.md`](docs/local-agent-connector-spec.md)
-- Connector 部署：[`docs/self-hosted-connector-deployment.md`](docs/self-hosted-connector-deployment.md)
+- Connector 安装器：[`deploy/install/README.md`](deploy/install/README.md)
 - 产品前端：[sunruize93-cmyk/arena402](https://github.com/sunruize93-cmyk/arena402)
 - 历史文档：[`docs/archive/README.md`](docs/archive/README.md)
 

@@ -1,6 +1,6 @@
 # Arena 402 游戏结算集成契约
 
-## 2026-07-25 implementation update
+## Implementation status (updated 2026-08-08)
 
 The following payment foundation is implemented:
 
@@ -30,18 +30,15 @@ the operator must reconcile the public hash and resume with
 `arena:submit-only` plus `arena:verify-restart` provides the explicit
 submitted-state/Worker-restart/inventory-replay acceptance drill.
 
-The no-broadcast dual Hosted Agent demonstration reaches
-`authorization_requested`. A rollback-only integration verifier has exercised
-the confirmation and inventory-commit transaction, and a historical Injective
-testnet transfer has been matched through the read-only recovery path. No new
-state-changing transaction was broadcast as part of this milestone.
-
-The second-stage backend now also implements permanent platform User-to-wallet
-binding keyed by internal `user_id`, bounded and revocable Game-scoped
-PaymentMandates, x402 V2
-challenge/response headers, an isolated unattended encrypted testnet signer, and a
-dedicated non-public Settlement Worker. A newly approved live testnet
-transaction against the currently deployed services remains outstanding.
+The backend now also implements permanent platform User-to-wallet binding keyed
+by internal `user_id`, bounded and revocable Game-scoped PaymentMandates, x402
+V2 challenge/response headers, an isolated unattended encrypted testnet signer,
+and a dedicated non-public Settlement Worker. The self-hosted Facilitator path
+has completed fresh Injective EVM testnet submission, confirmation, and
+idempotent inventory commit. Formal Phase D Game
+`game-20260806-110040-099857d6f841` committed three `arena402-g` trades from the
+same eight-round `agent_a2a.v1` evidence chain. This does not establish standard
+public Facilitator compatibility, mainnet custody, or 100-Agent capacity.
 
 ## Public trade ledger projection
 
@@ -69,8 +66,9 @@ was not captured before migration `030`. Buyer and seller account addresses
 come from the frozen SettlementIntent and can be compared directly with the
 single verified ERC-20 `Transfer`.
 
-> 状态：钱包、PaymentMandate、x402 V2 与无人值守 Settlement Worker 已实现并
-> 默认关闭真实广播；新鲜 live testnet 端到端验收尚未完成。
+> 状态：钱包、PaymentMandate、x402 V2、密文 signer 与无人值守 Settlement
+> Worker 已实现；自建 Facilitator 的新鲜 live testnet 及正式 Phase D
+> `arena402-g` 链路已通过。公共第三方 Facilitator 兼容仍未验收。
 >
 > 本文取代已归档的 RFQ/数字交付结算方案，只定义“协商被接受”到“链上确认后
 > 转移游戏货物”的边界。Settlement 模块当前能力和验证证据仍以

@@ -453,7 +453,9 @@ Verified local PostgreSQL evidence on 2026-07-25:
   idempotent inventory commit. The synthetic confirmation was rolled back and
   no transaction was signed or broadcast.
 
-> 状态：当前跨模块实施状态与建议顺序。
+> 状态：以下是 Phase D 前的 foundation 快照；当前权威完成状态见本文顶部
+> `Hosted Agent Runtime v2` 与 `Phase D`，不得把本节较早的未完成措辞解释为
+> 当前结论。
 
 Arena 402 已完成 Hosted Runtime 与最多十回合、12 Agent Pawnhouse 游戏的本地开发闭环，并已建立
 确认门控的 testnet settlement 和生产 Worker 边界。Local Connector 已完成
@@ -465,9 +467,9 @@ wake + stateless MCP Task Broker、启动/重连与 sequence gap 主动 cursor s
 Claude Code 2.1.170 与 Codex CLI 0.146.0 完成一回合 Connector-only 比赛，
 四项 decide/negotiate 结果均经 Result Sink 应用，并形成 FCFS pairing、proposal
 和 accept。该隔离局未提供 PaymentMandate，故以 `settlement_disabled` 关闭且
-0 链写入；生产重连、Hosted/Connector mixed 和 payment-enabled Connector 真实
-E2E 尚未验收。通用
-PaymentMandate 与生产实机验收也仍未完成。Hosted 方向以
+0 链写入；后续 mixed-Runtime 恢复、payment-enabled Connector、通用
+PaymentMandate 和生产实机验收已在 Phase D 完成。活动局中途整机重启、公共
+Facilitator 与分档容量仍未完成。Hosted 方向以
 [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md) 和
 [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
 为当前目标。
@@ -559,10 +561,9 @@ create game
       在事务级 advisory lock 内创建产品规格的新 Game 并原子切换单例指针；外部前端
       已接入 Current Game 三态、3 秒轮询、404 准备态和 RUNNING 自动观战，并在
       Phase D 的同一权威 Game 上完成 Vercel 公网投影验收。
-- [ ] 单一当前游戏的 Join v2 preflight、动态同局 Mandate payee、显式 Ready
-      投影、Withdraw、阈值原子自动启动、交易列表和结果接口
-      仍按 `prd-current-game-backend.md` 顺序实施。旧 Participant 在这些校验落库前
-      只显示为 `PENDING`，不计入 `readyCount`。
+- [x] 单一当前游戏的 Join v2 preflight、动态同局 Mandate payee、显式 Ready
+      投影、Withdraw、阈值原子自动启动、公开交易账本和结果投影已经实现；安全
+      对外契约以 `product.md`、`game-design.md` 和实际 API 为准。
 - [x] Current Game Join 不再假设 Hosted Runtime：preflight 同时校验 ready 的
       Hosted 与 owner-scoped Connector route，统一 Join 按冻结的 Runtime Kind
       分流；Connector Participant 复用同一 PaymentMandate、Join Authorization、
@@ -630,7 +631,9 @@ create game
 - [x] 使用 Hosted scripted + 真实 Codex 跑通 mixed 比赛，并保存执行中断线重连
       与 deadline default 证据；Claude Code 待外部 API/证书路径健康后补跑。
 - [x] 保存 terminal Result outbox replay 证据。
-- [ ] 保存 payment-enabled settlement 证据。
+- [x] 保存 payment-enabled settlement 证据；Phase D 正式
+      `game-20260806-110040-099857d6f841` 由真实 Codex Connector 完成一笔本人
+      `arena402-g` settled trade，同局共三笔交易链上确认后提交库存。
 - [x] PaymentMandate 已实现额度、期限、范围、撤销和幂等
       `reserve / consume / release`；自动路径由独立 Settlement Worker 执行。
 - [x] 平台 `user_id` 永久绑定 platform-managed testnet guest wallet；`045`
@@ -723,7 +726,8 @@ create game
       React state/storage，Local Connector 入口保留，Hosted-only 用户可不填
       Connector code 直接登录。
 - [x] 实现生产 PostgreSQL control repository、单机 AES-GCM ciphertext vault
-      与可选 Tencent SSM 组合；公网真实 Key 与刷新/重启验收仍待执行。
+      与可选 Tencent SSM 组合；后续 Phase D 已完成公网真实 Key、刷新和两局间
+      重启连续性验收，活动局中途整机重启仍是独立缺口。
 - [x] 实现 owner-scoped、同 Provider 的 Hosted Agent Runtime `PATCH`：
       复用已验证 Credential，候选配置先经 durable validation，成功后原子切换，
       失败时保留旧配置与可用 Credential；活动 Game 继续使用 join 时冻结的快照。
@@ -897,9 +901,10 @@ create game
       1%/500ms 门槛。并发 100 超过测试 Compose 的
       `ADX_API_MAX_CONCURRENCY=64` 并产生入口 503；该结果只描述 HTTP 控制面，
       不计入 AgentTask timeout 公式。
-- [ ] 100 Agent 场景继续采用 `result_received_at` FCFS，并披露 Provider
-      限流和 Worker wave 带来的平台排队偏差；未通过 launch-skew 验收前不把该
-      部署称为 Tournament 公平性验证。
+- [ ] 100 Agent `agent_a2a.v1` 场景记录各 Task/Result queue age、Intent/RFQ/
+      Select 到达偏差、对手覆盖和 deadline；披露 Provider 限流与 Worker wave
+      带来的平台排队差异。legacy `fcfs.v1` 仅继续验证其冻结数据库时间语义；未通过
+      分档验收前不把该部署称为 Tournament 公平性验证。
 - [ ] 冻结 `settlement_timeout_ms=600000`，先回归 10/12 Agent，再在 100 Agent
       最坏 50 笔 accepted trade 场景验证 4 shard 路由、在途并发、终态与恢复。
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；
@@ -951,7 +956,8 @@ create game
       Participant round-slot 的 Engagement；公开事件不含私有限价。
 - [x] Phase A Round integration：`057` 以 Game 冻结
       `market_protocol=agent_a2a.v1`，编排 intent → RFQ → select →
-      negotiate；规则状态机不能误入该路径，Current Game 继续使用 `fcfs.v1`。
+      negotiate；规则状态机不能误入该路径。此处记录 Phase A 当时 Current Game
+      继续使用 `fcfs.v1` 的切换前边界；Phase D 已完成生产切换。
 - [x] Phase B substrate：已加入 `arena.market.intent/rfq/select`、Hosted
       Prompt/Driver 结构化输出和 Local Connector 通用任务投递；Fake Provider
       测试只证明 transport/schema/Result Sink，不是真实 Agent 证据。
@@ -1002,7 +1008,8 @@ create game
       `real-runtimes-e8c3b2d723` 双 Codex E2E 均已完成一笔 Deal；真实局使用
       `authorizationMode=none`，所以谈判安全终结为 `settlement_failed`，且为
       0 SettlementIntent、0 inventory commit、0 现金/持仓变更、0 chain write。
-      payment-enabled Injective testnet A2A 仍待显式人工确认后验收。
+      后续 Phase D 正式 `arena402-g` Game 已完成 payment-enabled Injective
+      testnet A2A；本条保留为 Phase C 当时的 payment-disabled 证据边界。
 - [x] Phase C protocol implementation：迁移 `060`–`061` 和
       Runtime/Coordinator 已将
       RFQ `openingPrice` 作为 Engage 后不可变的 Turn 1 proposal；每个 RFQ
@@ -1049,8 +1056,10 @@ create game
 - [ ] Phase E 实现标准 Native A2A Endpoint Adapter，并完成
       Hosted/Connector/Native A2A 混合局；内部 WSS 或 Fake 状态机不得称为标准
       Native A2A。
-- 100 Agent 单局与 4 Facilitator shard 的生产配置基础已落地；容量、故障恢复和
-  live testnet 仍按 [`arena-scale-out-design.md`](arena-scale-out-design.md)
+- 100 Agent 单局与 4 Facilitator shard 的生产配置基础已落地；D5b 的
+  12/25/50/100 Agent 分档、每 Runtime/Task 样本、四 shard 故障恢复和 live
+  testnet 按本文顶部 Phase D5b 及
+  [`hosted-arena-agent-implementation-plan.md`](hosted-arena-agent-implementation-plan.md)
   分阶段验收。300 active Agent、多局并发仍是 Post-MVP；
 - Native A2A Endpoint Adapter；
 - LangGraph/通用 Agent Studio；
