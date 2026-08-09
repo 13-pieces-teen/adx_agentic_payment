@@ -17,6 +17,10 @@ import {
   findMatchingMintEvidence,
   type MintEventEvidence,
 } from "./gamecoin-recovery.ts";
+import {
+  nextSafeGameCoinNonce,
+  runGameCoinProvisioningPipeline,
+} from "./gamecoin-pipeline.ts";
 import { waitViaBlockscout } from "./lib-tx.ts";
 
 const { Pool } = pg;
@@ -92,9 +96,24 @@ type ProvisionRow = {
   mint_tx_nonce: string | null;
   mint_gas_limit: string | null;
   mint_gas_price_wei: string | null;
+  submitted_at: Date | null;
 };
 
 type SubmittedKind = "whitelist" | "mint";
+
+type PreparedProvision = {
+  provision: ProvisionRow;
+  kind: SubmittedKind;
+  data: Hex;
+  gas: bigint;
+  gasPrice: bigint;
+};
+
+type SignedProvision = PreparedProvision & {
+  nonce: number;
+  serialized: Hex;
+  hash: Hex;
+};
 
 const databaseUrl = required("ADX_GAMECOIN_PROVISIONER_DATABASE_URL");
 const rpcUrl = required("ADX_ARENA_SETTLEMENT_RPC_URL");
@@ -106,6 +125,12 @@ const requiredConfirmations = positiveNumber(
   "ADX_GAMECOIN_REQUIRED_CONFIRMATIONS",
   2,
 );
+const maxInflight = boundedPositiveNumber(
+  "ADX_GAMECOIN_PROVISIONER_MAX_INFLIGHT",
+  16,
+  64,
+);
+const recoveryGraceMs = Math.max(10_000, pollMs * 2);
 const key = await loadFacilitatorPrivateKey(
   required("ADX_FACILITATOR_CSV_PATH"),
   required("ADX_GAMECOIN_OWNER_WALLET_INDEX", "1"),
@@ -160,19 +185,113 @@ while (true) {
 }
 
 async function tick(): Promise<void> {
-  const provision = await currentProvision();
-  if (!provision) return;
-  validateFrozenScope(provision);
-
-  if (provision.status === "whitelist_submitted") {
-    await reconcileSubmitted(provision, "whitelist");
-    return;
+  let gasPricePromise: Promise<bigint> | null = null;
+  const result = await runGameCoinProvisioningPipeline(
+    {
+      listSubmitted: currentSubmittedProvisions,
+      reconcile: async (provision) => {
+        validateFrozenScope(provision);
+        await reconcileSubmitted(provision, submittedKind(provision));
+      },
+      countInflight,
+      listPending: currentPendingProvisions,
+      prepare: async (provision) => {
+        validateFrozenScope(provision);
+        gasPricePromise ??= publicClient
+          .getGasPrice()
+          .then((value) => value * 3n);
+        return prepareProvision(provision, gasPricePromise);
+      },
+      getPendingNonce: nextSubmissionNonce,
+      sign: signProvision,
+      persist: persistSignedProvision,
+      broadcast: broadcastSignedProvision,
+    },
+    maxInflight,
+  );
+  if (result.reconciled > 0 || result.submitted > 0) {
+    console.log(
+      `arena402_gamecoin_pipeline reconciled=${result.reconciled} ` +
+        `prepared=${result.prepared} submitted=${result.submitted} ` +
+        `inflight=${result.inflight} max_inflight=${maxInflight}`,
+    );
   }
-  if (provision.status === "mint_submitted") {
-    await reconcileSubmitted(provision, "mint");
-    return;
-  }
+}
 
+async function currentSubmittedProvisions(
+  limit: number,
+): Promise<ProvisionRow[]> {
+  return currentProvisions(
+    ["whitelist_submitted", "mint_submitted"],
+    limit,
+  );
+}
+
+async function currentPendingProvisions(limit: number): Promise<ProvisionRow[]> {
+  return currentProvisions(["pending"], limit);
+}
+
+async function currentProvisions(
+  statuses: ProvisionStatus[],
+  limit: number,
+): Promise<ProvisionRow[]> {
+  const result = await pool.query<ProvisionRow>(
+    `SELECT provision.provision_id, provision.chain_id,
+            provision.token_address, provision.account_address,
+            provision.amount_atomic, provision.balance_before_atomic,
+            provision.status, provision.whitelist_tx_hash,
+            provision.whitelist_tx_nonce, provision.whitelist_gas_limit,
+            provision.whitelist_gas_price_wei, provision.mint_tx_hash,
+            provision.mint_tx_nonce, provision.mint_gas_limit,
+            provision.mint_gas_price_wei, provision.submitted_at
+       FROM arena402.game_coin_provisions AS provision
+       JOIN arena402.current_game AS pointer
+         ON pointer.singleton AND pointer.game_id = provision.game_id
+       JOIN arena402.games AS game ON game.game_id = provision.game_id
+      WHERE provision.status = ANY($1::text[])
+        AND game.phase IN ('registration', 'portfolio_setup')
+      ORDER BY provision.created_at, provision.provision_id
+      LIMIT $2`,
+    [statuses, limit],
+  );
+  return result.rows;
+}
+
+async function countInflight(): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM arena402.game_coin_provisions AS provision
+       JOIN arena402.current_game AS pointer
+         ON pointer.singleton AND pointer.game_id = provision.game_id
+       JOIN arena402.games AS game ON game.game_id = provision.game_id
+      WHERE provision.status IN ('whitelist_submitted', 'mint_submitted')
+        AND game.phase IN ('registration', 'portfolio_setup')`,
+  );
+  return Number(result.rows[0]?.count ?? "0");
+}
+
+async function nextSubmissionNonce(): Promise<number> {
+  const [rpcPendingNonce, durable] = await Promise.all([
+    publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: "pending",
+    }),
+    pool.query<{ max_nonce: string | null }>(
+      `SELECT max(GREATEST(whitelist_tx_nonce, mint_tx_nonce))::text AS max_nonce
+         FROM arena402.game_coin_provisions`,
+    ),
+  ]);
+  const stored = durable.rows[0]?.max_nonce;
+  return nextSafeGameCoinNonce(
+    rpcPendingNonce,
+    stored === null || stored === undefined ? null : Number(stored),
+  );
+}
+
+async function prepareProvision(
+  provision: ProvisionRow,
+  gasPricePromise: Promise<bigint>,
+): Promise<PreparedProvision | null> {
   const target = getAddress(provision.account_address);
   const whitelisted = Boolean(
     await readContract({
@@ -183,8 +302,7 @@ async function tick(): Promise<void> {
     }),
   );
   if (!whitelisted) {
-    await submit(provision, "whitelist");
-    return;
+    return prepareTransaction(provision, "whitelist", gasPricePromise);
   }
 
   let balanceBefore = provision.balance_before_atomic;
@@ -201,42 +319,20 @@ async function tick(): Promise<void> {
   }
   if (BigInt(provision.amount_atomic) === 0n) {
     await confirmProvision(provision.provision_id, null);
-    return;
+    return null;
   }
-  await submit(
+  return prepareTransaction(
     { ...provision, balance_before_atomic: balanceBefore },
     "mint",
+    gasPricePromise,
   );
 }
 
-async function currentProvision(): Promise<ProvisionRow | null> {
-  const result = await pool.query<ProvisionRow>(
-    `SELECT provision.provision_id, provision.chain_id,
-            provision.token_address, provision.account_address,
-            provision.amount_atomic, provision.balance_before_atomic,
-            provision.status, provision.whitelist_tx_hash,
-            provision.whitelist_tx_nonce, provision.whitelist_gas_limit,
-            provision.whitelist_gas_price_wei, provision.mint_tx_hash,
-            provision.mint_tx_nonce, provision.mint_gas_limit,
-            provision.mint_gas_price_wei
-       FROM arena402.game_coin_provisions AS provision
-       JOIN arena402.current_game AS pointer
-         ON pointer.singleton AND pointer.game_id = provision.game_id
-       JOIN arena402.games AS game ON game.game_id = provision.game_id
-      WHERE provision.status IN (
-                'pending', 'whitelist_submitted', 'mint_submitted'
-            )
-        AND game.phase IN ('registration', 'portfolio_setup')
-      ORDER BY provision.created_at, provision.provision_id
-      LIMIT 1`,
-  );
-  return result.rows[0] ?? null;
-}
-
-async function submit(
+async function prepareTransaction(
   provision: ProvisionRow,
   kind: SubmittedKind,
-): Promise<void> {
+  gasPricePromise: Promise<bigint>,
+): Promise<PreparedProvision> {
   const target = getAddress(provision.account_address);
   if (kind === "mint" && provision.balance_before_atomic === null) {
     throw new Error("gamecoin_balance_baseline_missing");
@@ -253,30 +349,41 @@ async function submit(
           functionName: "mint",
           args: [target, BigInt(provision.amount_atomic)],
         });
-  const nonce = await publicClient.getTransactionCount({
-    address: account.address,
-    blockTag: "pending",
-  });
-  const gasPrice = (await publicClient.getGasPrice()) * 3n;
-  const estimate = await publicClient.estimateGas({
-    account: account.address,
-    to: token,
-    data,
-  });
+  const [gasPrice, estimate] = await Promise.all([
+    gasPricePromise,
+    publicClient.estimateGas({
+      account: account.address,
+      to: token,
+      data,
+    }),
+  ]);
   const gas = (estimate * 120n) / 100n;
+  return { provision, kind, data, gas, gasPrice };
+}
+
+async function signProvision(
+  prepared: PreparedProvision,
+  nonce: number,
+): Promise<SignedProvision> {
   const serialized = await account.signTransaction({
     chainId,
     to: token,
-    data,
-    gas,
-    gasPrice,
+    data: prepared.data,
+    gas: prepared.gas,
+    gasPrice: prepared.gasPrice,
     nonce,
     type: "legacy",
   });
   const hash = keccak256(serialized);
-  const prefix = kind === "whitelist" ? "whitelist" : "mint";
+  return { ...prepared, nonce, serialized, hash };
+}
+
+async function persistSignedProvision(
+  signed: SignedProvision,
+): Promise<boolean> {
+  const prefix = signed.kind === "whitelist" ? "whitelist" : "mint";
   const nextStatus =
-    kind === "whitelist" ? "whitelist_submitted" : "mint_submitted";
+    signed.kind === "whitelist" ? "whitelist_submitted" : "mint_submitted";
   const result = await pool.query(
     `UPDATE arena402.game_coin_provisions
         SET status = $2,
@@ -289,18 +396,23 @@ async function submit(
             last_error = NULL
       WHERE provision_id = $1 AND status = 'pending'`,
     [
-      provision.provision_id,
+      signed.provision.provision_id,
       nextStatus,
-      hash,
-      nonce,
-      gas.toString(),
-      gasPrice.toString(),
+      signed.hash,
+      signed.nonce,
+      signed.gas.toString(),
+      signed.gasPrice.toString(),
     ],
   );
-  if (result.rowCount !== 1) return;
+  return result.rowCount === 1;
+}
+
+async function broadcastSignedProvision(signed: SignedProvision): Promise<void> {
+  const { serialized, hash } = signed;
   await broadcast(serialized, hash);
   console.log(
-    `arena402_gamecoin_${kind}_submitted provision=${provision.provision_id} tx=${hash}`,
+    `arena402_gamecoin_${signed.kind}_submitted ` +
+      `provision=${signed.provision.provision_id} tx=${hash}`,
   );
 }
 
@@ -319,6 +431,7 @@ async function reconcileSubmitted(
       blockNumber: rpcReceipt.blockNumber,
     };
   } catch {
+    if (isWithinRecoveryGrace(provision.submitted_at)) return;
     const recoveredMintBlock =
       kind === "mint"
         ? await recentMintEventBlock(provision, submitted.hash)
@@ -397,6 +510,18 @@ async function reconcileSubmitted(
   console.log(
     `arena402_gamecoin_provision_confirmed provision=${provision.provision_id} block=${receipt.blockNumber}`,
   );
+}
+
+function submittedKind(provision: ProvisionRow): SubmittedKind {
+  if (provision.status === "whitelist_submitted") return "whitelist";
+  if (provision.status === "mint_submitted") return "mint";
+  throw new Error("gamecoin_submitted_status_invalid");
+}
+
+function isWithinRecoveryGrace(submittedAt: Date | null): boolean {
+  if (submittedAt === null) return false;
+  const timestamp = new Date(submittedAt).getTime();
+  return Number.isFinite(timestamp) && Date.now() - timestamp < recoveryGraceMs;
 }
 
 async function recentMintEventBlock(
@@ -576,6 +701,16 @@ function positiveNumber(name: string, fallback: number): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${name}_invalid`);
   }
+  return value;
+}
+
+function boundedPositiveNumber(
+  name: string,
+  fallback: number,
+  maximum: number,
+): number {
+  const value = positiveNumber(name, fallback);
+  if (value > maximum) throw new Error(`${name}_invalid`);
   return value;
 }
 

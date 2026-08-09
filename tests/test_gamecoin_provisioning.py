@@ -59,6 +59,16 @@ def test_gamecoin_provisioner_persists_before_broadcast_and_recovers() -> None:
     assert "game.phase IN ('registration', 'portfolio_setup')" in WORKER
 
 
+def test_gamecoin_provisioner_uses_a_bounded_submission_pipeline() -> None:
+    service = COMPOSE.split("  gamecoin-provisioner:", 1)[1].split(
+        "\n  memorial-minter:", 1
+    )[0]
+    assert "ADX_GAMECOIN_PROVISIONER_MAX_INFLIGHT" in service
+    assert "ADX_GAMECOIN_PROVISIONER_MAX_INFLIGHT" in WORKER
+    assert "runGameCoinProvisioningPipeline" in WORKER
+    assert "maxInflight" in WORKER
+
+
 def test_join_waits_for_confirmed_onchain_gamecoin_provisioning() -> None:
     assert "CREATE TABLE arena402.game_coin_provisions" in MIGRATION
     assert "'whitelist_submitted'" in MIGRATION
