@@ -908,6 +908,16 @@ create game
       Select 到达偏差、对手覆盖和 deadline；披露 Provider 限流与 Worker wave
       带来的平台排队差异。legacy `fcfs.v1` 仅继续验证其冻结数据库时间语义；未通过
       分档验收前不把该部署称为 Tournament 公平性验证。
+- [x] 2026-08-09 在腾讯云 4 vCPU / 8 GiB 主机完成一次 payment-disabled
+      100 Hosted Agent、8 回合 `agent_a2a.v1` 实测：8/8 回合完成，1150 个
+      AgentTask 中 1149 completed、1 个因 `invalid_structured_output` defaulted，
+      整机 CPU P95/峰值为 `15.1%/35.8%`，内存峰值 `2.74 GiB`，核心容器
+      0 OOM/0 restart。该证据只关闭 100 Agent payment-disabled 单次容量点；
+      12/25/50 分档、重复运行、支付开启和约 20 名真人叠加仍未验收。
+- [x] 生产 Compose 将 Official LiteLLM 的容器内存限额从 `768 MiB` 提高到
+      `1 GiB`；前向 migration `082` 删除遗漏的
+      `games_min_participants_check` 上界，只保留 `min_participants >= 2`，使
+      100 人 Operator Game 不再依赖测试编排绕过。
 - [ ] 冻结 `settlement_timeout_ms=600000`，先回归 10/12 Agent，再在 100 Agent
       最坏 50 笔 accepted trade 场景验证 4 shard 路由、在途并发、终态与恢复。
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；

@@ -306,6 +306,7 @@ def test_official_litellm_is_private_and_owns_upstream_distribution() -> None:
     assert "litellm-token.key" not in proxy
     assert "ADX_LITELLM_SECRET_DATABASE_URL" in proxy
     assert "- official-llm" in hosted_worker
+    assert "mem_limit: 1g" in proxy
 
     assert "- scripts.provision_official_litellm" in provision
     assert "target: /run/secrets/official/deepseek-source" in provision

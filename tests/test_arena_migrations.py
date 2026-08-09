@@ -318,6 +318,12 @@ CONTEXT_LIQUIDITY_RUNTIME_KIND_REPAIR_SQL_PATH = (
     / "migrations"
     / "081_arena_context_liquidity_runtime_kind_repair.sql"
 )
+LEGACY_MIN_PARTICIPANTS_CAPACITY_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "082_arena_drop_legacy_min_participants_check.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -937,6 +943,26 @@ def test_unbounded_game_capacity_drops_the_legacy_inline_check():
     assert "DROP CONSTRAINT IF EXISTS games_check" in sql
     assert "DROP CONSTRAINT IF EXISTS games_max_participants_check" in sql
     assert sql.count("CHECK (max_participants >= min_participants)") == 1
+
+
+def test_latest_game_capacity_cleanup_drops_the_legacy_minimum_alias(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sql = LEGACY_MIN_PARTICIPANTS_CAPACITY_SQL_PATH.read_text(encoding="utf-8")
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "DROP CONSTRAINT IF EXISTS games_min_participants_check" in sql
+    assert "CHECK (min_participants >= 2)" in sql
+    assert "CHECK (min_participants BETWEEN 2 AND 64)" not in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
+    assert (
+        LEGACY_MIN_PARTICIPANTS_CAPACITY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
 
 
 def test_authoritative_action_policy_migration_converges_sql_with_python():

@@ -101,8 +101,11 @@ Agent 分档证据，所以没有修改当前 timeout 默认值。十 Agent 样�
 
 生产配置基础允许一个最多 100 个 Agent 的 Current Game、四个各含 25 个任务槽的
 Hosted Worker 副本，以及四个独立 Facilitator EOA 分片的确定性结算路由。这只是
-已实现的容量基础，不是线上容量结论：当前已验证的本地规模仍为 12 个 Agent，
-100-Agent Provider/testnet E2E 和四分片故障恢复仍需生产验收。
+已实现的容量基础，不是完整支付容量结论。2026-08-09 已在腾讯云 4 vCPU / 8 GiB
+主机完成一次 payment-disabled 的 100 Hosted Agent、8 回合真实 Provider 实测；
+8/8 回合完成，整机 CPU P95/峰值为 `15.1%/35.8%`，内存峰值 `2.74 GiB`，
+核心容器无 OOM 或重启。12/25/50 分档、重复运行、支付开启、约 20 名真人叠加和
+四分片故障恢复仍需生产验收。
 
 ```powershell
 docker compose -f docker-compose.local.yml up --build -d
