@@ -9133,6 +9133,113 @@ class PostgresPawnhouseRepository:
             "schemaVersion": "arena.game-owner-state.v1",
         }
 
+    async def recent_rankings(self, *, limit: int = 5) -> dict[str, object]:
+        if limit < 1 or limit > 10:
+            raise ValueError("recent_rankings_limit_out_of_range")
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            games = await connection.fetch(
+                """
+                SELECT game.game_id, game.round_count,
+                    game.market_protocol, game.completed_at
+                FROM arena402.games AS game
+                WHERE game.phase = 'completed'
+                  AND game.completed_at IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM arena402.rankings AS ranking
+                      WHERE ranking.game_id = game.game_id
+                  )
+                ORDER BY game.completed_at DESC, game.game_id DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            if not games:
+                return {
+                    "games": [],
+                    "schemaVersion": "arena.recent-rankings.v1",
+                }
+
+            game_ids = [str(game["game_id"]) for game in games]
+            ranking_rows = await connection.fetch(
+                """
+                SELECT
+                    ranking.game_id, ranking.rank,
+                    ranking.game_participant_id,
+                    participant.agent_id,
+                    coalesce(
+                        game_agent.config_snapshot ->> 'display_name',
+                        agent.name,
+                        participant.agent_id
+                    ) AS display_name,
+                    ranking.net_worth_atomic,
+                    ranking.tier,
+                    ranking.calculated_at
+                FROM arena402.rankings AS ranking
+                JOIN arena402.game_participants AS participant
+                  ON participant.game_participant_id =
+                     ranking.game_participant_id
+                LEFT JOIN public.game_agents AS game_agent
+                  ON game_agent.game_agent_id =
+                     participant.game_participant_id
+                LEFT JOIN public.arena_agents AS agent
+                  ON agent.agent_id = participant.agent_id
+                WHERE ranking.game_id = ANY($1::text[])
+                ORDER BY ranking.game_id, ranking.rank
+                """,
+                game_ids,
+            )
+            price_rows = await connection.fetch(
+                """
+                SELECT game_id, good_id, price_atomic
+                FROM arena402.final_settlement_prices
+                WHERE game_id = ANY($1::text[])
+                ORDER BY game_id, good_id
+                """,
+                game_ids,
+            )
+
+        rankings_by_game: dict[str, list[dict[str, object]]] = {
+            game_id: [] for game_id in game_ids
+        }
+        for row in ranking_rows:
+            rankings_by_game[str(row["game_id"])].append(
+                {
+                    "rank": int(row["rank"]),
+                    "participantId": str(row["game_participant_id"]),
+                    "agentId": str(row["agent_id"]),
+                    "displayName": str(row["display_name"]),
+                    "netWorthAtomic": str(int(row["net_worth_atomic"])),
+                    "tier": str(row["tier"]),
+                    "calculatedAt": row["calculated_at"].isoformat(),
+                }
+            )
+
+        prices_by_game: dict[str, dict[str, str]] = {
+            game_id: {} for game_id in game_ids
+        }
+        for row in price_rows:
+            prices_by_game[str(row["game_id"])][str(row["good_id"])] = str(
+                int(row["price_atomic"])
+            )
+
+        return {
+            "games": [
+                {
+                    "gameId": str(game["game_id"]),
+                    "completedAt": game["completed_at"].isoformat(),
+                    "roundCount": int(game["round_count"]),
+                    "marketProtocol": str(game["market_protocol"]),
+                    "rankings": rankings_by_game[str(game["game_id"])],
+                    "finalPrices": prices_by_game[str(game["game_id"])],
+                }
+                for game in games
+            ],
+            "schemaVersion": "arena.recent-rankings.v1",
+        }
+
     async def game_state(self, game_id: str) -> dict[str, object]:
         pool = self._require_pool()
         async with pool.acquire() as connection:

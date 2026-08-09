@@ -557,6 +557,9 @@ create game
       `GET /api/v1/games/current` 安全投影；接口将内部阶段映射为
       `WAITING / RUNNING / COMPLETED`，支持匿名缓存和登录态 `joinedByMe`，
       不返回 User、Runtime 配置或结算账户。
+- [x] 公开 `GET /api/v1/rankings/recent?limit=1..10` 以三次有界查询发布最近
+      已完成 Game、冻结终场排名和最终结算价格；空集合保持为空，不回退到座位、
+      实时估值或 Demo fixture，响应允许 15 秒公共缓存。
 - [x] Arena Worker 已增加幂等 Current Game 生命周期循环：首次启动和上一局终态后，
       在事务级 advisory lock 内创建产品规格的新 Game 并原子切换单例指针；外部前端
       已接入 Current Game 三态、3 秒轮询、404 准备态和 RUNNING 自动观战，并在

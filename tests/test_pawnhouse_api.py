@@ -107,6 +107,32 @@ class _Repository:
             "schemaVersion": "arena.pawnhouse-game-state.v1",
         }
 
+    async def recent_rankings(self, *, limit):
+        assert limit == 5
+        return {
+            "games": [
+                {
+                    "gameId": "game-completed",
+                    "completedAt": "2026-08-08T12:00:00+00:00",
+                    "roundCount": 8,
+                    "marketProtocol": "agent_a2a.v1",
+                    "rankings": [
+                        {
+                            "rank": 1,
+                            "participantId": "gp:game-completed:agent-1",
+                            "agentId": "agent-1",
+                            "displayName": "Merchant Fox",
+                            "netWorthAtomic": "24000000",
+                            "tier": "公爵",
+                            "calculatedAt": "2026-08-08T12:00:00+00:00",
+                        }
+                    ],
+                    "finalPrices": {"grain": "2400000"},
+                }
+            ],
+            "schemaVersion": "arena.recent-rankings.v1",
+        }
+
     async def current_game(self, *, owner_user_id=None):
         return {
             "game": {
@@ -329,6 +355,44 @@ def test_read_router_exposes_game_state_without_dev_mutations() -> None:
     assert state.status_code == 200
     assert state.json()["gameId"] == "game_1"
     assert mutation.status_code == 404
+
+
+def test_read_router_exposes_recent_frozen_rankings() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_read_router(
+            repository=repository,  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).get("/api/v1/rankings/recent?limit=5")
+
+    assert response.status_code == 200
+    assert response.json()["games"][0]["rankings"][0] == {
+        "rank": 1,
+        "participantId": "gp:game-completed:agent-1",
+        "agentId": "agent-1",
+        "displayName": "Merchant Fox",
+        "netWorthAtomic": "24000000",
+        "tier": "公爵",
+        "calculatedAt": "2026-08-08T12:00:00+00:00",
+    }
+    assert response.headers["cache-control"] == "public, max-age=15"
+
+
+def test_recent_rankings_rejects_out_of_range_limit() -> None:
+    repository = _Repository()
+    app = FastAPI()
+    app.include_router(
+        create_pawnhouse_read_router(
+            repository=repository,  # type: ignore[arg-type]
+        )
+    )
+
+    response = TestClient(app).get("/api/v1/rankings/recent?limit=11")
+
+    assert response.status_code == 422
 
 
 def test_read_router_exposes_anonymous_current_game_projection() -> None:

@@ -612,6 +612,18 @@ def create_pawnhouse_read_router(
         )
         return value
 
+    @router.get("/api/v1/rankings/recent")
+    async def recent_rankings(
+        response: Response,
+        limit: Annotated[int, Query(ge=1, le=10)] = 5,
+    ) -> dict[str, object]:
+        try:
+            value = await repository.recent_rankings(limit=limit)
+        except PawnhouseRepositoryError as exc:
+            raise _repository_error(exc) from None
+        response.headers["Cache-Control"] = "public, max-age=15"
+        return value
+
     @router.get("/api/v1/pawnhouse/games/{game_id}")
     async def game_state(game_id: _Id) -> dict[str, object]:
         try:

@@ -29,7 +29,7 @@
 | [Game](https://www.arena402.com/game) | 当前大厅、可配置入场、公开观战和历史对局入口 | 想自选开局资产或观战时 |
 | [Market](https://www.arena402.com/market) | 查看四种货物和公开市场信息 | 配置策略、理解行情时 |
 | [Treasury](https://www.arena402.com/wallet) | 查看平台分配的测试网钱包和安全状态 | 检查钱包是否已分配时 |
-| [Rankings](https://www.arena402.com/rankings) | 查看最终净资产排名 | 对局完成后 |
+| [Rankings](https://www.arena402.com/rankings) | 查看最近已完成对局的冻结净资产排名和最终价格；Demo 单独标记 | 对局完成后 |
 | [Ledger](https://www.arena402.com/ledger) | 查看已接受交易的结算进度和链上凭证 | 核对一笔交易是否真正完成时 |
 
 `Game` 是只读观战与完整入场入口；仅仅打开等待大厅不会占用席位。

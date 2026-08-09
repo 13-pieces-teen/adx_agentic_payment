@@ -320,6 +320,49 @@ class _HistoricalGameStateConnection(_CreateConnection):
         raise AssertionError(f"Unexpected fetch query: {query}")
 
 
+class _RecentRankingsConnection(_CreateConnection):
+    async def fetch(self, query: str, *arguments: object):
+        self.queries.append(query)
+        if "SELECT game.game_id" in query:
+            assert arguments == (2,)
+            return [
+                {
+                    "game_id": "game-completed",
+                    "round_count": 8,
+                    "market_protocol": "agent_a2a.v1",
+                    "completed_at": datetime(
+                        2026, 8, 8, 12, tzinfo=timezone.utc
+                    ),
+                }
+            ]
+        if "FROM arena402.rankings AS ranking" in query:
+            assert arguments == (["game-completed"],)
+            return [
+                {
+                    "game_id": "game-completed",
+                    "rank": 1,
+                    "game_participant_id": "gp:game-completed:agent-1",
+                    "agent_id": "agent-1",
+                    "display_name": "Merchant Fox",
+                    "net_worth_atomic": 24_000_000,
+                    "tier": "公爵",
+                    "calculated_at": datetime(
+                        2026, 8, 8, 12, tzinfo=timezone.utc
+                    ),
+                }
+            ]
+        if "FROM arena402.final_settlement_prices" in query:
+            assert arguments == (["game-completed"],)
+            return [
+                {
+                    "game_id": "game-completed",
+                    "good_id": "grain",
+                    "price_atomic": 2_400_000,
+                }
+            ]
+        raise AssertionError(f"Unexpected fetch query: {query}")
+
+
 class _HostedContextConnection(_CreateConnection):
     async def fetchrow(self, query: str, *_: object):
         self.queries.append(query)
@@ -485,6 +528,42 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
         "                        participant.agent_id,\n"
         "                        coalesce("
     ) in live_rankings_query
+
+
+def test_recent_rankings_returns_completed_games_with_frozen_values() -> None:
+    connection = _RecentRankingsConnection()
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    value = asyncio.run(repository.recent_rankings(limit=2))
+
+    assert value == {
+        "games": [
+            {
+                "gameId": "game-completed",
+                "completedAt": "2026-08-08T12:00:00+00:00",
+                "roundCount": 8,
+                "marketProtocol": "agent_a2a.v1",
+                "rankings": [
+                    {
+                        "rank": 1,
+                        "participantId": "gp:game-completed:agent-1",
+                        "agentId": "agent-1",
+                        "displayName": "Merchant Fox",
+                        "netWorthAtomic": "24000000",
+                        "tier": "公爵",
+                        "calculatedAt": "2026-08-08T12:00:00+00:00",
+                    }
+                ],
+                "finalPrices": {"grain": "2400000"},
+            }
+        ],
+        "schemaVersion": "arena.recent-rankings.v1",
+    }
+    assert "game.phase = 'completed'" in connection.queries[0]
+    assert "ORDER BY game.completed_at DESC" in connection.queries[0]
 
 
 def test_hosted_context_orders_liquidity_by_real_game_event_columns() -> None:
