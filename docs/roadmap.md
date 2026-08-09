@@ -914,10 +914,20 @@ create game
       整机 CPU P95/峰值为 `15.1%/35.8%`，内存峰值 `2.74 GiB`，核心容器
       0 OOM/0 restart。该证据只关闭 100 Agent payment-disabled 单次容量点；
       12/25/50 分档、重复运行、支付开启和约 20 名真人叠加仍未验收。
-- [x] 生产 Compose 将 Official LiteLLM 的容器内存限额从 `768 MiB` 提高到
-      `1 GiB`；前向 migration `082` 删除遗漏的
+- [x] 生产 Compose 将 Official LiteLLM 的容器内存限额从 `768 MiB` 先提高到
+      `1 GiB`，并在 4 vCPU / 8 GiB 支付压测后进一步提高到 `1.5 GiB`；
+      前向 migration `082` 删除遗漏的
       `games_min_participants_check` 上界，只保留 `min_participants >= 2`，使
       100 人 Operator Game 不再依赖测试编排绕过。
+- [x] Settlement Worker 的 Facilitator P0 调度改为按冻结 Intent 路由结果建立
+      per-Facilitator 队列：不同 EOA 在全局执行上限内并行，同一 EOA 只允许一个
+      任务进入签名/广播区，不再让同分片等待任务占满全局 semaphore。跨 Worker
+      抢不到 durable broadcast fence 时，任务在签名前以确定性 `0.5–1.5s`
+      jitter 缩短 lease 后重排；`submitting/unknown` 继续保留原 60 秒安全租约和
+      read-only recovery，不能盲目重播。前向 migration `083` 记录
+      `signed/submitting/submitted` 时间、Facilitator defer 时间和次数，Worker
+      同时记录脱敏的分片队列深度。该实现仍须用同规格 100 Agent、8 回合、真实
+      testnet 支付复验 P95/P99、最长等待和重复支付不变量。
 - [ ] 冻结 `settlement_timeout_ms=600000`，先回归 10/12 Agent，再在 100 Agent
       最坏 50 笔 accepted trade 场景验证 4 shard 路由、在途并发、终态与恢复。
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；

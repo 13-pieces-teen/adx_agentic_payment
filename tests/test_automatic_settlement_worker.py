@@ -74,6 +74,15 @@ class _PayloadSigner:
         return {}
 
 
+class _CountingSigner(_PayloadSigner):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def create_payment_payload(self, **kwargs: object):
+        self.calls += 1
+        return await super().create_payment_payload(**kwargs)
+
+
 class _ClockCapturingCoordinator:
     def __init__(self) -> None:
         self.execution_now: datetime | None = None
@@ -117,6 +126,7 @@ class _Source:
         self.payload_digests: list[str | None] = []
         self.facilitator_fence_claims: list[tuple[str, str]] = []
         self.facilitator_fence_releases: list[tuple[str, str]] = []
+        self.deferred_attempts: list[str] = []
 
     async def authorization_targets(self, *, limit: int):
         assert limit == 25
@@ -172,6 +182,14 @@ class _Source:
             (facilitator_id, settlement_intent_id)
         )
 
+    async def defer_attempt(
+        self,
+        *,
+        settlement_intent_id: str,
+        **_: object,
+    ) -> None:
+        self.deferred_attempts.append(settlement_intent_id)
+
     async def fail_settlement(self, *, safe_error_code: str, **_: object):
         self.failures.append(safe_error_code)
 
@@ -223,7 +241,13 @@ class _ConcurrentSource(_Source):
         return [f"intent-{index}" for index in range(1, 5)]
 
     async def settlement_terms(self, settlement_intent_id: str):
-        return _terms(settlement_intent_id, amount=20)
+        return replace(
+            _terms(settlement_intent_id, amount=20),
+            intent_hash=(
+                "sha256:"
+                + hashlib.sha256(settlement_intent_id.encode("utf-8")).hexdigest()
+            ),
+        )
 
     async def claim_attempt(
         self,
@@ -239,6 +263,65 @@ class _ConcurrencyTracker:
     def __init__(self) -> None:
         self.active = 0
         self.max_active = 0
+
+
+class _PerFacilitatorConcurrencyTracker:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.active_by_facilitator: dict[str, int] = {}
+        self.max_active_by_facilitator: dict[str, int] = {}
+
+
+class _ShardAwareConcurrentCoordinator:
+    def __init__(self, tracker: _PerFacilitatorConcurrencyTracker) -> None:
+        self.tracker = tracker
+
+    def payment_required(self, terms):
+        return {
+            "accepts": [
+                {
+                    "network": "eip155:1439",
+                    "extra": {"settlementIntentId": terms.settlement_intent_id},
+                }
+            ]
+        }
+
+    def facilitator_id(self, payment_requirements):
+        settlement_intent_id = payment_requirements["extra"][
+            "settlementIntentId"
+        ]
+        return (
+            "shard-a"
+            if settlement_intent_id in {"intent-1", "intent-2"}
+            else "shard-b"
+        )
+
+    async def execute(self, *, terms, **_: object) -> X402ExecutionResult:
+        facilitator_id = (
+            "shard-a"
+            if terms.settlement_intent_id in {"intent-1", "intent-2"}
+            else "shard-b"
+        )
+        self.tracker.active += 1
+        self.tracker.max_active = max(self.tracker.max_active, self.tracker.active)
+        active_for_facilitator = (
+            self.tracker.active_by_facilitator.get(facilitator_id, 0) + 1
+        )
+        self.tracker.active_by_facilitator[facilitator_id] = active_for_facilitator
+        self.tracker.max_active_by_facilitator[facilitator_id] = max(
+            self.tracker.max_active_by_facilitator.get(facilitator_id, 0),
+            active_for_facilitator,
+        )
+        await asyncio.sleep(0.02)
+        self.tracker.active -= 1
+        self.tracker.active_by_facilitator[facilitator_id] -= 1
+        return X402ExecutionResult(
+            success=True,
+            status="submitted",
+            transaction="0x" + terms.intent_hash.removeprefix("sha256:"),
+            network="eip155:1439",
+        )
 
 
 class _ConcurrentFacilitator:
@@ -464,10 +547,11 @@ def test_worker_does_not_broadcast_without_durable_facilitator_fence() -> None:
     payments = InMemoryPaymentRepository()
     asyncio.run(payments.create_mandate(mandate))
     source = _UnavailableFenceSource(mandate)
+    signer = _CountingSigner()
     worker = AutomaticSettlementWorker(
         source=source,
         payments=payments,
-        signer=_Signer(),
+        signer=signer,
         coordinator=_RoutedRealCoordinator(
             payments=payments,
             arena=_Arena(),
@@ -479,9 +563,11 @@ def test_worker_does_not_broadcast_without_durable_facilitator_fence() -> None:
     asyncio.run(worker.run_once())
 
     expected = [("shard-3", "intent-1")]
-    assert source.statuses == ["signed"]
+    assert signer.calls == 0
+    assert source.statuses == []
     assert source.facilitator_fence_claims == expected
     assert source.facilitator_fence_releases == []
+    assert source.deferred_attempts == ["intent-1"]
     assert next(iter(payments.reservations.values())).status == "reserved"
 
 
@@ -620,3 +706,35 @@ def test_worker_executes_four_facilitator_routes_concurrently() -> None:
     assert asyncio.run(worker.run_once()) == 4
     assert tracker.max_active == 4
     assert len(source.claimed_facilitator_ids) == 4
+
+
+def test_worker_serializes_each_facilitator_without_blocking_other_shards() -> None:
+    now = datetime.now(timezone.utc)
+    mandate = replace(
+        _mandate(),
+        limits=MandateLimits(
+            max_per_payment_atomic=50,
+            max_cumulative_atomic=200,
+        ),
+        valid_from=now - timedelta(hours=1),
+        expires_at=now + timedelta(hours=1),
+    )
+    payments = InMemoryPaymentRepository()
+    asyncio.run(payments.create_mandate(mandate))
+    source = _ConcurrentSource(mandate)
+    tracker = _PerFacilitatorConcurrencyTracker()
+    worker = AutomaticSettlementWorker(
+        source=source,
+        payments=payments,
+        signer=_PayloadSigner(),
+        coordinator=_ShardAwareConcurrentCoordinator(tracker),  # type: ignore[arg-type]
+        worker_id="worker-1",
+        execution_concurrency=4,
+    )
+
+    assert asyncio.run(worker.run_once()) == 4
+    assert tracker.max_active == 2
+    assert tracker.max_active_by_facilitator == {
+        "shard-a": 1,
+        "shard-b": 1,
+    }

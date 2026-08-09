@@ -148,6 +148,68 @@ def test_facilitator_fence_release_is_owner_and_intent_scoped() -> None:
     assert args == ("shard-3", "intent-1", "worker-1")
 
 
+def test_busy_facilitator_defers_only_the_owned_pre_submission_attempt() -> None:
+    class _UpdatePool(_Pool):
+        async def execute(self, query: str, *args: object) -> str:
+            self.calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = _UpdatePool()
+    source = PostgresAutomaticSettlementSource(
+        payments=_Payments(pool),  # type: ignore[arg-type]
+        arena=object(),  # type: ignore[arg-type]
+        public_api_url="https://api.example.test",
+    )
+    retry_at = datetime(2026, 7, 26, 0, 0, 1, tzinfo=timezone.utc)
+
+    asyncio.run(
+        source.defer_attempt(
+            settlement_intent_id="intent-1",
+            worker_id="worker-1",
+            retry_at=retry_at,
+        )
+    )
+
+    query, args = pool.calls[0]
+    assert "lease_expires_at = $3" in query
+    assert "facilitator_deferred_at = clock_timestamp()" in query
+    assert "facilitator_defer_count = facilitator_defer_count + 1" in query
+    assert "lease_owner = $2" in query
+    assert "status IN ('reserved', 'signed')" in query
+    assert args == ("intent-1", "worker-1", retry_at)
+
+
+def test_attempt_status_updates_capture_each_submission_stage_timestamp() -> None:
+    class _UpdatePool(_Pool):
+        async def execute(self, query: str, *args: object) -> str:
+            self.calls.append((query, args))
+            return "UPDATE 1"
+
+    pool = _UpdatePool()
+    source = PostgresAutomaticSettlementSource(
+        payments=_Payments(pool),  # type: ignore[arg-type]
+        arena=object(),  # type: ignore[arg-type]
+        public_api_url="https://api.example.test",
+    )
+
+    asyncio.run(
+        source.mark_attempt(
+            settlement_intent_id="intent-1",
+            status="signed",
+            worker_id="worker-1",
+            payment_payload_digest="sha256:" + "11" * 32,
+        )
+    )
+
+    query, _ = pool.calls[0]
+    assert "signed_at = CASE" in query
+    assert "submitting_at = CASE" in query
+    assert "submitted_at = CASE" in query
+    assert "COALESCE(signed_at, clock_timestamp())" in query
+    assert "COALESCE(submitting_at, clock_timestamp())" in query
+    assert "COALESCE(submitted_at, clock_timestamp())" in query
+
+
 def test_recovered_submission_clears_the_unresolved_facilitator_fence() -> None:
     class _RecoveryPool(_Pool):
         async def fetchrow(

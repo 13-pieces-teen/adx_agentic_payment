@@ -251,6 +251,21 @@ class PostgresAutomaticSettlementSource:
                     WHEN $3 = 'signed' THEN $5
                     ELSE payment_payload_digest
                 END,
+                signed_at = CASE
+                    WHEN $3 = 'signed'
+                        THEN COALESCE(signed_at, clock_timestamp())
+                    ELSE signed_at
+                END,
+                submitting_at = CASE
+                    WHEN $3 = 'submitting'
+                        THEN COALESCE(submitting_at, clock_timestamp())
+                    ELSE submitting_at
+                END,
+                submitted_at = CASE
+                    WHEN $3 = 'submitted'
+                        THEN COALESCE(submitted_at, clock_timestamp())
+                    ELSE submitted_at
+                END,
                 lease_owner = CASE WHEN $6 THEN NULL ELSE lease_owner END,
                 lease_expires_at = CASE
                     WHEN $6 THEN NULL ELSE lease_expires_at
@@ -341,6 +356,33 @@ class PostgresAutomaticSettlementSource:
         )
         if deleted != "DELETE 1":
             raise RuntimeError("facilitator_broadcast_fence_lost")
+
+    async def defer_attempt(
+        self,
+        *,
+        settlement_intent_id: str,
+        worker_id: str,
+        retry_at: datetime,
+    ) -> None:
+        if retry_at.tzinfo is None or retry_at.utcoffset() is None:
+            raise ValueError("automatic_payment_retry_at_timezone_required")
+        updated = await self._payments._require_pool().execute(
+            """
+            UPDATE arena402.x402_settlement_attempts
+            SET lease_expires_at = $3,
+                facilitator_deferred_at = clock_timestamp(),
+                facilitator_defer_count = facilitator_defer_count + 1,
+                updated_at = clock_timestamp()
+            WHERE settlement_intent_id = $1
+              AND lease_owner = $2
+              AND status IN ('reserved', 'signed')
+            """,
+            settlement_intent_id,
+            worker_id,
+            retry_at,
+        )
+        if updated != "UPDATE 1":
+            raise RuntimeError("automatic_payment_lease_lost")
 
     async def fail_settlement(
         self,

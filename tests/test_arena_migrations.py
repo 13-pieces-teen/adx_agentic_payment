@@ -324,6 +324,12 @@ LEGACY_MIN_PARTICIPANTS_CAPACITY_SQL_PATH = (
     / "migrations"
     / "082_arena_drop_legacy_min_participants_check.sql"
 )
+SETTLEMENT_FACILITATOR_SCHEDULING_SQL_PATH = (
+    ROOT
+    / "db"
+    / "migrations"
+    / "083_arena_settlement_facilitator_scheduling.sql"
+)
 
 _SPEC = importlib.util.spec_from_file_location("arena_migrate", MIGRATE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -730,6 +736,10 @@ def test_local_connector_migration_is_selected_by_arena_scope(
         "ADX_CONNECTOR_MIGRATIONS_DIR",
         str(ROOT / "db" / "migrations"),
     )
+    assert (
+        LEGACY_MIN_PARTICIPANTS_CAPACITY_SQL_PATH
+        in migrate_module.migration_files("arena")
+    )
 
     assert LOCAL_CONNECTOR_SQL_PATH in migrate_module.migration_files(
         "arena"
@@ -959,8 +969,29 @@ def test_latest_game_capacity_cleanup_drops_the_legacy_minimum_alias(
         "ADX_CONNECTOR_MIGRATIONS_DIR",
         str(ROOT / "db" / "migrations"),
     )
+
+
+def test_facilitator_scheduling_migration_adds_stage_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sql = SETTLEMENT_FACILITATOR_SCHEDULING_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
+
+    assert "SET LOCAL ROLE adx_arena_migration;" in sql
+    assert "ADD COLUMN signed_at TIMESTAMPTZ" in sql
+    assert "ADD COLUMN submitting_at TIMESTAMPTZ" in sql
+    assert "ADD COLUMN submitted_at TIMESTAMPTZ" in sql
+    assert "ADD COLUMN facilitator_deferred_at TIMESTAMPTZ" in sql
+    assert "ADD COLUMN facilitator_defer_count INTEGER" in sql
+    assert "CHECK (facilitator_defer_count >= 0)" in sql
+
+    monkeypatch.setenv(
+        "ADX_CONNECTOR_MIGRATIONS_DIR",
+        str(ROOT / "db" / "migrations"),
+    )
     assert (
-        LEGACY_MIN_PARTICIPANTS_CAPACITY_SQL_PATH
+        SETTLEMENT_FACILITATOR_SCHEDULING_SQL_PATH
         in migrate_module.migration_files("arena")
     )
 

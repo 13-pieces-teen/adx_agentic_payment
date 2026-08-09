@@ -5,13 +5,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from .coordinator import X402SettlementCoordinator
 from .models import PaymentMandate, SettlementTerms
 from .repository import PaymentRepository
 from .signer import WalletSignerClient
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class AuthorizationRecoveryReader(Protocol):
@@ -70,12 +75,28 @@ class AutomaticSettlementSource(Protocol):
         worker_id: str,
     ) -> None: ...
 
+    async def defer_attempt(
+        self,
+        *,
+        settlement_intent_id: str,
+        worker_id: str,
+        retry_at: datetime,
+    ) -> None: ...
+
     async def fail_settlement(
         self,
         *,
         settlement_intent_id: str,
         safe_error_code: str,
     ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedSettlement:
+    settlement_intent_id: str
+    terms: SettlementTerms
+    payment_required: dict
+    facilitator_id: str
 
 
 class AutomaticSettlementWorker:
@@ -107,20 +128,68 @@ class AutomaticSettlementWorker:
     async def run_once(self) -> int:
         recovered = await self._recover_ambiguous_submissions()
         targets = await self._source.authorization_targets(limit=self._scan_limit)
+        prepared_results = await asyncio.gather(
+            *(self._prepare(settlement_intent_id) for settlement_intent_id in targets),
+            return_exceptions=True,
+        )
+        prepared: list[_PreparedSettlement] = []
+        errors: list[BaseException] = []
+        for result in prepared_results:
+            if isinstance(result, BaseException):
+                errors.append(result)
+            else:
+                prepared.append(result)
+
+        queues: dict[str, list[_PreparedSettlement]] = {}
+        for target in prepared:
+            queues.setdefault(target.facilitator_id, []).append(target)
+        if prepared:
+            _LOGGER.info(
+                "settlement_facilitator_queue_scan targets=%d shards=%d depths=%s",
+                len(prepared),
+                len(queues),
+                json.dumps(
+                    {
+                        facilitator_id: len(queue)
+                        for facilitator_id, queue in sorted(queues.items())
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            )
         semaphore = asyncio.Semaphore(self._execution_concurrency)
 
-        async def execute_one(settlement_intent_id: str) -> None:
-            async with semaphore:
-                await self._execute(settlement_intent_id)
+        async def execute_queue(queue: list[_PreparedSettlement]) -> None:
+            for target in queue:
+                async with semaphore:
+                    await self._execute(target)
 
         results = await asyncio.gather(
-            *(execute_one(settlement_intent_id) for settlement_intent_id in targets),
+            *(execute_queue(queue) for queue in queues.values()),
             return_exceptions=True,
         )
         for result in results:
             if isinstance(result, BaseException):
-                raise result
+                errors.append(result)
+        if errors:
+            raise errors[0]
         return recovered + len(targets)
+
+    async def _prepare(self, settlement_intent_id: str) -> _PreparedSettlement:
+        terms = await self._source.settlement_terms(settlement_intent_id)
+        payment_required = self._coordinator.payment_required(terms)
+        resolver = getattr(self._coordinator, "facilitator_id", None)
+        facilitator_id = (
+            str(resolver(payment_required["accepts"][0]))
+            if resolver is not None
+            else "configured"
+        )
+        return _PreparedSettlement(
+            settlement_intent_id=settlement_intent_id,
+            terms=terms,
+            payment_required=payment_required,
+            facilitator_id=facilitator_id,
+        )
 
     async def _recover_ambiguous_submissions(self) -> int:
         if self._authorization_recovery_reader is None:
@@ -150,9 +219,10 @@ class AutomaticSettlementWorker:
             recovered += 1
         return recovered
 
-    async def _execute(self, settlement_intent_id: str) -> None:
+    async def _execute(self, prepared: _PreparedSettlement) -> None:
+        settlement_intent_id = prepared.settlement_intent_id
         now = datetime.now(timezone.utc)
-        terms = await self._source.settlement_terms(settlement_intent_id)
+        terms = prepared.terms
         mandate = await self._source.active_mandate(settlement_intent_id, now)
         if mandate is None:
             await self._source.fail_settlement(
@@ -165,13 +235,8 @@ class AutomaticSettlementWorker:
             terms=terms,
             now=now,
         )
-        payment_required = self._coordinator.payment_required(terms)
-        resolver = getattr(self._coordinator, "facilitator_id", None)
-        facilitator_id = (
-            str(resolver(payment_required["accepts"][0]))
-            if resolver is not None
-            else "configured"
-        )
+        payment_required = prepared.payment_required
+        facilitator_id = prepared.facilitator_id
         claimed = await self._source.claim_attempt(
             settlement_intent_id=settlement_intent_id,
             reservation_id=reservation.reservation_id,
@@ -185,6 +250,31 @@ class AutomaticSettlementWorker:
         submission_may_have_started = False
         fence_claimed = False
         try:
+            fence_now = datetime.now(timezone.utc)
+            fence_claimed = await self._source.claim_facilitator_fence(
+                facilitator_id=facilitator_id,
+                settlement_intent_id=settlement_intent_id,
+                worker_id=self._worker_id,
+                now=fence_now,
+            )
+            if not fence_claimed:
+                retry_at = (
+                    fence_now
+                    + _facilitator_retry_delay(settlement_intent_id)
+                )
+                await self._source.defer_attempt(
+                    settlement_intent_id=settlement_intent_id,
+                    worker_id=self._worker_id,
+                    retry_at=retry_at,
+                )
+                _LOGGER.info(
+                    "settlement_facilitator_deferred facilitator_id=%s "
+                    "settlement_intent_id=%s retry_at=%s",
+                    facilitator_id,
+                    settlement_intent_id,
+                    retry_at.isoformat(),
+                )
+                return
             payload = await self._signer.create_payment_payload(
                 payment_required=payment_required,
                 wallet_id=mandate.wallet_id,
@@ -196,14 +286,6 @@ class AutomaticSettlementWorker:
                 worker_id=self._worker_id,
                 payment_payload_digest=_payment_payload_digest(payload),
             )
-            fence_claimed = await self._source.claim_facilitator_fence(
-                facilitator_id=facilitator_id,
-                settlement_intent_id=settlement_intent_id,
-                worker_id=self._worker_id,
-                now=datetime.now(timezone.utc),
-            )
-            if not fence_claimed:
-                return
             # Persist the ambiguity boundary before the external settle call.
             await self._source.mark_attempt(
                 settlement_intent_id=settlement_intent_id,
@@ -275,3 +357,9 @@ def _payment_payload_digest(payload: dict[str, object]) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+def _facilitator_retry_delay(settlement_intent_id: str) -> timedelta:
+    digest = hashlib.sha256(settlement_intent_id.encode("utf-8")).digest()
+    jitter_ms = int.from_bytes(digest[:2], "big") % 1_000
+    return timedelta(milliseconds=500 + jitter_ms)
