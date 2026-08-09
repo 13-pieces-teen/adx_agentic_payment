@@ -938,6 +938,19 @@ create game
       `69/120`，核心容器 0 OOM/0 restart，LiteLLM 峰值约 `1029 MiB/1.5 GiB`。
       该证据只关闭单机、自建四 Facilitator、单次 100 Agent payment-enabled 容量点；
       公共 Facilitator、跨 Worker 故障恢复、重复运行和约 20 名真人叠加仍未验收。
+- [x] GameCoin Provisioner 的钱包准备 P0 已改为最多 16 笔有界在途：已提交交易
+      并发确认，待处理钱包并发完成 whitelist/balance/gas 只读准备，再由同一 Owner
+      以连续 nonce 串行执行签名、持久化和广播；数据库持久化继续先于广播，任一广播
+      失败立即截断后续 nonce。2026-08-09 在不创建、不开启、不推进任何 Game 的
+      前提下，复制既有 100 钱包压测数据到临时数据库，仅运行隔离 Provisioner 完成
+      Injective EVM Testnet 复验：100/100 mint 确认、0 failed、100 个唯一交易和
+      连续唯一 nonce。整批钱包准备从 `692.500s` 降至 `162.430s`，ready P50/P95/max
+      从 `350.428/656.829/691.499s` 降至 `107.512/159.019/162.425s`；submit-wait
+      P50/P95 从 `346.781/653.161s` 降至 `91.560/144.348s`。16 笔在途下单笔
+      confirmation P95 从 `4.090s` 增至 `20.376s`，但总体排队主瓶颈已明显下降。
+      隔离 Provisioner 采样 CPU 峰值 `5.04%`、内存峰值约 `91.52 MiB`；正式
+      Current Game 前后保持同一 WAITING/registration Game、0 参与者、0 Ready，
+      临时容器与数据库已删除，正式 Provisioner 已恢复 healthy。
 - [ ] 冻结 `settlement_timeout_ms=600000`，先回归 10/12 Agent，再在 100 Agent
       最坏 50 笔 accepted trade 场景验证 4 shard 路由、在途并发、终态与恢复。
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；
