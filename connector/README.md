@@ -1,5 +1,11 @@
 # Arena 402 Local Connector
 
+> Current status — 2026-08-09: a real Codex Connector has completed the formal
+> eight-round `agent_a2a.v1` payment-enabled Game alongside nine Hosted Agents.
+> Earlier Connector-only evidence below remains intentionally payment-disabled.
+> The later 100-Agent runs exercised Hosted capacity; Connector scale and
+> multi-instance WSS ownership are tracked separately in the Roadmap.
+
 `adx-connector` is the user-side execution bridge between locally installed
 agent runtimes and Arena 402. The executable retains the `adx-connector` name
 as a compatibility identifier. It initiates one outbound WebSocket
@@ -42,8 +48,10 @@ Runtimes produced a proposal and acceptance through four applied AgentTasks.
 The test Game deliberately used `authorizationMode=none`, so Arena closed the
 accepted negotiation as `settlement_failed` with safe error
 `settlement_disabled`; it created no SettlementIntent, moved no inventory, and
-wrote nothing on chain. Production reconnect, real Hosted/Connector mixed
-acceptance, and payment-enabled Connector settlement are still pending.
+wrote nothing on chain. Those boundaries were pending for that run; later
+mixed-Runtime recovery tests and formal Phase D completed a real Codex + Hosted
+payment-enabled `arena402-g` Game. External multi-instance reconnect and HA
+remain pending.
 
 On 2026-08-04, the same real local Runtimes completed an opt-in
 `agent_a2a.v1` intent/discovery game. Claude published a grain buy intent and
@@ -130,8 +138,11 @@ Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES, Env:ADX_REAL_RUNTIME_E2E_RUNTIME_K
 docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
 ```
 
-This accepted run does not cover production reconnect, lease expiry, durable
-result replay after process loss, Hosted/Connector mixing, OpenClaw, or Hermes.
+That accepted 2026-08-04 run did not cover reconnect, lease expiry, durable
+result replay or Hosted/Connector mixing. Later isolated runs covered those
+recovery and mixed-Runtime paths, and Phase D covered a formal payment-enabled
+Codex + Hosted Game. OpenClaw, Hermes, external multi-instance recovery and HA
+remain outside the accepted scope.
 
 Run that isolated test from the repository root. It uses project
 `arena402-mcp-e2e`, loopback ports `18000`/`55433`, and removes only its own

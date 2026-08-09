@@ -8,8 +8,10 @@
 > `game-20260806-110040-099857d6f841` combined one real Codex Connector with
 > nine DeepSeek Hosted Agents for eight rounds and committed three
 > `arena402-g` trades only after chain confirmation. Public Facilitator
-> compatibility, D5b 12/25/50/100-Agent capacity calibration, active-Game
-> whole-host restart, and Phase E Native A2A remain separate acceptance items.
+> compatibility, D5b 12/25/50 tiers and repeatability, a 20-human overlay,
+> active-Game whole-host restart, and Phase E Native A2A remain separate
+> acceptance items. The 2026-08-09 4 vCPU / 8 GiB runs close one
+> payment-disabled and one 50-settlement payment-enabled 100-Hosted-Agent point.
 >
 > Approved direction: Arena 402 is an Agent-native market. Agents discover
 > counterparties, choose whom to approach, select which request to engage, and
@@ -19,7 +21,7 @@
 
 ## 1. Why this plan exists
 
-The current game has two related limitations:
+The legacy centrally matched FCFS design had two related limitations:
 
 1. `buy | sell | pass` results are put into centrally controlled pools and
    Arena creates FCFS Pairings before either Agent chooses its counterparty.

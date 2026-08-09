@@ -1,5 +1,11 @@
 # Settlement Prototype Environment Setup
 
+> This is the legacy local mUSDC sandbox guide. Current production-like Arena
+> Games use `arena402-g`, encrypted platform wallets, the non-public Settlement
+> Worker and four self-hosted Facilitators. Use
+> [`../../../docs/hosted-arena-production-runbook.md`](../../../docs/hosted-arena-production-runbook.md)
+> for the current deployment path.
+
 This guide prepares test-only wallets for the deployed mUSDC EIP-3009 relay on
 Injective EVM testnet `1439`.
 

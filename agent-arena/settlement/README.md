@@ -1,9 +1,11 @@
-# Settlement Module — EIP-3009 Relay Prototype on Injective EVM
+# Settlement Module — EIP-3009 Direct Settlement on Injective EVM
 
-> **Owner:** Felix · **Network:** Injective EVM testnet (`1439`) · **Status:** settlement prototype implemented and verified on 2026-07-23
+> **Network:** Injective EVM testnet (`1439`) · **Updated:** 2026-08-09 ·
+> **Status:** `arena402-g`、x402 V2、自建四 Facilitator、PaymentMandate、密文
+> signer、自动 Settlement Worker 和确认后库存提交已进入当前 Arena 路径。
 
-This directory contains a testnet settlement prototype built with viem, a mock
-EIP-3009 stablecoin, a custom Express relay, and a TypeScript SDK. The SDK now
+This directory contains the testnet settlement foundation built with viem,
+EIP-3009 tokens, a custom Express relay, and a TypeScript SDK. The SDK now
 also defines a narrow guest-wallet signing seam, an explicitly test-only
 in-memory adapter, and a testnet-only external CSV adapter for the isolated
 signer service. The default composition still disables signing.
@@ -32,14 +34,13 @@ signer creates `PAYMENT-SIGNATURE`, and the server returns
 `PAYMENT-RESPONSE` after `/verify` and `/settle`. Requirements use CAIP-2
 network identifiers and are bound to one immutable Arena intent.
 
-This has passed Fake end-to-end tests, but it has not yet completed a fresh
-transaction against a standard public Facilitator. Until that acceptance run,
-describe the chain execution as the existing EIP-3009 relay prototype with an
-x402 V2 integration layer, not as production-certified public compatibility.
+The self-hosted path has completed fresh testnet transactions, a formal
+mixed-Runtime Game, and a 100-Hosted run with 50 confirmed settlements. Standard
+public Facilitator interoperability remains a separate integration target.
 
-The current Arena 402 game path—accepted negotiation, frozen settlement intent,
-chain confirmation, and idempotent cash/inventory update—is also outside this
-module. See
+The full Arena 402 game path composes this module with `arena_payments/` and
+`arena_game/`: accepted negotiation, frozen settlement intent, chain
+confirmation, and idempotent cash/inventory update. See
 [`../../docs/arena-settlement-integration.md`](../../docs/arena-settlement-integration.md).
 
 ## Relationship to the completed specs

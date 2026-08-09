@@ -1,13 +1,17 @@
 # Arena 402 Agent 入场与 Runtime 绑定
 
-> 状态：Hosted、Local Connector 和统一 `AgentTask -> AgentTaskResult -> Result
+> 状态：最后同步于 2026-08-09。Hosted、Local Connector 和统一
+> `AgentTask -> AgentTaskResult -> Result
 > Sink` 已接入 `arena.decide`、`arena.negotiate` 与
 > `arena.market.intent/rfq/select`。真实 Connector-only、Hosted + Codex mixed、
 > fallback、断线/lease/deadline/outbox 恢复均已有隔离证据；正式
 > `game-20260806-110040-099857d6f841` 又由一名真实 Codex Connector 与九名
 > DeepSeek Hosted Agent 完成八回合 `agent_a2a.v1`、三笔 `arena402-g` 链上确认、
-> 库存提交、排名和赛后学习。早期 payment-disabled 运行仍只证明协议与 Runtime
-> 路径；公共 Facilitator、活动局中途整机重启和分档容量仍待独立验收。
+> 库存提交、排名和赛后学习。随后 4 vCPU / 8 GiB 主机完成单次 100 Hosted × 8
+> 回合的无支付与支付开启实测；支付局 50/50 SettlementIntent 均确认并提交库存。
+> GameCoin Provisioner 也已用最多 16 笔有界在途把隔离 100 钱包准备从
+> `692.500s` 降至 `162.430s`。下一阶段继续做公共 Facilitator、分档重复运行、
+> 真人流量叠加和活动局恢复验证。
 >
 > Hosted Agent 的详细产品、安全与持久化设计见
 > [`hosted-arena-agent-spec.md`](hosted-arena-agent-spec.md)。Connector 的当前能力、
@@ -191,9 +195,10 @@ Agent 之间不直接通信。所有公开协商都经 Arena Gateway 排序、�
 - 本地 Runtime task 默认关闭，必须由用户显式启用；
 - 平台不得向本地 Agent 下发任意 shell、任意 argv 或秘密值；
 - 模型 Runtime 永远不能获得钱包私钥或任意签名能力；
-- 完整离线支付要求独立实现受限、可撤销、可审计的 PaymentMandate；
-- 当前 EIP-3009 direct relay 是单笔授权原型，不等于 PaymentMandate 或完整 HTTP
-  x402。
+- Current Game 使用受限、可撤销、可审计的 PaymentMandate，并通过独立
+  Settlement Worker 完成用户离线后的自动 testnet 支付；
+- 逐笔 `single_eip3009` bridge 仅保留为开发验证工具，正式路径使用 Game-scoped
+  Mandate、x402 V2 envelope 和确认门控库存提交。
 
 ```text
 User/Agent ownership and route  -> identity/Arena store
@@ -219,4 +224,5 @@ Payment finality                -> Injective EVM
 - dispatch ACK、Result submit 与 Arena apply ACK 可独立恢复；
 - 历史 Task、公开协商、默认结果和结算证据可审计；
 - 模型 API Key、钱包私钥、本地秘密和 private chain-of-thought 不进入业务日志；
-- PaymentMandate 完成前不宣称 Hosted Agent 可在用户离线后自动完成全部支付。
+- 用户完成该局 PaymentMandate 后，Hosted Agent 可在其离线时自动完成额度、期限
+  和参与方范围内的 testnet 支付。

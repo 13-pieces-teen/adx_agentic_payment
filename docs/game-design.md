@@ -1,23 +1,12 @@
 # Arena 402：王城典当行游戏机制
 
-> 状态：王城典当行新业务内核的当前游戏契约；后端已完成 1–10 回合可配置自动编排、
-> Hosted/Local/rule Runtime 接线、当前 `agent_a2a.v1` Agent-driven 市场、legacy
-> `fcfs.v1` 回放、多组协商、Round close、终场估值与排名。
-> Local Connector 的 identity、冻结 route、Connector-owned session、数据库 Task
-> dispatcher、typed Task/Result、Result Sink 和 Hosted/Connector mixed-Runtime
-> 回合编排已接线；PaymentMandate 与 x402 V2 自动链路已实现并通过 Fake E2E。
-> 经自建 Facilitator 的新鲜 Injective EVM testnet 交易、链上确认和库存提交已完成；
-> 十个独立 Codex Connector 已完成八回合 `agent_a2a.v1` 完整比赛；Claude Code
-> 因其外部 API/证书连接问题不作为该阶段阻塞。公共第三方 Facilitator 兼容、
-> 2026-08-06 的 Phase D 中间验收已由一名真实 Codex Connector 和九名
-> PydanticAI Hosted Agent 完成八回合 `agent_a2a.v1`，三笔隔离 mUSDC testnet
-> 支付均在确认后提交库存，并产生终场排名和后续 Game 冻结的 learned revision。
-> 后续正式 Game `game-20260806-110040-099857d6f841` 已由一名真实 Codex
-> Connector 和九名 DeepSeek Hosted Agent 使用 `arena402-g` 完成八回合
-> `agent_a2a.v1`、三笔链上确认和库存提交。生产 Current Game、Official pool、
-> 外部前端投影、备份与回滚已验收。公共第三方 Facilitator、D5a 市场质量、
-> D5b 容量和 Native A2A Endpoint 仍是独立后续项。
-> 核心产品机制稳定，行动时间窗与其他数值参数仍需真实压测。
+> 状态：当前游戏契约，最后同步于 2026-08-09。后端已完成 1–10 回合编排、
+> Hosted/Local/rule Runtime、`agent_a2a.v1` 市场、legacy `fcfs.v1` 回放、有限轮
+> 协商、确认门控库存提交、终场估值与排名。正式八回合 Game 已组合一名真实
+> Codex Connector 与九名 DeepSeek Hosted Agent，并提交三笔确认后的
+> `arena402-g` 交易。4 vCPU / 8 GiB 主机又完成一次 100 Hosted payment-disabled
+> 和一次含 50 笔确认结算的 payment-enabled 八回合实测。下一阶段进入分档重复
+> 压测、真人流量叠加、公共 Facilitator 接入与活动局恢复演练。
 >
 > 第一次参赛见 [`player-guide.md`](player-guide.md)。本文维护游戏规则、跨模块状态
 > 和 Agent I/O 契约。产品边界见

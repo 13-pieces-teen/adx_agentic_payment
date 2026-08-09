@@ -1,12 +1,15 @@
-# Arena 402 Settlement Prototype Workspace
+# Arena 402 Settlement Workspace
 
-> Status: Injective EVM EIP-3009 direct-relay prototype; not a complete x402
-> HTTP implementation or complete Arena 402 game.
+> Status — 2026-08-09: the custom Injective EVM EIP-3009 relay, x402 V2
+> envelope, PaymentMandate, encrypted signer, four self-hosted Facilitators and
+> confirmation-gated inventory commit are integrated into Arena. This is still
+> testnet-only and is not standard public Facilitator or mainnet acceptance.
 
 The `agent-arena/` directory name is retained for compatibility. Its current
 implemented focus is the payment foundation for Arena 402: an accepted game
-negotiation should eventually become a point-to-point testnet USDC settlement,
-and game inventory should move only after chain confirmation.
+negotiation becomes a point-to-point `arena402-g` testnet settlement, and game
+inventory moves only after chain confirmation. Legacy mUSDC remains a contract
+and SDK compatibility fixture.
 
 Current product rules are defined in
 [`../docs/game-design.md`](../docs/game-design.md). The integration contract is
@@ -38,8 +41,8 @@ current differences in active READMEs.
 | Facilitator | Project-specific verify/settle relay implemented |
 | Settlement SDK | Mock and real TypeScript adapters implemented |
 | Direct settlement | Buyer-authorized mUSDC transfer to seller exercised |
-| Standard HTTP x402 | Not complete |
-| Game integration | Single-payment mode persists immutable SettlementIntent snapshots after accepted negotiations |
+| x402 V2 HTTP envelope | Implemented against the project self-hosted Facilitator; public interoperability unaccepted |
+| Game integration | Formal mixed-Runtime Game plus one 100-Hosted/50-settlement capacity run completed |
 | Inventory commit | Read-only confirmation recovery gates idempotent Arena cash/holding commit |
 | TEE, escrow, refund, dispute, production fee | Not implemented product capabilities |
 

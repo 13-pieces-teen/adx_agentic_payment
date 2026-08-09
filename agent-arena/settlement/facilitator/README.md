@@ -1,5 +1,11 @@
 # Custom EIP-3009 Relay (SETTLE-004)
 
+> Current status — 2026-08-09: production Compose runs four independent relay
+> EOAs behind the Settlement Worker. Per-Facilitator scheduling reduced
+> Intent-to-submission P95 from `67.080s` to `9.412s` in the 100-Hosted payment
+> run. This package also owns the GameCoin Provisioner, whose bounded
+> 16-transaction pipeline completed an isolated 100-wallet batch in `162.430s`.
+
 This Express service accepts a buyer's offline EIP-3009 authorization and uses
 the relay wallet to submit `transferWithAuthorization` on the frozen Current
 Game token (`arena402-g` in production) on Injective EVM testnet. The relay
@@ -18,7 +24,8 @@ accepts the x402 V2 facilitator envelope:
   facilitator CSV and is never returned or logged;
 - the Arena API owns the `402 Payment Required` challenge and payment headers.
 
-Public facilitator discovery and fresh testnet acceptance remain unverified.
+The self-hosted testnet path is accepted. Standard public facilitator discovery
+and interoperability remain future work.
 
 ## Start
 

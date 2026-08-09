@@ -1,5 +1,10 @@
 # Arena 402 Local Connector installers
 
+> Current status — 2026-08-09: the installer contract remains the supported
+> Local Connector onboarding path. A real Codex Connector has completed the
+> formal mixed-Runtime payment-enabled Game. Signed releases, SBOM-based client
+> verification and automatic secure updates are the next distribution work.
+
 The binary, service, and environment identifiers retain the historical `ADX`
 name for compatibility.
 

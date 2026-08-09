@@ -5,15 +5,18 @@
 > Connector 与九名 DeepSeek Hosted Agent 完成八回合、三笔 `arena402-g` 链上
 > 确认和库存提交；`fcfs.v1` 仅保留为显式兼容/下一局回滚协议。
 >
-> 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result、12 Agent 本地编排，
+> 当前仓库已经具备 Hosted Agent、持久化 AgentTask/Result 和 100 Agent 单局编排，
 > 并已把生产 Current Game 硬上限配置为 100、Hosted Worker 配置为
 > 4 副本 × 25 task slot、Facilitator 配置为 4 个独立 EOA shard。
 > 平台 `user_id` 永久 testnet 钱包绑定、受限 PaymentMandate、x402 V2 HTTP 链路、
 > 隔离的 PostgreSQL 密文 signer、自动提交编排、只读链上确认和确认后库存提交。
 > 当前逐笔人工批准 bridge 只是开发验证工具，不是产品支付方案。自建
 > Facilitator 的自动真实 testnet 链路、生产 Current Game、Official pool、外部
-> 前端投影、备份与回滚已验收；100 Agent、四 shard 故障恢复、公共 Facilitator
-> 和活动局中途整机重启仍未验收。旧 2C4G 证据不能用于证明当前配置容量。
+> 前端投影、备份与回滚已验收。2026-08-09 的 4 vCPU / 8 GiB 主机已分别完成
+> 100 Hosted × 8 回合的 payment-disabled 和 payment-enabled 单次实测；支付局
+> 50/50 SettlementIntent 均确认并提交库存。GameCoin 的 100 钱包隔离准备也从
+> `692.500s` 降至 `162.430s`。下一阶段按本文验收矩阵继续做分档重复运行、真人
+> 流量叠加、四 shard 故障恢复、公共 Facilitator 和活动局恢复演练。
 
 ## 1. 上线目标
 
@@ -54,6 +57,7 @@
 ### 2.1 包含
 
 - Hosted Agent；
+- Local Connector Agent；
 - DeepSeek/OpenAI-compatible allowlisted Provider；
 - 平台托管、隔离、testnet-only 的 guest wallet；
 - 加入 Game 时一次性创建的受限 PaymentMandate；
@@ -64,7 +68,6 @@
 
 ### 2.2 不包含
 
-- Local Connector 游戏 Adapter；
 - Native A2A Endpoint；
 - 用户自带钱包的无人值守签名；
 - 主网或真实资金；
@@ -493,11 +496,11 @@ docker compose --profile wallet-admin run --rm --build wallet-vault-rotate \
 当前配置基线：
 
 ```text
-host: must be re-sized and load-tested; the old 2 vCPU / 4 GB host is rejected
+host: 4 vCPU / 8 GiB has one accepted 100-Agent test point; repeat/tier tests remain
 active games: 1
 max participants: 100
 start threshold: 10
-demo rounds: 5
+current game rounds: 8
 hosted worker replicas: 4
 hosted task concurrency per replica: 25
 theoretical hosted task slots: 100
@@ -514,18 +517,22 @@ Compose 常驻容器内存上限：
 |---|---:|
 | PostgreSQL | 768 MB |
 | API | 512 MB |
+| Connector API | 384 MB |
 | Hosted Worker | 4 × 512 MB |
+| Official LiteLLM | 1536 MB |
 | Arena Worker | 320 MB |
 | Settlement Worker | 256 MB |
 | Wallet signer | 256 MB |
 | Credential Controller | 192 MB |
 | Facilitator | 4 × 256 MB |
+| GameCoin Provisioner | 256 MB |
 | Caddy | 128 MB |
 
-仅上述服务的配置上限已约 5.5 GB，尚未计入 Docker、宿主机、构建和瞬时内存，
-所以旧 2C4G 主机不再是支持目标。生产主机必须按实际峰值留出充足 headroom，并在
-100 Agent 验收前完成 CPU、内存、磁盘和网络重新定容；不能通过交换或关闭安全
-边界硬撑。
+上述常驻服务的配置硬上限合计约 `7.5 GiB`；它们不会同时打满，但不能把硬上限
+相加后误当成可用 headroom。2026-08-09 的 100-Agent 支付实测整机内存峰值为
+`3.74 GiB`，4 vCPU / 8 GiB 对当前 100 Hosted 单局保有可用余量；下一阶段继续
+测重复运行、20 真人流量叠加和故障恢复。旧 2C4G 主机不再是支持目标；不能通过
+交换或关闭安全边界硬撑。
 Vercel 前端不占用这台服务器；后端 Compose 不包含 Web 服务。
 
 120 个数据库连接是当前起步值。所有服务必须继续满足
@@ -693,10 +700,22 @@ schema 兼容性，再决定只回滚代码还是按备份恢复数据。
 
 ## 8. 上线验收
 
+### 当前实测基线（2026-08-09）
+
+- payment-disabled：100 Hosted Agent、8/8 回合，整机 CPU P95/峰值
+  `15.1%/35.8%`，内存峰值 `2.74 GiB`，核心容器 0 OOM/0 restart；
+- payment-enabled：100 Hosted Agent、8/8 回合，50/50 SettlementIntent 唯一、
+  确认并 InventoryCommit；CPU P95/峰值 `21.25%/42.92%`，内存峰值
+  `3.74 GiB`，PostgreSQL 连接峰值 `69/120`；
+- Facilitator P0 后 Intent 创建到 submission P95/max 为 `9.412/10.733s`；
+- GameCoin P0 的隔离 100 钱包准备为 `162.430s`，100/100 confirmed、0 failed；
+- 上述均为自建 Facilitator 和单次 100-Agent 点；验收清单中未被这些证据覆盖的
+  项目继续保持开放。
+
 ### 8.1 必须通过
 
-- 10/12 Agent 回归通过后，25/50/100 个 Hosted Agent 在重新定容的生产机完成
-  8 回合；
+- 10/12/25/50/100 个 Hosted Agent 均在目标生产机完成 8 回合；当前只有单次
+  100-Agent 的有支付/无支付点已完成；
 - 浏览器关闭后 Game 继续；
 - 同一轮 100 个 Decide Task 均在统一 deadline 内终态，并记录实际 Provider
   wave 与 launch skew；
@@ -724,7 +743,7 @@ schema 兼容性，再决定只回滚代码还是按备份恢复数据。
 
 10/12 Agent 是历史回归基线，100 Agent 才是当前生产配置的容量门槛：
 
-- 10、12、25、50、100 Agent 均完成 5 回合并生成最终排名；
+- 10、12、25、50、100 Agent 均完成 8 回合并生成最终排名；
 - 同一轮 100 个 Decide Task 均在统一 action deadline 内终态；
 - 最坏 50 组 pairing 完成且不丢 pairing；
 - 4 笔 Settlement 可同时在途并落到 4 个不同 EOA shard；每个 EOA nonce 连续且

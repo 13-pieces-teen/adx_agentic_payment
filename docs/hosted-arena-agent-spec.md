@@ -4,7 +4,7 @@
 > Worker、AgentTask/Result 与 Result Sink 继续保留；旧
 > `DirectModelDriver + PromptBuilder` 认知执行链已物理删除，当前实现为
 > PydanticAI 原生 Agent、持久局内记忆和已实现的跨比赛策略版本闭环
-> 最后更新：2026-08-08
+> 最后更新：2026-08-09
 > 适用范围：由 Arena 402 平台持续托管、使用用户自带模型凭据执行 `decide` / `negotiate` 的受约束交易 Agent
 > 对应计划：[Hosted Arena Agent Implementation Plan](./hosted-arena-agent-implementation-plan.md)
 > 相关入口：[Agent 入场与 Runtime 绑定](./agent-onboarding.md)
@@ -13,6 +13,11 @@
 > 当前游戏规则：[Game Design](./game-design.md)
 > 设计优先级：Game Design 维护业务动作、状态与结算边界；本规格维护
 > Hosted/Local 统一 Runtime 目标。若旧实现说明冲突，按当前规则和已验证证据修正
+>
+> 当前容量证据：腾讯云 4 vCPU / 8 GiB 已各完成一次 100 Hosted Agent × 8 回合
+> 的 payment-disabled 与 payment-enabled 实测；支付局 50/50 SettlementIntent
+> 确认并 InventoryCommit。Official LiteLLM 上限为 `1.5 GiB`，GameCoin 钱包准备
+> 采用最多 16 笔有界在途。后续分档、真人叠加和恢复验收见 Roadmap。
 
 ## 1. 核心结论
 
@@ -1381,15 +1386,16 @@ Hosted Agent 永远不能获得钱包私钥，也不能自行签署任意链上�
 
 - Wallet-backed User：由用户控制的钱包进行真实 testnet 授权；
 - Sandbox Guest：由平台明确拥有、隔离、限额、可过期的 testnet-only signer 执行；
-- 当前 EIP-3009 direct relay：是单笔授权原型，不天然等价于可覆盖未来多笔交易的
-  通用 PaymentMandate。
+- 逐笔 `single_eip3009` bridge：保留为开发与恢复验证工具；
+- Current Game：使用 Game-scoped PaymentMandate、x402 V2 envelope、隔离 signer
+  和 Settlement Worker 自动提交受限的 EIP-3009 testnet 支付。
 
-PaymentMandate 的精确签名、额度消费和撤销机制属于
-[Arena Settlement Integration](./arena-settlement-integration.md) 的独立实现依赖。
-Hosted Agent 可以先完成决策/协商 vertical slice，但不能在该依赖未完成时宣称
-“用户离线后可自动完成全部支付”。
+PaymentMandate 的精确签名、额度消费、撤销和恢复机制已由
+[Arena Settlement Integration](./arena-settlement-integration.md) 接入。用户入局时
+确认该局 Mandate 后，Hosted Agent 可在用户离线时完成受限 testnet 支付；模型
+Runtime 仍不接触 signer、私钥或 Mandate consume 权限。
 
-完整离线 testnet 交易发布前还必须冻结：
+当前实现冻结并校验：
 
 - 并发 Deal 的 `reserve / consume / release` 额度状态机；
 - chain id、token、settlement contract、game、payee、nonce 的签名域；
@@ -1399,7 +1405,9 @@ Hosted Agent 可以先完成决策/协商 vertical slice，但不能在该依赖
 
 ## 17. 单机 beta 部署
 
-目标腾讯云主机为 2 vCPU、4 GB RAM、70 GB 磁盘。首版拓扑：
+当前单机 beta 基线为腾讯云 4 vCPU / 8 GiB；2026-08-09 已完成两个单次
+100-Agent 容量点。旧 2 vCPU / 4 GB / 70 GB 主机只保留为历史基线，不再是支持
+目标。拓扑：
 
 ```text
 Vercel Next.js (external)
@@ -1439,14 +1447,14 @@ External:
 
 ## 18. 当前实现矩阵
 
-截至 2026-08-08：
+截至 2026-08-09：
 
 | 能力 | 当前状态 | 说明 |
 |---|---|---|
 | Legacy Agent/matching/ELO API | 已移除 | 不再存在第二套内存业务权威或 Supabase 工厂 |
 | Hosted Agent 创建 UI | 已实现 | `/agents` 同时保留 Local Connector，并提供受 readiness/auth 控制的 Hosted 创建、列表、详情和 Runtime PATCH |
 | Legacy PromptBuilder/DirectModelDriver | 已物理删除 | Attempt 合同已迁入独立模块；Worker 不再存在 scripted/legacy 决策分支 |
-| PydanticAI Hosted Agent Runtime | 生产功能链已验收 | typed output、只读工具、策略类型、Game Memory、bounded learner 和生产 Worker 已实现；正式 `game-20260806-110040-099857d6f841` 的九名 DeepSeek Hosted Agent 与真实 Codex Connector 完成八回合、三笔 `arena402-g` settled trade、排名和九个 learning job，其中五个 revision 激活、四个被门控拒绝。该证据不证明长期策略收益、公共 Facilitator 或 100-Agent 容量 |
+| PydanticAI Hosted Agent Runtime | 生产功能链与单次 100-Agent 点已验收 | typed output、只读工具、策略类型、Game Memory、bounded learner 和生产 Worker 已实现；正式 mixed-Runtime Game 完成三笔 `arena402-g` settled trade；后续 100 Hosted × 8 回合有支付/无支付实测均完成。该证据不证明长期策略收益、分档重复性、20 真人叠加、公共 Facilitator 或 HA |
 | Official Agent model | 已固定并投入 Phase D | PydanticAI 使用 `official-deepseek/deepseek-v4-flash`；LiteLLM 上游同样使用非弃用模型名 `deepseek-v4-flash` |
 | 真实 Provider Adapter | 已实现并完成生产 Game 验收 | DeepSeek/OpenAI-compatible HTTPS Adapter 已完成正式八回合 mixed-Runtime Game；公共 Provider 容量和长期收益仍需单独验证 |
 | 用户 API Key ingress | 已实现 | write-only ingress、摘要幂等、PostgreSQL control repository 与无回显边界已接线 |
@@ -1456,12 +1464,12 @@ External:
 | Persistent AgentTask | 已接入游戏 | 版本化契约、lease/CAS 与 Pawnhouse Runtime Run 已完成 |
 | Result Sink/Consumer/Finalizer | 已接入游戏 | 数据库权威时间、默认收敛、late/duplicate 处理和 exactly-once 投影已完成 |
 | Credential validation/lifecycle jobs | 核心路径已实现 | durable validation、claim/CAS、Credential Controller 和创建/Runtime PATCH 已实现；其余生命周期操作仍待完成 |
-| Hosted Worker | Runtime v2 已接线 | 独立无公网端口 Worker 构造 bounded PydanticAI run；隔离 PostgreSQL 闭环已通过，真实 Provider、并发 CAS 与重启恢复待验收 |
+| Hosted Worker | Runtime v2 已接线并完成实机负载点 | 独立无公网端口 Worker 构造 bounded PydanticAI run；真实 DeepSeek、并发 CAS、进程恢复、正式 mixed-Runtime Game 和单次 100 Hosted 负载均已有证据；活动局整机恢复和分档重复测试仍待验收 |
 | Game Agent 单局唯一 | 已实现 | 数据库约束、入局快照和当前 Runtime/config 冻结已实现 |
-| Arena `decide`/`negotiate` adapter | Hosted/rule/Connector 已实现 | Local identity、session generation、leased task dispatcher、typed Task/Result、Result Sink 与 mixed-Runtime coordinator 已接线；真实 CC/Codex 完整比赛待验收 |
-| Local Connector 控制面 | Self-hosted beta 已实现 | durable command/event/result outbox、进程重启后的 session 重建、单次 Task retry、Arena 隔离 profile 与分层 readiness/fail-closed 已实现；Codex CLI 无等价 no-tools 开关，真实生产重连与完整比赛 E2E 待验收 |
+| Arena `decide`/`negotiate` adapter | Hosted/rule/Connector 已实现并验收正式链路 | Local identity、session generation、leased task dispatcher、typed Task/Result、Result Sink 与 mixed-Runtime coordinator 已接线；真实 Codex Connector 已进入正式八回合 payment-enabled Game |
+| Local Connector 控制面 | Self-hosted beta 与正式 mixed-Runtime Game 已实现 | durable command/event/result outbox、进程重启后的 session 重建、单次 Task retry、Arena 隔离 profile 与分层 readiness/fail-closed 已实现；Codex CLI 无等价 no-tools 开关，外部多实例重连和 HA 仍待验收 |
 | Native A2A Endpoint | 未实现 | 作为后续第三 Adapter |
-| EIP-3009 testnet direct settlement | 原型存在 | 不等于完整 x402 或 PaymentMandate |
+| EIP-3009 testnet direct settlement | 已集成自动路径 | PaymentMandate、x402 V2、自建四 Facilitator、确认恢复和库存提交已进入正式链路；公共 Facilitator、主网和 HA 未验收 |
 
 当前可直接复用的能力：
 

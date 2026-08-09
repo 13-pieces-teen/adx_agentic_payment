@@ -1,5 +1,11 @@
 # King's Pawnhouse Game Domain
 
+> Current status — 2026-08-09: this domain backs the production
+> `agent_a2a.v1` Current Game. One formal mixed-Runtime Game and separate
+> payment-disabled/payment-enabled 100-Hosted-Agent × eight-round runs have
+> completed. Capacity follow-up and recovery work are tracked in the project
+> [Roadmap](../docs/roadmap.md).
+
 This package is the clean-slate Arena 402 game domain based on the approved
 `WORLD_AND_EVENTS(1).md` world design.
 
@@ -49,8 +55,9 @@ MarketIntent/RFQ/Engagement state, and an opt-in `agent_a2a.v1` orchestrator
 drives intent → RFQ → select → bounded negotiation. Agent-selected
 Engagements alone can materialize the compatibility Pairing/Negotiation path,
 and accepted negotiations freeze Deal provenance. Real Connector-only,
-mixed-Runtime recovery, and the formal payment-enabled Phase D Game have
-completed this path; public Facilitator and capacity acceptance remain separate.
+mixed-Runtime recovery, the formal payment-enabled Phase D Game, and two
+100-Hosted-Agent capacity runs have completed this path. Follow-up capacity and
+recovery work is tracked in the Roadmap.
 
 ## Core invariants
 

@@ -1,10 +1,16 @@
 # Arena 402 游戏结算集成契约
 
-## Implementation status (updated 2026-08-08)
+## Implementation status (updated 2026-08-09)
 
-The following payment foundation is implemented:
+Current Games use a platform-assigned testnet wallet, a bounded Game-scoped
+PaymentMandate, the x402 V2 envelope, an isolated encrypted signer, and the
+Settlement Worker. Accepted trades are submitted automatically within the
+Mandate and reach Arena inventory only after chain confirmation.
 
-- an accepted negotiation can freeze exactly one immutable
+The explicit `single_eip3009` bridge remains available as a development and
+recovery drill. Its implemented contract is:
+
+- an accepted negotiation freezes exactly one immutable
   `arena402.settlement-intent.v1` when the Game explicitly selects
   `authorizationMode="single_eip3009"`;
 - chain, token, token decimals, payer, payee, amount, expiry, participants,
@@ -37,8 +43,18 @@ and a dedicated non-public Settlement Worker. The self-hosted Facilitator path
 has completed fresh Injective EVM testnet submission, confirmation, and
 idempotent inventory commit. Formal Phase D Game
 `game-20260806-110040-099857d6f841` committed three `arena402-g` trades from the
-same eight-round `agent_a2a.v1` evidence chain. This does not establish standard
-public Facilitator compatibility, mainnet custody, or 100-Agent capacity.
+same eight-round `agent_a2a.v1` evidence chain. A later 100-Hosted-Agent,
+eight-round testnet run committed 50/50 unique SettlementIntents after the
+per-Facilitator scheduling P0; intent creation-to-submission P95/max fell from
+`67.080/126.130s` to `9.412/10.733s`. The current four-shard self-hosted path
+therefore supports the tested 100-Agent payment load. Public Facilitator,
+mainnet, repeatability, human-overlay and HA work remain on the Roadmap.
+
+GameCoin wallet provisioning now keeps at most 16 owner transactions in flight,
+reconciles confirmations concurrently, prepares read-only chain calls in
+parallel, and still signs/persists/broadcasts contiguous nonces sequentially.
+An isolated 100-wallet testnet rerun completed 100/100 in `162.430s`, down from
+`692.500s`; no Game was created, started, or advanced during that benchmark.
 
 ## Public trade ledger projection
 
@@ -213,9 +229,9 @@ Wallet-backed User 与 Sandbox Guest 的实现可以不同：
 - Hosted Worker 无 signer IAM、钱包密钥、Mandate consume 权限或任意签名接口；
 - Local Connector 也不得把钱包私钥上传给平台。
 
-当前 EIP-3009 direct relay 只支持单笔授权原型，不天然实现上述多笔 Mandate。
-在签名域和额度状态机落地前，可以完成 Decide/Negotiate 与手动单笔 testnet
-结算，但不能宣称“Hosted Agent 在用户完全离线后可自动完成全部支付”。
+逐笔 `single_eip3009` 开发 bridge 只处理一个 Intent；Current Game 在它之上组合
+Game-scoped PaymentMandate、受限 signer 和 Settlement Worker，已经支持用户一次
+确认后，在额度、期限和参与方范围内自动完成多笔 testnet 结算。
 
 ## 冻结的成交快照
 

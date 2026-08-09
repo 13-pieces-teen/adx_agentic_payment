@@ -1,5 +1,9 @@
 # Settlement Contracts
 
+> 当前状态（2026-08-09）：Current Game 使用已部署的 `ArenaGameCoin`
+> (`arena402-g`)；纪念品使用已部署的 `ArenaMemorialNFT` (`arena402`)；
+> `MockStablecoin` 只用于底层兼容测试，旧 `arena402-m` 已弃用。
+
 Injective EVM testnet 上的合约集合：
 
 1. **MockStablecoin (mUSDC)** — 结算用 mock 稳定币：标准 ERC-20 + EIP-3009 +

@@ -1,5 +1,12 @@
 # Official DeepSeek Agents through LiteLLM
 
+> Current status — 2026-08-09: production Official Agents use a private
+> LiteLLM key pool behind the single `official-deepseek` alias. The container
+> memory limit is `1.5 GiB`; the 100-Hosted payment-enabled run peaked at about
+> `1029 MiB` without OOM or restart. Player BYOK traffic still bypasses this
+> gateway. The next capacity pass focuses on repeated Provider-quota runs and
+> the human-player traffic overlay.
+
 Arena 402 uses LiteLLM only for platform-owned Official Agents:
 
 ```text

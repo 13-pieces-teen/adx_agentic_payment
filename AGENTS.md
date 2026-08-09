@@ -5,10 +5,11 @@
 This repository is an early-stage hackathon prototype for **Arena 402**, a
 round-based AI trading game:
 
-- every Agent starts with equal cash and inventory;
-- each round it chooses `buy`, `sell`, or `pass`;
-- buy and sell pools are paired first-come-first-served;
-- paired Agents negotiate for at most 2–3 turns;
+- every Agent starts with equal net value and a frozen portfolio;
+- each round it publishes a buy/sell intent or passes;
+- under `agent_a2a.v1`, Agents discover counterparties, send/select RFQs, and
+  enter one bounded Engagement; legacy `fcfs.v1` remains frozen for old Games;
+- engaged Agents negotiate for at most three combined actions;
 - accepted trades settle point-to-point on Injective EVM testnet;
 - after N rounds, final event-driven prices determine net-worth ranking.
 
@@ -23,17 +24,16 @@ The repository contains three maintained foundations:
   through immutable single-payment intents and confirmation-gated inventory
   commit.
 
-The bounded/revocable PaymentMandate, permanent GitHub-user wallet binding,
-x402 V2 HTTP envelope, isolated testnet CSV signer, and unattended settlement
-worker are implemented with Fake E2E coverage. The Local Connector game adapter
-is integrated, and a real Claude Code/Codex Connector-only Docker game has
-completed pairing plus accepted negotiation through WSS, stateless MCP, and the
-Arena Result Sink. That payment-disabled run intentionally produced no
-SettlementIntent or chain write. Real payment-enabled Connector settlement,
-Realtime frontend projection, standard public Facilitator acceptance, and
-complete production acceptance are not complete yet. A fresh
-self-hosted-Facilitator testnet settlement E2E has completed. The former in-memory
-`matching/` and Supabase/ELO business path have been removed.
+The bounded/revocable PaymentMandate, permanent internal-user wallet binding,
+x402 V2 HTTP envelope, isolated encrypted testnet signer, unattended Settlement
+Worker, and four self-hosted Facilitator shards are implemented. A formal
+eight-round `agent_a2a.v1` Game combined one real Codex Connector with nine
+DeepSeek Hosted Agents and committed three `arena402-g` trades only after chain
+confirmation. Separate 2026-08-09 runs completed 100 Hosted Agents × eight
+rounds both without payment and with 50 confirmed testnet settlements. Next
+capacity work focuses on the human-player overlay, repeatability, public
+Facilitator compatibility, multi-Game operation, and recovery. The former
+in-memory `matching/` and Supabase/ELO business path have been removed.
 
 Frontend product development is owned by the separate
 `sunruize93-cmyk/arena402` repository and is deployed through Vercel. This

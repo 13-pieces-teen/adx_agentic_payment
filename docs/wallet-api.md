@@ -1,5 +1,13 @@
 # Arena 402 wallet API
 
+> Current status — 2026-08-09: platform-assigned `sandbox_guest` wallets and
+> user-controlled Injective EVM testnet bindings are separate authorities.
+> Current Games use the platform wallet for unattended, Game-scoped
+> PaymentMandates; proving an external wallet does not grant transaction
+> authority. GameCoin preparation is confirmation-gated and now uses a bounded
+> 16-transaction owner pipeline. An isolated 100-wallet run completed 100/100
+> in `162.430s`; this is a load point, not a per-user latency guarantee.
+
 ## Platform-assigned wallet API
 
 Arena platform wallets are allocated from the imported `wallet_inventory` only

@@ -1,6 +1,7 @@
 # Arena 402 Product Contract
 
-> 状态：当前 hackathon MVP 产品范围。
+> 状态：当前 hackathon MVP 产品契约，最后同步于 2026-08-09。正式功能链和两次
+> 100-Agent × 8 回合实测已经完成，下一阶段进入真人叠加、重复运行与恢复验证。
 
 ## 产品定位
 
@@ -18,8 +19,11 @@ Arena 只负责中转、校验、并发占位、协议状态和结算，不能�
 `game-20260806-110040-099857d6f841` 已由一名真实 Codex Connector 和九名
 DeepSeek PydanticAI Hosted Agent 完成八回合，三笔 `arena402-g` Deal 均经
 自建 Facilitator 链上确认后提交库存，并产生终场排名和赛后 Strategy Revision。
-生产 Current Game、Official pool、前端投影、备份与回滚已验收。公共第三方
-Facilitator、D5a 市场质量、D5b 容量和 Native A2A Endpoint 仍是独立后续项。
+生产 Current Game、Official pool、前端投影、备份与回滚已验收。2026-08-09 又在
+4 vCPU / 8 GiB 腾讯云主机分别完成 100 Hosted Agent × 8 回合的 payment-disabled
+实测，以及 50/50 SettlementIntent 全部确认并提交库存的 payment-enabled 实测。
+下一阶段继续完成 12/25/50 分档与重复运行、20 真人叠加、活动局整机恢复，以及
+公共第三方 Facilitator 和 Native A2A Endpoint 接入。
 早期状态机和 scripted Provider 只用于协议、不变量和 Fake E2E 验证。
 
 产品展示的不是“谁调用了最贵的模型”，而是模型、Prompt、决策速度、风险判断
@@ -35,8 +39,8 @@ Injective EVM testnet 是 MVP 目标中的真实链上支付层，当前 Game �
 这里的“真实”限定为 testnet 上的可验证支付基础设施，不等同于主网资金能力，
 也不等同于主网生产资金能力。当前仓库已验证本地游戏闭环、结算意图冻结、
 PaymentMandate、自建 Facilitator 的新鲜 live testnet 交易、确认门控和幂等
-库存提交；公网 Provider、公共 Facilitator 兼容性和完整生产验收仍按路线图
-单独推进。
+库存提交，并完成正式混合 Runtime Game 与单次 100-Agent 支付容量实测；公共
+Facilitator 兼容性和完整生产验收仍按路线图单独推进。
 
 游客体验是明确例外：平台 signer service 可以管理隔离、限额、可过期、可撤销
 和可轮换的 testnet-only 演示密钥。该便利层不能被描述为主网非托管方案，也

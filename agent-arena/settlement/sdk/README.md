@@ -1,5 +1,10 @@
 # Settlement SDK Prototype
 
+> Current status — 2026-08-09: the SDK is used by Arena's self-hosted testnet
+> settlement path for deterministic EIP-3009 authorization, x402 V2 payloads,
+> encrypted platform-wallet signing and recovery. The formal mixed-Runtime Game
+> and a 50-settlement/100-Hosted run have exercised the integrated path.
+
 The TypeScript source under this directory provides:
 
 - viem helpers for signing an EIP-3009 authorization;
@@ -27,9 +32,8 @@ SettlementIntent hash, signs through `WalletSecretStore`, and produces a
 owns the HTTP 402/retry/response exchange and Facilitator calls.
 
 The shape follows x402 V2 (`x402Version: 2`, CAIP-2 `eip155:<chainId>`,
-`resource`, `accepted`, `payload`). Public Facilitator interoperability still
-requires a live testnet acceptance run; the current automated tests use Fake
-ports and perform local cryptographic verification.
+`resource`, `accepted`, `payload`). The project self-hosted Facilitator path is
+live on testnet; standard public Facilitator interoperability is still pending.
 
 ## Guest-wallet secret-store foundation
 

@@ -6,7 +6,7 @@
 > Phase 0–6 作为已完成 foundation 保留；Runtime v2 权威实现记录见第 22 节，
 > 跨 Runtime 产品切换见
 > [`agent-driven-a2a-market-implementation-plan.md`](./agent-driven-a2a-market-implementation-plan.md)
-> 最后更新：2026-08-08
+> 最后更新：2026-08-09
 > 对应规格：[Hosted Arena Agent Spec](./hosted-arena-agent-spec.md)
 > 当前游戏规则：[Game Design](./game-design.md)
 > 本地 Runtime 参考：[Local Agent Connector Spec](./local-agent-connector-spec.md)
@@ -15,6 +15,12 @@
 > Game 投影已验收；活动局中途整机重启和分档容量仍待验收
 > 设计优先级：Game Design 维护业务契约，本计划维护 Hosted/Local 统一 Runtime
 > 的实现与验收顺序
+>
+> 最新证据：4 vCPU / 8 GiB 腾讯云主机已完成单次 100 Hosted × 8 回合的无支付
+> 与支付开启实测；支付局 50/50 SettlementIntent 确认并提交库存。Facilitator P0
+> 把 Intent 创建到 submission P95 从 `67.080s` 降到 `9.412s`；GameCoin P0 把
+> 隔离 100 钱包准备从 `692.500s` 降到 `162.430s`。分档重复性、20 真人叠加、
+> 公共 Facilitator、HA 和活动局整机恢复继续开放。
 
 ## 1. 交付策略
 
@@ -1244,10 +1250,11 @@ firewall/proxy。容量测试冻结单局最大 Agent 与同时 Game 数；超�
 不能用无限排队伪装容量。Provider 限流、Worker 调度产生的 launch skew 会被计入
 `result_received_at` FCFS，因此 100 Agent 实测通过前不宣称 Tournament 公平性。
 
-当前生产配置为：默认开赛阈值 10 Agent、硬上限 100、固定 5 回合、同一时间
+当前生产配置为：默认开赛阈值 10 Agent、硬上限 100、默认 8 回合、同一时间
 一局 active Game、4 个 Hosted Worker × 25 task slot、Settlement 执行并发 4，
 并确定性路由到 4 个独立 relay EOA。旧 2 vCPU / 4 GB / 70 GB 单机基线已不再
-适用，必须重新定容。具体 `action_timeout_ms` 由真实 Provider 的
+适用。4 vCPU / 8 GiB 已完成两个单次 100-Agent 容量点，但仍须补齐分档和重复
+运行。具体 `action_timeout_ms` 由真实 Provider 的
 10/12/25/50/100 Agent wave 延迟测试冻结，并覆盖 Decide 排队以及最多三轮 Negotiation；
 `settlement_timeout_ms` 首发冻结为 600000，authorization 有效期 420 秒，剩余
 180 秒用于过期区块的两个确认和最终恢复；unknown 不能算终态，超时仍无法安全判定时
@@ -1341,13 +1348,13 @@ Arena Task queue 与 credential validation queue 使用不同 claim 路径。比
 - [ ] 至少一个真实 Provider 的 structured invocation 通过；
 - [ ] guest signer/relay Secret 权限与 Hosted/Arena Worker 隔离；
 - [ ] accepted trade 自动完成当前链路的新鲜 testnet 支付；
-- [ ] 100 Agent 受控场景产生最多 50 笔 accepted trade，经 4 个 shard 全部安全
-      终态，且监控至少观察到 4 笔 Settlement 同时在途并分属 4 个 EOA；
+- [x] 100 Agent 受控场景产生 50 笔 accepted trade，经 4 个 shard 全部安全终态；
+      2026-08-09 实测为 50/50 唯一交易、确认和 InventoryCommit；
 - [ ] 600 秒内无残留 `submitted_unknown`；进入 `settlement_recovery_required`
       必须停止排名并使本次验收失败；
 - [ ] 外部网络 E2E 保存证据；
-- [ ] 10/12 Agent × 5 回合回归通过；
-- [ ] 25/50/100 Agent × 5 回合在重新定容的生产机上通过；
+- [ ] 10/12/25/50 Agent × 8 回合分档与重复运行通过；
+- [x] 100 Agent × 8 回合在 4 vCPU / 8 GiB 主机完成单次有支付和无支付实测；
 - [ ] 默认 timeout 有数据依据；
 - [ ] 安全扫描无真实 secret。
 

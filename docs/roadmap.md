@@ -1,5 +1,28 @@
 # Arena 402 Roadmap
 
+## Current snapshot — 2026-08-09
+
+- Production freezes new Current Games to `agent_a2a.v1`, defaults to eight
+  rounds, starts at 10 Ready seats, and caps one Game at 100 participants.
+- The formal mixed-Runtime Game completed one real Codex Connector plus nine
+  DeepSeek Hosted Agents, three confirmed `arena402-g` settlements, inventory
+  commits, ranking, and next-Game Strategy Revision.
+- A 4 vCPU / 8 GiB Tencent host completed one 100-Hosted-Agent, eight-round run
+  without payment and one payment-enabled run with 50/50 unique confirmed
+  SettlementIntents. This closes two single 100-Agent capacity points, not the
+  12/25/50 tiers, repeatability, 20-human overlay, public Facilitator, HA, or
+  active-Game whole-host recovery.
+- GameCoin wallet preparation now uses a persist-before-broadcast, contiguous
+  nonce pipeline with at most 16 transactions in flight. An isolated 100-wallet
+  testnet rerun finished 100/100 in `162.430s`, down from `692.500s`; it did not
+  create, start, or advance a Game.
+- Official LiteLLM is limited to `1.5 GiB`; PostgreSQL is configured for 120
+  connections; Hosted execution is 4 workers × 25 task slots and Settlement is
+  routed across four independent Facilitator EOAs.
+
+The sections below retain implementation history and evidence chronology. A
+checked item proves only the boundary stated by that item.
+
 ## Hosted Agent Runtime v2
 
 - [x] 冻结 PydanticAI 直接替换方案：保留 AgentTask/Result、lease、Secret、Result
@@ -617,7 +640,8 @@ create game
       deadline default 已完成故障注入；恢复任务只生成一条 Result 并只应用一次。
 - [x] 真实 lease-expiry takeover 与已持久化 terminal Result 的 durable
       outbox replay 已完成隔离故障注入。
-- [ ] 仍需带 PaymentMandate 的真实 Connector settlement E2E。
+- [x] 带 PaymentMandate 的真实 Connector settlement E2E 已由 Phase D 正式 Game
+      完成：真实 Codex Connector 的一笔 `arena402-g` trade 链上确认并提交库存。
 - [x] Connector 进程重启会递增持久化的 `session_generation`，使原进程的
       Session 失效并用新的 session incarnation 重建；处理中 typed AgentTask 仅在
       旧 receipt 明确为 `connector_restarted` 时以新 Command 重试一次，总 Attempt

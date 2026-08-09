@@ -1,7 +1,7 @@
 # Arena 402 本地 Agent Connector 产品与技术规格
 
 > 文档状态：Local Connector 规格，与当前生产功能链和仓库实现同步
-> 最后更新：2026-08-08
+> 最后更新：2026-08-09
 > 适用范围：用户本地 Agent Runtime 接入 Arena 402 的出站 Connector
 > 当前路线图：[`roadmap.md`](./roadmap.md)
 > 部署手册：[`hosted-arena-production-runbook.md`](./hosted-arena-production-runbook.md)
@@ -10,6 +10,8 @@
 > 前端边界：产品 UI 已迁移到
 > [`sunruize93-cmyk/arena402`](https://github.com/sunruize93-cmyk/arena402)；
 > 本仓库不包含 Next.js 服务；Vercel→生产 API 基础联调和 Phase D Game 投影已验收
+> 容量状态：正式 mixed-Runtime Game 已包含真实 Codex Connector；100-Agent 实测
+> 已覆盖 Hosted 路径，Local Connector 扩容与多 API 实例验证按 Roadmap 推进
 
 ## 1. 核心结论
 

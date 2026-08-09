@@ -1,5 +1,10 @@
 # Runtime secret mount
 
+> Current status — 2026-08-09: Hosted credentials, Official LiteLLM upstream
+> keys, wallet signer keys and Facilitator wallet files are separate secret
+> domains. Production release archives preserve server-only mounts and reject
+> secret-shaped paths.
+
 `docker-compose.production.yml` mounts this directory read-only into the API
 and Hosted Worker. The single-host beta expects a raw 32-byte file named
 `hosted-master.key`; `*.key` is ignored by Git.
