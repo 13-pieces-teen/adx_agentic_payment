@@ -926,8 +926,18 @@ create game
       jitter 缩短 lease 后重排；`submitting/unknown` 继续保留原 60 秒安全租约和
       read-only recovery，不能盲目重播。前向 migration `083` 记录
       `signed/submitting/submitted` 时间、Facilitator defer 时间和次数，Worker
-      同时记录脱敏的分片队列深度。该实现仍须用同规格 100 Agent、8 回合、真实
-      testnet 支付复验 P95/P99、最长等待和重复支付不变量。
+      同时记录脱敏的分片队列深度。
+- [x] 2026-08-09 在同一台腾讯云 4 vCPU / 8 GiB 主机上，以提交 `bf9b2fc`
+      完成 P0 后的 100 Hosted Agent、8 回合、真实 Injective EVM Testnet 支付复验：
+      8/8 回合和 100 个排名完成，1199 个 AgentTask 中 1197 completed、2 defaulted；
+      50/50 个 SettlementIntent 均形成唯一交易、确认和 InventoryCommit，非终态、
+      重复交易与 Facilitator defer 均为 0。Intent 创建到 submission 的 P95/最大值
+      从修复前的 `67.080/126.130s` 降至 `9.412/10.733s`，新增的创建到
+      `submitting` P95/最大值为 `7.644/8.544s`。运行期整机 CPU P95/峰值为
+      `21.25%/42.92%`，内存 P95/峰值为 `3.72/3.74 GiB`；PostgreSQL 连接峰值
+      `69/120`，核心容器 0 OOM/0 restart，LiteLLM 峰值约 `1029 MiB/1.5 GiB`。
+      该证据只关闭单机、自建四 Facilitator、单次 100 Agent payment-enabled 容量点；
+      公共 Facilitator、跨 Worker 故障恢复、重复运行和约 20 名真人叠加仍未验收。
 - [ ] 冻结 `settlement_timeout_ms=600000`，先回归 10/12 Agent，再在 100 Agent
       最坏 50 笔 accepted trade 场景验证 4 shard 路由、在途并发、终态与恢复。
 - [ ] authorization 有效期冻结为 420 秒，保留 180 秒做过期确认与恢复；
