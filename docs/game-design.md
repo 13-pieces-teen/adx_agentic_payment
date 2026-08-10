@@ -112,6 +112,12 @@ Hosted Agent 补位，并且只在 32 个席位全部 Ready 后自动开局。�
 但产品 Current Game 独立限制为最多 100 人；Arena API 和 PostgreSQL trigger 都必须
 拒绝超额加入，避免并发请求绕过上限。
 
+玩家可在 Game 仍处于 `registration | portfolio_setup` 时撤回本人席位；Arena 同一
+事务取消 Participant/Game Agent、撤销未使用的 PaymentMandate，并重新计算非官方
+Participant 数量。若撤回后不再有真人 Participant，本局进入 `cancelled`，其余官方
+补位席位一并取消，Current Game 生命周期随后创建下一局；若仍有其他真人
+Participant，本局保持等待并继续原有补位/开局流程。进入运行阶段后不得撤回。
+
 ```text
 REGISTRATION
   -> PORTFOLIO_SETUP
