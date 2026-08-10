@@ -103,10 +103,14 @@ cash + grain*2 + iron*5 + warhorse*8 + gems*3 = 20 gold
 只有 Operator 明确创建实验 Game 时才能使用，且不能把“已注册”表述为产品切换。
 
 Game 在创建时同时冻结 `roundCount`、`eventDeckId`、`eventMode`、
-`maxParticipants` 和配置版本。Current Game 的 `maxParticipants` 默认 100、下限为 2，
-Game Core 不再设置固定全局上限；部署方必须按 worker、Provider 和数据库容量
-控制 Operator 创建的单局规模。产品侧 Current Game 独立限制为最多 100 人；
-Arena API 和 PostgreSQL trigger 都必须拒绝超额加入，避免并发请求绕过上限。
+`maxParticipants` 和配置版本。产品 Current Game 由管理员在空的等待局中设置
+10–100 的精确目标人数，并把 `startThreshold` 与 `maxParticipants` 同时冻结为该值；
+首位 Participant 产生后，本局配置立即锁定。目标人数包含玩家自己的 Agent：例如
+目标为 32 且只有 1 个玩家 Agent Ready，Arena 会立即请求 31 个 allowlisted 官方
+Hosted Agent 补位，并且只在 32 个席位全部 Ready 后自动开局。这里没有定时开局或
+业务等待计时，也不会静默降级为更小规模的比赛。Game Core 不设置固定全局上限，
+但产品 Current Game 独立限制为最多 100 人；Arena API 和 PostgreSQL trigger 都必须
+拒绝超额加入，避免并发请求绕过上限。
 
 ```text
 REGISTRATION

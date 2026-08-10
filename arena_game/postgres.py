@@ -87,6 +87,7 @@ class PawnhouseRepositoryError(RuntimeError):
 _INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 CURRENT_GAME_START_THRESHOLD = 10
 CURRENT_GAME_MAX_PARTICIPANTS = 100
+CURRENT_GAME_ADMIN_MIN_TARGET_AGENT_COUNT = 10
 
 _MARKET_INTENT_ACTION_ADAPTER = TypeAdapter(MarketIntentActionV1)
 _MARKET_RFQ_ACTION_ADAPTER = TypeAdapter(MarketRfqActionV1)
@@ -266,7 +267,7 @@ class PostgresPawnhouseRepository:
         max_negotiation_turns: int = 3,
         start_threshold: int = CURRENT_GAME_START_THRESHOLD,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
-        official_fill_after_seconds: int = 300,
+        official_fill_after_seconds: int = 0,
         settlement_config: SettlementConfig | None = None,
         market_protocol: str = "fcfs.v1",
     ) -> dict[str, object]:
@@ -282,7 +283,7 @@ class PostgresPawnhouseRepository:
             <= CURRENT_GAME_MAX_PARTICIPANTS
         ):
             raise PawnhouseRepositoryError("invalid_max_participants")
-        if official_fill_after_seconds <= 0:
+        if official_fill_after_seconds < 0:
             raise PawnhouseRepositoryError(
                 "invalid_official_fill_after_seconds"
             )
@@ -401,6 +402,257 @@ class PostgresPawnhouseRepository:
                     "previousGameId": previous_game_id,
                     "eventScheduleCommitment": commitment,
                 }
+
+    async def current_game_matchmaking_configuration(
+        self,
+    ) -> dict[str, object]:
+        """Return the protected Current Game matchmaking control state."""
+
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT
+                game.game_id,
+                game.phase,
+                game.config_snapshot,
+                pointer.start_threshold,
+                pointer.max_participants,
+                EXISTS (
+                    SELECT 1
+                    FROM arena402.game_participants AS participant
+                    WHERE participant.game_id = game.game_id
+                ) AS has_participant_history
+            FROM arena402.current_game AS pointer
+            JOIN arena402.games AS game ON game.game_id = pointer.game_id
+            WHERE pointer.singleton = TRUE
+            """
+        )
+        if row is None:
+            raise PawnhouseRepositoryError("current_game_not_found")
+
+        config = (
+            json.loads(row["config_snapshot"])
+            if isinstance(row["config_snapshot"], str)
+            else dict(row["config_snapshot"])
+        )
+        has_participant_history = bool(row["has_participant_history"])
+        editable = (
+            str(row["phase"]) == "registration"
+            and not has_participant_history
+        )
+        if editable:
+            locked_reason = None
+        elif has_participant_history:
+            locked_reason = "participant_history_exists"
+        else:
+            locked_reason = "game_not_waiting"
+        fill_delay_seconds = int(
+            config.get("officialFillAfterSeconds", 0)
+        )
+        return {
+            "gameId": str(row["game_id"]),
+            "targetAgentCount": int(row["start_threshold"]),
+            "maxParticipants": int(row["max_participants"]),
+            "minimumTargetAgentCount": (
+                CURRENT_GAME_ADMIN_MIN_TARGET_AGENT_COUNT
+            ),
+            "maximumTargetAgentCount": CURRENT_GAME_MAX_PARTICIPANTS,
+            "fillPolicy": (
+                "immediate_on_first_player_ready"
+                if fill_delay_seconds == 0
+                else "delayed_after_first_player_ready"
+            ),
+            "fillDelaySeconds": fill_delay_seconds,
+            "configurationEditable": editable,
+            "lockedReason": locked_reason,
+        }
+
+    async def configure_current_game_matchmaking(
+        self,
+        *,
+        expected_game_id: str,
+        target_agent_count: int,
+        actor_user_id: str,
+        request_digest: str,
+    ) -> dict[str, object]:
+        """Freeze an exact target for an empty, waiting Current Game."""
+
+        if not expected_game_id:
+            raise PawnhouseRepositoryError("game_id_required")
+        if not (
+            CURRENT_GAME_ADMIN_MIN_TARGET_AGENT_COUNT
+            <= target_agent_count
+            <= CURRENT_GAME_MAX_PARTICIPANTS
+        ):
+            raise PawnhouseRepositoryError("invalid_target_agent_count")
+        if not actor_user_id:
+            raise PawnhouseRepositoryError("admin_actor_required")
+        if not request_digest:
+            raise PawnhouseRepositoryError("idempotency_key_required")
+
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                current_game_id = await connection.fetchval(
+                    """
+                    SELECT game_id
+                    FROM arena402.current_game
+                    WHERE singleton = TRUE
+                    """
+                )
+                if current_game_id is None:
+                    raise PawnhouseRepositoryError("current_game_not_found")
+                if str(current_game_id) != expected_game_id:
+                    raise PawnhouseRepositoryError("current_game_changed")
+
+                game = await connection.fetchrow(
+                    """
+                    SELECT phase, config_snapshot
+                    FROM arena402.games
+                    WHERE game_id = $1
+                    FOR UPDATE
+                    """,
+                    expected_game_id,
+                )
+                if game is None:
+                    raise PawnhouseRepositoryError("current_game_not_found")
+
+                locked_current_game_id = await connection.fetchval(
+                    """
+                    SELECT game_id
+                    FROM arena402.current_game
+                    WHERE singleton = TRUE
+                    FOR UPDATE
+                    """
+                )
+                if str(locked_current_game_id) != expected_game_id:
+                    raise PawnhouseRepositoryError("current_game_changed")
+
+                prior_event = await connection.fetchrow(
+                    """
+                    SELECT public_payload
+                    FROM arena402.game_events
+                    WHERE game_id = $1 AND source_idempotency_key = $2
+                    """,
+                    expected_game_id,
+                    request_digest,
+                )
+                if prior_event is not None:
+                    prior_payload = (
+                        json.loads(prior_event["public_payload"])
+                        if isinstance(prior_event["public_payload"], str)
+                        else dict(prior_event["public_payload"])
+                    )
+                    if int(prior_payload.get("targetAgentCount", -1)) != (
+                        target_agent_count
+                    ):
+                        raise PawnhouseRepositoryError(
+                            "idempotency_key_reused"
+                        )
+                    return {
+                        "gameId": expected_game_id,
+                        "targetAgentCount": target_agent_count,
+                        "fillPolicy": (
+                            "immediate_on_first_player_ready"
+                        ),
+                        "configurationEditable": True,
+                    }
+
+                has_participant_history = bool(
+                    await connection.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM arena402.game_participants
+                            WHERE game_id = $1
+                        )
+                        """,
+                        expected_game_id,
+                    )
+                )
+                if str(game["phase"]) != "registration" or (
+                    has_participant_history
+                ):
+                    raise PawnhouseRepositoryError(
+                        "current_game_configuration_locked"
+                    )
+
+                config = (
+                    json.loads(game["config_snapshot"])
+                    if isinstance(game["config_snapshot"], str)
+                    else dict(game["config_snapshot"])
+                )
+                config.update(
+                    {
+                        "minParticipants": target_agent_count,
+                        "maxParticipants": target_agent_count,
+                        "officialFillAfterSeconds": 0,
+                        "officialFillPolicy": (
+                            "immediate_on_first_player_ready"
+                        ),
+                    }
+                )
+                config_json = _json(config)
+
+                await connection.execute(
+                    """
+                    UPDATE arena402.games
+                    SET min_participants = $2,
+                        max_participants = $2,
+                        config_snapshot = $3::jsonb
+                    WHERE game_id = $1
+                    """,
+                    expected_game_id,
+                    target_agent_count,
+                    config_json,
+                )
+                await connection.execute(
+                    """
+                    UPDATE arena402.current_game
+                    SET start_threshold = $2,
+                        max_participants = $2,
+                        updated_at = clock_timestamp()
+                    WHERE singleton = TRUE AND game_id = $1
+                    """,
+                    expected_game_id,
+                    target_agent_count,
+                )
+                await connection.execute(
+                    """
+                    UPDATE public.games
+                    SET config_snapshot = $2::jsonb
+                    WHERE game_id = $1
+                    """,
+                    expected_game_id,
+                    config_json,
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO arena402.game_events (
+                        game_id, event_type, public_payload,
+                        private_payload, source_idempotency_key
+                    )
+                    VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
+                    """,
+                    expected_game_id,
+                    "game.matchmaking_configured",
+                    _json(
+                        {
+                            "targetAgentCount": target_agent_count,
+                            "fillPolicy": (
+                                "immediate_on_first_player_ready"
+                            ),
+                        }
+                    ),
+                    _json({"actorUserId": actor_user_id}),
+                    request_digest,
+                )
+
+        return {
+            "gameId": expected_game_id,
+            "targetAgentCount": target_agent_count,
+            "fillPolicy": "immediate_on_first_player_ready",
+            "configurationEditable": True,
+        }
 
     async def _insert_game(
         self,
@@ -8441,7 +8693,12 @@ class PostgresPawnhouseRepository:
             else dict(game["config_snapshot"])
         )
         official_fill_after_seconds = int(
-            config.get("officialFillAfterSeconds", 300)
+            config.get("officialFillAfterSeconds", 0)
+        )
+        official_fill_policy = (
+            "immediate_on_first_player_ready"
+            if official_fill_after_seconds == 0
+            else "delayed_after_first_player_ready"
         )
         first_human_ready_at = min(
             (
@@ -8551,6 +8808,8 @@ class PostgresPawnhouseRepository:
                         fill_at.isoformat() if fill_at is not None else None
                     ),
                     "fillStatus": fill_status,
+                    "fillPolicy": official_fill_policy,
+                    "fillDelaySeconds": official_fill_after_seconds,
                     "serverTime": server_time.isoformat(),
                 },
                 "createdAt": game["created_at"].isoformat(),
@@ -8647,7 +8906,7 @@ class PostgresPawnhouseRepository:
             else dict(game["config_snapshot"])
         )
         fill_at = first_human_ready_at + timedelta(
-            seconds=int(config.get("officialFillAfterSeconds", 300))
+            seconds=int(config.get("officialFillAfterSeconds", 0))
         )
         if now < fill_at:
             return {

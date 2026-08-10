@@ -24,8 +24,8 @@ class CurrentGameLifecycleWorker:
         settlement_config: SettlementConfig,
         round_count: int = 8,
         start_threshold: int = CURRENT_GAME_START_THRESHOLD,
-        max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
-        official_fill_after_seconds: int = 300,
+        max_participants: int = CURRENT_GAME_START_THRESHOLD,
+        official_fill_after_seconds: int = 0,
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
         market_protocol: str = "fcfs.v1",
@@ -48,8 +48,10 @@ class CurrentGameLifecycleWorker:
             )
         if action_timeout_ms <= 0:
             raise ValueError("action_timeout_ms must be positive")
-        if official_fill_after_seconds <= 0:
-            raise ValueError("official_fill_after_seconds must be positive")
+        if official_fill_after_seconds < 0:
+            raise ValueError(
+                "official_fill_after_seconds must be non-negative"
+            )
         if max_negotiation_turns not in {2, 3}:
             raise ValueError("max_negotiation_turns must be 2 or 3")
         if market_protocol not in {"fcfs.v1", "agent_a2a.v1"}:
