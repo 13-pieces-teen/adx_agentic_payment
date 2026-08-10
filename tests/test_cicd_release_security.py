@@ -73,6 +73,18 @@ def test_workflow_reports_unknown_host_fingerprint_without_trusting_it() -> None
     assert "ssh-keyscan" not in pinned_trust
 
 
+def test_workflow_reports_only_the_public_half_of_the_deployment_key() -> None:
+    public_key_report = WORKFLOW.split(
+        "- name: Report deployment SSH public key", 1
+    )[1].split("- name: Transfer and deploy the verified release", 1)[0]
+
+    assert "PROD_REPORT_SSH_DEPLOY_PUBLIC_KEY == 'true'" in public_key_report
+    assert 'ssh-keygen -y -f "${HOME}/.ssh/arena402_deploy"' in public_key_report
+    assert "Production deployment SSH public key fingerprint" in public_key_report
+    assert "PROD_SSH_PRIVATE_KEY" not in public_key_report
+    assert "cat " not in public_key_report
+
+
 def test_release_verifies_identity_before_activation_and_marks_after_health() -> None:
     checksum_index = RELEASE.index(
         'actual_checksum="$(sha256sum "${archive}"'
