@@ -73,6 +73,7 @@ from hosted_agent_control_plane import (
 )
 from hosted_agent_runtime import CapabilityRegistry
 from web.arena_participation_api import create_arena_participation_router
+from web.current_game_admin_api import create_current_game_admin_router
 from web.game_operator_api import create_game_operator_router
 from web.hosted_agent_api import create_hosted_agent_router
 from web.ledger_api import create_ledger_router, load_ledger_metadata_from_env
@@ -436,6 +437,14 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
 
     x402_coordinator: X402SettlementExecutor | None = None
     x402_public_api_url = ""
+    admin_subjects = frozenset(
+        value.strip()
+        for value in os.getenv(
+            "ADX_ARENA_ADMIN_GITHUB_SUBJECTS", ""
+        ).split(",")
+        if value.strip().isdigit()
+    )
+
     if payment_repository is not None:
         if pawnhouse_repository is None:
             raise RuntimeError(
@@ -755,13 +764,6 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
                 wallet_service=wallet_service,
             )
         )
-        admin_subjects = frozenset(
-            value.strip()
-            for value in os.getenv(
-                "ADX_ARENA_ADMIN_GITHUB_SUBJECTS", ""
-            ).split(",")
-            if value.strip().isdigit()
-        )
         app.include_router(
             create_payment_admin_router(
                 auth=connector_bundle.auth,
@@ -799,6 +801,13 @@ def create_app(connector_demo_enabled: Optional[bool] = None) -> FastAPI:
             )
         )
         if connector_bundle is not None:
+            app.include_router(
+                create_current_game_admin_router(
+                    auth=connector_bundle.auth,
+                    repository=pawnhouse_repository,
+                    github_subjects=admin_subjects,
+                )
+            )
             app.include_router(
                 create_game_operator_router(
                     auth=connector_bundle.auth,

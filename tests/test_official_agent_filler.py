@@ -152,3 +152,57 @@ def test_one_player_gets_nine_stably_random_official_identities() -> None:
         assert "arena.official-selection.v1" in pool.selection_sql
 
     asyncio.run(scenario())
+
+
+def test_one_ready_player_immediately_requests_thirty_one_for_target_32() -> None:
+    now = datetime(2026, 8, 10, tzinfo=timezone.utc)
+
+    class _ImmediatePool:
+        def __init__(self) -> None:
+            self.fetchrow_count = 0
+            self.selection_parameters: tuple[object, ...] = ()
+
+        async def fetchrow(
+            self,
+            _: str,
+            *parameters: object,
+        ) -> dict[str, object]:
+            self.fetchrow_count += 1
+            if self.fetchrow_count == 1:
+                return {
+                    "game_id": "game-target-32",
+                    "phase": "registration",
+                    "config_snapshot": {
+                        "officialFillAfterSeconds": 0,
+                    },
+                    "start_threshold": 32,
+                }
+            assert parameters == ("game-target-32",)
+            return {
+                "participating_count": 1,
+                "ready_count": 1,
+                "first_human_ready_at": now,
+            }
+
+        async def fetch(
+            self,
+            _: str,
+            *parameters: object,
+        ) -> list[dict[str, str]]:
+            self.selection_parameters = parameters
+            return [
+                {"agent_id": f"official-{index:02d}"}
+                for index in range(1, 32)
+            ]
+
+    async def scenario() -> None:
+        pool = _ImmediatePool()
+        repository = PostgresPawnhouseRepository("", pool=pool)
+
+        plan = await repository.official_fill_plan(now=now)
+
+        assert plan["status"] == "FILLING"
+        assert len(plan["candidateAgentIds"]) == 31
+        assert pool.selection_parameters == ("game-target-32", 31)
+
+    asyncio.run(scenario())

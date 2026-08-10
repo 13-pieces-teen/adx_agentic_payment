@@ -37,7 +37,7 @@ class OfficialFillerRepository(Protocol):
 
 
 class OfficialAgentFiller:
-    """Fill seats only after the repository's authoritative deadline."""
+    """Fill seats when the repository marks the Current Game eligible."""
 
     def __init__(self, *, repository: OfficialFillerRepository) -> None:
         self._repository = repository

@@ -307,10 +307,10 @@ async def main() -> None:
             os.getenv("ADX_CURRENT_GAME_START_THRESHOLD", "10")
         ),
         max_participants=int(
-            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "100")
+            os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "10")
         ),
         official_fill_after_seconds=int(
-            os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "300")
+            os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "0")
         ),
         action_timeout_ms=int(
             os.getenv("ADX_CURRENT_GAME_ACTION_TIMEOUT_MS", "90000")

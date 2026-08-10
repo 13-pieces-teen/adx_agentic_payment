@@ -475,6 +475,8 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
                 "firstHumanReadyAt": "2026-07-25T10:00:00+00:00",
                 "fillAt": "2026-07-25T10:05:00+00:00",
                 "fillStatus": "FILLING",
+                "fillPolicy": "delayed_after_first_player_ready",
+                "fillDelaySeconds": 300,
                 "serverTime": value["game"]["matchmaking"]["serverTime"],
             },
             "createdAt": "2026-07-25T09:00:00+00:00",

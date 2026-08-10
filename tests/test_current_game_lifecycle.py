@@ -55,8 +55,8 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     assert len(repository.calls) == 1
     call = repository.calls[0]
     assert call["start_threshold"] == 10
-    assert call["max_participants"] == 100
-    assert call["official_fill_after_seconds"] == 300
+    assert call["max_participants"] == 10
+    assert call["official_fill_after_seconds"] == 0
     assert call["event_mode"] == "seeded_shuffle"
     assert call["settlement_config"] is settlement
     assert len(call["events"]) == 8  # type: ignore[arg-type]
@@ -108,6 +108,38 @@ def test_production_current_game_defaults_to_eight_rounds_everywhere() -> None:
     )
     assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in example
     assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in generator
+
+
+def test_production_current_game_defaults_to_exact_ten_and_immediate_fill() -> None:
+    worker = (ROOT / "arena_game" / "production_worker.py").read_text(
+        encoding="utf-8"
+    )
+    compose = (ROOT / "docker-compose.production.yml").read_text(
+        encoding="utf-8"
+    )
+    example = (ROOT / "deploy" / "env.production.example").read_text(
+        encoding="utf-8"
+    )
+    generator = (ROOT / "deploy" / "scripts" / "generate-env.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "10")' in worker
+    assert (
+        'os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "0")'
+        in worker
+    )
+    assert (
+        "ADX_CURRENT_GAME_MAX_PARTICIPANTS: "
+        "${ADX_CURRENT_GAME_MAX_PARTICIPANTS:-10}"
+    ) in compose
+    assert (
+        "ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS: "
+        "${ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS:-0}"
+    ) in compose
+    for source in (example, generator):
+        assert "ADX_CURRENT_GAME_MAX_PARTICIPANTS=10" in source
+        assert "ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS=0" in source
 
 
 def test_production_current_game_defaults_to_fcfs_with_versioned_switch() -> None:
@@ -164,19 +196,19 @@ def test_lifecycle_rejects_capacity_above_production_limit() -> None:
         raise AssertionError("capacity above 100 must be rejected")
 
 
-def test_lifecycle_rejects_non_positive_official_fill_delay() -> None:
+def test_lifecycle_rejects_negative_official_fill_delay() -> None:
     repository = _Repository()
 
     try:
         CurrentGameLifecycleWorker(
             repository=repository,  # type: ignore[arg-type]
             settlement_config=SettlementConfig(),
-            official_fill_after_seconds=0,
+            official_fill_after_seconds=-1,
         )
     except ValueError as exc:
         assert "official_fill_after_seconds" in str(exc)
     else:
-        raise AssertionError("fill delay must be positive")
+        raise AssertionError("fill delay must be non-negative")
 
 
 def test_lifecycle_rejects_unsupported_market_protocol() -> None:
