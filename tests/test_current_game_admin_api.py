@@ -32,6 +32,7 @@ class _Auth:
 class _Repository:
     def __init__(self) -> None:
         self.target_agent_count = 10
+        self.fill_delay_seconds = 300
         self.configured: dict[str, object] | None = None
         self.locked = False
 
@@ -52,8 +53,8 @@ class _Repository:
                     "firstHumanReadyAt": None,
                     "fillAt": None,
                     "fillStatus": "IDLE",
-                    "fillPolicy": "immediate_on_first_player_ready",
-                    "fillDelaySeconds": 0,
+                    "fillPolicy": "delayed_after_first_player_ready",
+                    "fillDelaySeconds": self.fill_delay_seconds,
                     "serverTime": "2026-08-10T00:00:00+00:00",
                 },
             }
@@ -68,8 +69,10 @@ class _Repository:
             "maxParticipants": self.target_agent_count,
             "minimumTargetAgentCount": 10,
             "maximumTargetAgentCount": 100,
-            "fillPolicy": "immediate_on_first_player_ready",
-            "fillDelaySeconds": 0,
+            "minimumFillDelaySeconds": 0,
+            "maximumFillDelaySeconds": 3600,
+            "fillPolicy": "delayed_after_first_player_ready",
+            "fillDelaySeconds": self.fill_delay_seconds,
             "configurationEditable": not self.locked,
             "lockedReason": (
                 "participant_history_exists" if self.locked else None
@@ -86,9 +89,12 @@ class _Repository:
             )
         self.configured = values
         self.target_agent_count = int(values["target_agent_count"])
+        if values["fill_delay_seconds"] is not None:
+            self.fill_delay_seconds = int(values["fill_delay_seconds"])
         return {
             "gameId": values["expected_game_id"],
             "targetAgentCount": self.target_agent_count,
+            "fillDelaySeconds": self.fill_delay_seconds,
         }
 
 
@@ -125,8 +131,10 @@ def test_current_game_admin_snapshot_requires_allowlisted_github_subject() -> No
         "maxParticipants": 10,
         "minimumTargetAgentCount": 10,
         "maximumTargetAgentCount": 100,
-        "fillPolicy": "immediate_on_first_player_ready",
-        "fillDelaySeconds": 0,
+        "minimumFillDelaySeconds": 0,
+        "maximumFillDelaySeconds": 3600,
+        "fillPolicy": "delayed_after_first_player_ready",
+        "fillDelaySeconds": 300,
         "configurationEditable": True,
         "lockedReason": None,
     }
@@ -137,7 +145,11 @@ def test_admin_can_freeze_an_exact_target_for_the_empty_current_game() -> None:
 
     response = client.put(
         "/api/v1/admin/current-game/matchmaking",
-        json={"gameId": "game-current", "targetAgentCount": 32},
+        json={
+            "gameId": "game-current",
+            "targetAgentCount": 32,
+            "fillDelaySeconds": 600,
+        },
         headers={"Idempotency-Key": "current-game-target:test-32"},
     )
 
@@ -146,6 +158,7 @@ def test_admin_can_freeze_an_exact_target_for_the_empty_current_game() -> None:
     assert repository.configured == {
         "expected_game_id": "game-current",
         "target_agent_count": 32,
+        "fill_delay_seconds": 600,
         "actor_user_id": "user-admin",
         "request_digest": sha256_text_identifier(
             "current-game-target:test-32"
@@ -155,6 +168,7 @@ def test_admin_can_freeze_an_exact_target_for_the_empty_current_game() -> None:
     assert body["game"]["startThreshold"] == 32
     assert body["game"]["maxParticipants"] == 32
     assert body["matchmakingConfiguration"]["targetAgentCount"] == 32
+    assert body["matchmakingConfiguration"]["fillDelaySeconds"] == 600
     assert body["schemaVersion"] == "arena.current-game-admin.v1"
 
 
@@ -168,6 +182,39 @@ def test_admin_target_rejects_values_outside_ten_to_one_hundred() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_admin_fill_delay_rejects_values_above_one_hour() -> None:
+    client, _, _ = _client()
+
+    response = client.put(
+        "/api/v1/admin/current-game/matchmaking",
+        json={
+            "gameId": "game-current",
+            "targetAgentCount": 32,
+            "fillDelaySeconds": 3_601,
+        },
+        headers={"Idempotency-Key": "current-game-delay:test-3601"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_legacy_admin_client_can_omit_fill_delay() -> None:
+    client, _, repository = _client()
+
+    response = client.put(
+        "/api/v1/admin/current-game/matchmaking",
+        json={"gameId": "game-current", "targetAgentCount": 32},
+        headers={"Idempotency-Key": "current-game-target:legacy-32"},
+    )
+
+    assert response.status_code == 200
+    assert repository.configured is not None
+    assert repository.configured["fill_delay_seconds"] is None
+    assert response.json()["matchmakingConfiguration"][
+        "fillDelaySeconds"
+    ] == 300
 
 
 def test_admin_target_is_locked_after_any_participant_history_exists() -> None:

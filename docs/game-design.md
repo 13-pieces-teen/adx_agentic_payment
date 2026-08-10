@@ -104,11 +104,13 @@ cash + grain*2 + iron*5 + warhorse*8 + gems*3 = 20 gold
 
 Game 在创建时同时冻结 `roundCount`、`eventDeckId`、`eventMode`、
 `maxParticipants` 和配置版本。产品 Current Game 由管理员在空的等待局中设置
-10–100 的精确目标人数，并把 `startThreshold` 与 `maxParticipants` 同时冻结为该值；
-首位 Participant 产生后，本局配置立即锁定。目标人数包含玩家自己的 Agent：例如
-目标为 32 且只有 1 个玩家 Agent Ready，Arena 会立即请求 31 个 allowlisted 官方
-Hosted Agent 补位，并且只在 32 个席位全部 Ready 后自动开局。这里没有定时开局或
-业务等待计时，也不会静默降级为更小规模的比赛。Game Core 不设置固定全局上限，
+10–100 的精确目标人数和 0–60 分钟的匹配窗口，默认窗口为 5 分钟，并把
+`startThreshold`、`maxParticipants` 与 `officialFillAfterSeconds` 一起冻结；首位
+Participant 产生后，本局配置立即锁定。目标人数包含玩家自己的 Agent：例如目标为
+32、匹配窗口为 5 分钟且只有 1 个玩家 Agent Ready，Arena 会先允许其他玩家在窗口内
+加入，窗口到期后再请求 31 个席位缺口对应的 allowlisted 官方 Hosted Agent 补位，
+并且只在 32 个席位全部 Ready 后自动开局。这里没有定时开局，也不会因窗口到期静默
+降级为更小规模的比赛。Game Core 不设置固定全局上限，
 但产品 Current Game 独立限制为最多 100 人；Arena API 和 PostgreSQL trigger 都必须
 拒绝超额加入，避免并发请求绕过上限。
 

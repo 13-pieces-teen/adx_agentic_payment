@@ -88,6 +88,9 @@ _INTENT_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 CURRENT_GAME_START_THRESHOLD = 10
 CURRENT_GAME_MAX_PARTICIPANTS = 100
 CURRENT_GAME_ADMIN_MIN_TARGET_AGENT_COUNT = 10
+CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS = 300
+CURRENT_GAME_ADMIN_MIN_FILL_DELAY_SECONDS = 0
+CURRENT_GAME_ADMIN_MAX_FILL_DELAY_SECONDS = 3_600
 
 _MARKET_INTENT_ACTION_ADAPTER = TypeAdapter(MarketIntentActionV1)
 _MARKET_RFQ_ACTION_ADAPTER = TypeAdapter(MarketRfqActionV1)
@@ -267,7 +270,9 @@ class PostgresPawnhouseRepository:
         max_negotiation_turns: int = 3,
         start_threshold: int = CURRENT_GAME_START_THRESHOLD,
         max_participants: int = CURRENT_GAME_MAX_PARTICIPANTS,
-        official_fill_after_seconds: int = 0,
+        official_fill_after_seconds: int = (
+            CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS
+        ),
         settlement_config: SettlementConfig | None = None,
         market_protocol: str = "fcfs.v1",
     ) -> dict[str, object]:
@@ -446,7 +451,10 @@ class PostgresPawnhouseRepository:
         else:
             locked_reason = "game_not_waiting"
         fill_delay_seconds = int(
-            config.get("officialFillAfterSeconds", 0)
+            config.get(
+                "officialFillAfterSeconds",
+                CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS,
+            )
         )
         return {
             "gameId": str(row["game_id"]),
@@ -456,6 +464,12 @@ class PostgresPawnhouseRepository:
                 CURRENT_GAME_ADMIN_MIN_TARGET_AGENT_COUNT
             ),
             "maximumTargetAgentCount": CURRENT_GAME_MAX_PARTICIPANTS,
+            "minimumFillDelaySeconds": (
+                CURRENT_GAME_ADMIN_MIN_FILL_DELAY_SECONDS
+            ),
+            "maximumFillDelaySeconds": (
+                CURRENT_GAME_ADMIN_MAX_FILL_DELAY_SECONDS
+            ),
             "fillPolicy": (
                 "immediate_on_first_player_ready"
                 if fill_delay_seconds == 0
@@ -471,6 +485,7 @@ class PostgresPawnhouseRepository:
         *,
         expected_game_id: str,
         target_agent_count: int,
+        fill_delay_seconds: int | None = None,
         actor_user_id: str,
         request_digest: str,
     ) -> dict[str, object]:
@@ -484,6 +499,12 @@ class PostgresPawnhouseRepository:
             <= CURRENT_GAME_MAX_PARTICIPANTS
         ):
             raise PawnhouseRepositoryError("invalid_target_agent_count")
+        if fill_delay_seconds is not None and not (
+            CURRENT_GAME_ADMIN_MIN_FILL_DELAY_SECONDS
+            <= fill_delay_seconds
+            <= CURRENT_GAME_ADMIN_MAX_FILL_DELAY_SECONDS
+        ):
+            raise PawnhouseRepositoryError("invalid_fill_delay_seconds")
         if not actor_user_id:
             raise PawnhouseRepositoryError("admin_actor_required")
         if not request_digest:
@@ -516,6 +537,27 @@ class PostgresPawnhouseRepository:
                 if game is None:
                     raise PawnhouseRepositoryError("current_game_not_found")
 
+                config = (
+                    json.loads(game["config_snapshot"])
+                    if isinstance(game["config_snapshot"], str)
+                    else dict(game["config_snapshot"])
+                )
+                resolved_fill_delay_seconds = (
+                    int(
+                        config.get(
+                            "officialFillAfterSeconds",
+                            CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS,
+                        )
+                    )
+                    if fill_delay_seconds is None
+                    else fill_delay_seconds
+                )
+                fill_policy = (
+                    "immediate_on_first_player_ready"
+                    if resolved_fill_delay_seconds == 0
+                    else "delayed_after_first_player_ready"
+                )
+
                 locked_current_game_id = await connection.fetchval(
                     """
                     SELECT game_id
@@ -542,18 +584,29 @@ class PostgresPawnhouseRepository:
                         if isinstance(prior_event["public_payload"], str)
                         else dict(prior_event["public_payload"])
                     )
+                    prior_fill_delay_seconds = prior_payload.get(
+                        "fillDelaySeconds"
+                    )
+                    if prior_fill_delay_seconds is None and (
+                        prior_payload.get("fillPolicy")
+                        == "immediate_on_first_player_ready"
+                    ):
+                        prior_fill_delay_seconds = 0
                     if int(prior_payload.get("targetAgentCount", -1)) != (
                         target_agent_count
-                    ):
+                    ) or int(
+                        prior_fill_delay_seconds
+                        if prior_fill_delay_seconds is not None
+                        else -1
+                    ) != resolved_fill_delay_seconds:
                         raise PawnhouseRepositoryError(
                             "idempotency_key_reused"
                         )
                     return {
                         "gameId": expected_game_id,
                         "targetAgentCount": target_agent_count,
-                        "fillPolicy": (
-                            "immediate_on_first_player_ready"
-                        ),
+                        "fillPolicy": fill_policy,
+                        "fillDelaySeconds": resolved_fill_delay_seconds,
                         "configurationEditable": True,
                     }
 
@@ -576,19 +629,14 @@ class PostgresPawnhouseRepository:
                         "current_game_configuration_locked"
                     )
 
-                config = (
-                    json.loads(game["config_snapshot"])
-                    if isinstance(game["config_snapshot"], str)
-                    else dict(game["config_snapshot"])
-                )
                 config.update(
                     {
                         "minParticipants": target_agent_count,
                         "maxParticipants": target_agent_count,
-                        "officialFillAfterSeconds": 0,
-                        "officialFillPolicy": (
-                            "immediate_on_first_player_ready"
+                        "officialFillAfterSeconds": (
+                            resolved_fill_delay_seconds
                         ),
+                        "officialFillPolicy": fill_policy,
                     }
                 )
                 config_json = _json(config)
@@ -638,8 +686,9 @@ class PostgresPawnhouseRepository:
                     _json(
                         {
                             "targetAgentCount": target_agent_count,
-                            "fillPolicy": (
-                                "immediate_on_first_player_ready"
+                            "fillPolicy": fill_policy,
+                            "fillDelaySeconds": (
+                                resolved_fill_delay_seconds
                             ),
                         }
                     ),
@@ -650,7 +699,8 @@ class PostgresPawnhouseRepository:
         return {
             "gameId": expected_game_id,
             "targetAgentCount": target_agent_count,
-            "fillPolicy": "immediate_on_first_player_ready",
+            "fillPolicy": fill_policy,
+            "fillDelaySeconds": resolved_fill_delay_seconds,
             "configurationEditable": True,
         }
 
@@ -8825,7 +8875,10 @@ class PostgresPawnhouseRepository:
             else dict(game["config_snapshot"])
         )
         official_fill_after_seconds = int(
-            config.get("officialFillAfterSeconds", 0)
+            config.get(
+                "officialFillAfterSeconds",
+                CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS,
+            )
         )
         official_fill_policy = (
             "immediate_on_first_player_ready"
@@ -9038,7 +9091,12 @@ class PostgresPawnhouseRepository:
             else dict(game["config_snapshot"])
         )
         fill_at = first_human_ready_at + timedelta(
-            seconds=int(config.get("officialFillAfterSeconds", 0))
+            seconds=int(
+                config.get(
+                    "officialFillAfterSeconds",
+                    CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS,
+                )
+            )
         )
         if now < fill_at:
             return {

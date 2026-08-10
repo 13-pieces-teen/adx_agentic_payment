@@ -9,6 +9,10 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from arena_game import PawnhouseRepositoryError, PostgresPawnhouseRepository
+from arena_game.postgres import (
+    CURRENT_GAME_ADMIN_MAX_FILL_DELAY_SECONDS,
+    CURRENT_GAME_ADMIN_MIN_FILL_DELAY_SECONDS,
+)
 from arena_core.hashing import sha256_text_identifier
 from connector_gateway.auth import AuthError, AuthPrincipal, ConnectorAuth
 
@@ -36,6 +40,12 @@ class ConfigureCurrentGameMatchmakingBody(_Body):
         ge=10,
         le=100,
         alias="targetAgentCount",
+    )
+    fill_delay_seconds: int | None = Field(
+        default=None,
+        ge=CURRENT_GAME_ADMIN_MIN_FILL_DELAY_SECONDS,
+        le=CURRENT_GAME_ADMIN_MAX_FILL_DELAY_SECONDS,
+        alias="fillDelaySeconds",
     )
 
 
@@ -67,7 +77,10 @@ def _repository_error(exc: PawnhouseRepositoryError) -> HTTPException:
     code = str(exc)
     if code == "current_game_not_found":
         status_code = 404
-    elif code == "invalid_target_agent_count":
+    elif code in {
+        "invalid_target_agent_count",
+        "invalid_fill_delay_seconds",
+    }:
         status_code = 422
     else:
         status_code = 409
@@ -117,7 +130,7 @@ def create_current_game_admin_router(
     repository: PostgresPawnhouseRepository,
     github_subjects: frozenset[str],
 ) -> APIRouter:
-    """Create allowlisted read/update routes for exact Current Game sizing."""
+    """Create allowlisted routes for Current Game size and fill timing."""
 
     router = APIRouter(tags=["current-game-admin"])
 
@@ -157,6 +170,7 @@ def create_current_game_admin_router(
             await repository.configure_current_game_matchmaking(
                 expected_game_id=body.game_id,
                 target_agent_count=body.target_agent_count,
+                fill_delay_seconds=body.fill_delay_seconds,
                 actor_user_id=principal.user_id,
                 request_digest=_idempotency_digest(request),
             )

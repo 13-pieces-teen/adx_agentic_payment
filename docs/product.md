@@ -140,9 +140,10 @@ Hosted Agent 在浏览器或用户电脑离线后继续运行。Local Agent 依�
 - Game 创建时冻结回合数、版本化事件牌组和参赛人数上限；当前开发实现支持
   1–10 回合、至少 2 个参赛 Agent；Game Core 不设固定全局人数上限，
   Operator 必须按部署容量控制单局规模，产品侧 Current Game 硬上限为 100 人；
-- 管理员可在空的等待局中配置 10–100 的精确 Agent 总数；配置在首位玩家加入后
-  锁定，首位玩家 Agent Ready 后立即用 allowlisted 官方 Hosted Agent 补齐，达到
-  精确目标后由服务端自动开局，不提供定时开局或业务等待计时；
+- 管理员可在空的等待局中配置 10–100 的精确 Agent 总数和 0–60 分钟的匹配窗口，
+  匹配窗口默认 5 分钟；配置在首位玩家加入后锁定，首位玩家 Agent Ready 后开始
+  计时，窗口到期再用 allowlisted 官方 Hosted Agent 补齐，达到精确目标后由服务端
+  自动开局，不提供定时开局或更小规模兜底；
 - 每轮完整经过 broadcast、intent、directory/RFQ/select、engage、negotiate、
   settle、close；legacy `fcfs.v1` Game 保持原有 decide/pair 流程；
 - 所有协议结果以 Result Sink 数据库接收时间审计；只有冻结为 `fcfs.v1` 的 Game

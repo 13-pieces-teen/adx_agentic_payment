@@ -59,6 +59,8 @@ class _Connection:
             return {
                 "public_payload": {
                     "targetAgentCount": self.prior_target,
+                    "fillPolicy": "delayed_after_first_player_ready",
+                    "fillDelaySeconds": 300,
                 }
             }
         return {
@@ -90,7 +92,7 @@ class _ConfigurationPool:
             "game_id": "game-current",
             "phase": "registration",
             "config_snapshot": {
-                "officialFillAfterSeconds": 0,
+                "officialFillAfterSeconds": 300,
             },
             "start_threshold": 32,
             "max_participants": 32,
@@ -98,7 +100,7 @@ class _ConfigurationPool:
         }
 
 
-def test_repository_reports_exact_immediate_fill_configuration() -> None:
+def test_repository_reports_exact_five_minute_fill_configuration() -> None:
     repository = PostgresPawnhouseRepository(
         "",
         pool=_ConfigurationPool(),  # type: ignore[arg-type]
@@ -114,8 +116,10 @@ def test_repository_reports_exact_immediate_fill_configuration() -> None:
         "maxParticipants": 32,
         "minimumTargetAgentCount": 10,
         "maximumTargetAgentCount": 100,
-        "fillPolicy": "immediate_on_first_player_ready",
-        "fillDelaySeconds": 0,
+        "minimumFillDelaySeconds": 0,
+        "maximumFillDelaySeconds": 3600,
+        "fillPolicy": "delayed_after_first_player_ready",
+        "fillDelaySeconds": 300,
         "configurationEditable": True,
         "lockedReason": None,
     }
@@ -132,6 +136,7 @@ def test_repository_atomically_updates_target_capacity_and_private_audit() -> No
         repository.configure_current_game_matchmaking(
             expected_game_id="game-current",
             target_agent_count=32,
+            fill_delay_seconds=600,
             actor_user_id="user-admin",
             request_digest="sha256:admin-request",
         )
@@ -159,10 +164,10 @@ def test_repository_atomically_updates_target_capacity_and_private_audit() -> No
     frozen_config = json.loads(str(game_update[1][2]))
     assert frozen_config["minParticipants"] == 32
     assert frozen_config["maxParticipants"] == 32
-    assert frozen_config["officialFillAfterSeconds"] == 0
+    assert frozen_config["officialFillAfterSeconds"] == 600
     assert (
         frozen_config["officialFillPolicy"]
-        == "immediate_on_first_player_ready"
+        == "delayed_after_first_player_ready"
     )
 
     audit_insert = next(
@@ -172,7 +177,8 @@ def test_repository_atomically_updates_target_capacity_and_private_audit() -> No
     )
     assert audit_insert[1][1] == "game.matchmaking_configured"
     assert json.loads(str(audit_insert[1][2])) == {
-        "fillPolicy": "immediate_on_first_player_ready",
+        "fillDelaySeconds": 600,
+        "fillPolicy": "delayed_after_first_player_ready",
         "targetAgentCount": 32,
     }
     assert json.loads(str(audit_insert[1][3])) == {
@@ -221,7 +227,29 @@ def test_repository_reuses_a_completed_admin_request_without_new_audit() -> None
     )
 
     assert result["targetAgentCount"] == 32
+    assert result["fillDelaySeconds"] == 300
     assert connection.execute_calls == []
+
+
+def test_repository_rejects_fill_delay_outside_admin_range() -> None:
+    repository = PostgresPawnhouseRepository(
+        "",
+        pool=_Pool(_Connection()),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(
+        PawnhouseRepositoryError,
+        match="invalid_fill_delay_seconds",
+    ):
+        asyncio.run(
+            repository.configure_current_game_matchmaking(
+                expected_game_id="game-current",
+                target_agent_count=32,
+                fill_delay_seconds=3_601,
+                actor_user_id="user-admin",
+                request_digest="sha256:admin-request",
+            )
+        )
 
 
 def test_repository_rejects_reusing_request_key_for_another_target() -> None:

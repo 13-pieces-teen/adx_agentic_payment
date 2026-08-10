@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from .event_deck import STANDARD_EVENT_DECK_ID, build_event_schedule
 from .postgres import (
+    CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS,
     CURRENT_GAME_MAX_PARTICIPANTS,
     CURRENT_GAME_START_THRESHOLD,
     PostgresPawnhouseRepository,
@@ -25,7 +26,9 @@ class CurrentGameLifecycleWorker:
         round_count: int = 8,
         start_threshold: int = CURRENT_GAME_START_THRESHOLD,
         max_participants: int = CURRENT_GAME_START_THRESHOLD,
-        official_fill_after_seconds: int = 0,
+        official_fill_after_seconds: int = (
+            CURRENT_GAME_DEFAULT_FILL_DELAY_SECONDS
+        ),
         action_timeout_ms: int = 90_000,
         max_negotiation_turns: int = 3,
         market_protocol: str = "fcfs.v1",

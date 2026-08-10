@@ -56,7 +56,7 @@ def test_lifecycle_creates_product_sized_seeded_game() -> None:
     call = repository.calls[0]
     assert call["start_threshold"] == 10
     assert call["max_participants"] == 10
-    assert call["official_fill_after_seconds"] == 0
+    assert call["official_fill_after_seconds"] == 300
     assert call["event_mode"] == "seeded_shuffle"
     assert call["settlement_config"] is settlement
     assert len(call["events"]) == 8  # type: ignore[arg-type]
@@ -110,7 +110,7 @@ def test_production_current_game_defaults_to_eight_rounds_everywhere() -> None:
     assert "ADX_CURRENT_GAME_ROUND_COUNT=8" in generator
 
 
-def test_production_current_game_defaults_to_exact_ten_and_immediate_fill() -> None:
+def test_production_current_game_defaults_to_exact_ten_and_five_minute_fill() -> None:
     worker = (ROOT / "arena_game" / "production_worker.py").read_text(
         encoding="utf-8"
     )
@@ -126,7 +126,7 @@ def test_production_current_game_defaults_to_exact_ten_and_immediate_fill() -> N
 
     assert 'os.getenv("ADX_CURRENT_GAME_MAX_PARTICIPANTS", "10")' in worker
     assert (
-        'os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "0")'
+        'os.getenv("ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS", "300")'
         in worker
     )
     assert (
@@ -135,11 +135,11 @@ def test_production_current_game_defaults_to_exact_ten_and_immediate_fill() -> N
     ) in compose
     assert (
         "ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS: "
-        "${ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS:-0}"
+        "${ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS:-300}"
     ) in compose
     for source in (example, generator):
         assert "ADX_CURRENT_GAME_MAX_PARTICIPANTS=10" in source
-        assert "ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS=0" in source
+        assert "ADX_CURRENT_GAME_OFFICIAL_FILL_AFTER_SECONDS=300" in source
 
 
 def test_production_current_game_defaults_to_fcfs_with_versioned_switch() -> None:

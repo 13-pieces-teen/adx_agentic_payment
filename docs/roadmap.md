@@ -2,14 +2,16 @@
 
 ## Current snapshot — 2026-08-10
 
-- Current Game now exposes a protected administrator configuration for an exact
-  10–100-Agent target. The first player Agent to become Ready triggers immediate
-  allowlisted official fill; the Game starts only at the exact target, and the
-  setting locks after the first participant history. No scheduled-start or
-  business waiting timer is part of this flow.
+- Current Game now exposes protected administrator configuration for an exact
+  10–100-Agent target and a 0–60 minute matching window, defaulting to five
+  minutes. The first player Agent to become Ready starts that window; allowlisted
+  official fill begins when it ends. The Game starts only at the exact target,
+  and both settings lock after the first participant history. There is no
+  scheduled-start or smaller-game fallback.
 - Production freezes new Current Games to `agent_a2a.v1`, defaults to eight
-  rounds, defaults new empty Games to an exact 10-Agent target, and caps the
-  administrator-configurable target at 100 participants.
+  rounds, defaults new empty Games to an exact 10-Agent target and five-minute
+  matching window, and caps the administrator-configurable target at 100
+  participants.
 - The formal mixed-Runtime Game completed one real Codex Connector plus nine
   DeepSeek Hosted Agents, three confirmed `arena402-g` settlements, inventory
   commits, ranking, and next-Game Strategy Revision.

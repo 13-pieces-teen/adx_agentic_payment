@@ -79,10 +79,11 @@ recovery work is tracked in the Roadmap.
   `active` RFQ session, or `reserved` participant slot. Round close owns the
   normal transition and game completion repeats it idempotently across the
   game.
-- A product Current Game freezes one exact 10–100-Agent target before the first
-  participant history. The first player Agent to become Ready triggers
-  immediate allowlisted official fill, and Arena starts only when that exact
-  target is Ready; there is no scheduled-start or business waiting timer.
+- A product Current Game freezes one exact 10–100-Agent target and a 0–60
+  minute matching window before the first participant history. The default
+  window is five minutes after the first player Agent becomes Ready. When the
+  window ends, allowlisted official fill begins, and Arena starts only when the
+  exact target is Ready; there is no scheduled-start or smaller-game fallback.
 
 ## Persistent rule-Agent demonstration
 
