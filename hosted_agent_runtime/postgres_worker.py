@@ -955,32 +955,43 @@ class DurableHostedWorker:
             self._worker_id,
             claimed.task.task_id,
         )
-        memory_state = _json_object(
-            context_payload.get("memoryState", {})
-        )
-        context = HostedArenaAgentContext(
-            task=claimed.task,
-            agent_id=str(context_payload["agentId"]),
-            strategy_revision_id=str(
-                context_payload["strategyRevisionId"]
-            ),
-            strategy_revision_no=int(
-                context_payload["strategyRevisionNo"]
-            ),
-            strategy_archetype=StrategyArchetype(
-                str(context_payload["strategyArchetype"])
-            ),
-            strategy_catalog_version=str(
-                context_payload["strategyCatalogVersion"]
-            ),
-            strategy_instructions=str(
-                context_payload["strategyInstructions"]
-            ),
-            game_memory=HostedGameMemory(
-                memory_version=int(context_payload["memoryVersion"]),
-                state=memory_state,
-            ),
-        )
+        try:
+            memory_state = _json_object(
+                context_payload.get("memoryState", {})
+            )
+            context = HostedArenaAgentContext(
+                task=claimed.task,
+                agent_id=str(context_payload["agentId"]),
+                strategy_revision_id=str(
+                    context_payload["strategyRevisionId"]
+                ),
+                strategy_revision_no=int(
+                    context_payload["strategyRevisionNo"]
+                ),
+                strategy_archetype=StrategyArchetype(
+                    str(context_payload["strategyArchetype"])
+                ),
+                strategy_catalog_version=str(
+                    context_payload["strategyCatalogVersion"]
+                ),
+                strategy_instructions=str(
+                    context_payload["strategyInstructions"]
+                ),
+                game_memory=HostedGameMemory(
+                    memory_version=int(context_payload["memoryVersion"]),
+                    state=memory_state,
+                ),
+            )
+        except (KeyError, TypeError, ValueError):
+            # This happens before any Provider request.  Terminate with a safe
+            # Arena result instead of holding the lease until the Deadline
+            # Finalizer silently converts the task into a default pass.
+            await self._submit_runtime_failure(
+                claimed,
+                status="failed",
+                error_class="adapter_mismatch",
+            )
+            return
         config = claimed.runtime_config
         model_id = str(
             _config_value(config, "model_id", "modelId", "model")

@@ -535,9 +535,10 @@ def test_worker_retries_invalid_pydantic_output_and_stages_winner_memory() -> No
                 "strategyRevisionNo": 3,
                 "strategyArchetype": "aggressive",
                 "strategyCatalogVersion": "arena.hosted-strategy.v1",
-                "strategyInstructions": (
-                    "Seek bounded upside while preserving hard limits."
-                ),
+                # Owner strategy is optional in the control-plane contract.
+                # A valid credential must still reach the Provider when the
+                # frozen revision intentionally contains no extra guidance.
+                "strategyInstructions": "",
                 "memoryVersion": 4,
                 "memoryState": {
                     "schemaVersion": "arena.hosted-game-memory.v1",

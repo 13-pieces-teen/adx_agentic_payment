@@ -32,9 +32,11 @@ class HostedArenaAgentContext:
             or not self.strategy_revision_id
             or self.strategy_revision_no < 1
             or not self.strategy_catalog_version
-            or not self.strategy_instructions
         ):
             raise ValueError("Hosted Agent context is incomplete")
+        # Owner strategy instructions are optional in the Hosted control-plane
+        # contract.  An empty frozen revision means "no extra owner guidance";
+        # the Arena system/task instructions still provide the bounded policy.
         if self.task.game_agent_id == "":
             raise ValueError("Hosted Agent task identity is missing")
 
