@@ -86,7 +86,10 @@ class _OwnerProjectionPool:
                     2026, 7, 27, 12, tzinfo=timezone.utc
                 ),
             }
-        if "FROM arena402.pairings" in query:
+        if (
+            "FROM arena402.pairings" in query
+            and "FROM arena402.rankings AS r" not in query
+        ):
             return {
                 "trade_attempts": 3,
                 "settled_trades": 2,
@@ -237,7 +240,10 @@ class _HistoricalGameStateConnection(_CreateConnection):
                     "phase_deadline_at": None,
                 }
             ]
-        if "FROM arena402.pairings" in query:
+        if (
+            "FROM arena402.pairings" in query
+            and "FROM arena402.rankings AS r" not in query
+        ):
             return [
                 {
                     "pairing_id": "pair:game-completed:1",
@@ -294,6 +300,9 @@ class _HistoricalGameStateConnection(_CreateConnection):
                     "calculated_at": datetime(
                         2026, 7, 27, 12, tzinfo=timezone.utc
                     ),
+                    "trade_attempts": 1,
+                    "settled_trades": 1,
+                    "failed_negotiations": 0,
                 }
             ]
         if "FROM arena402.final_settlement_prices" in query:
@@ -349,6 +358,9 @@ class _RecentRankingsConnection(_CreateConnection):
                     "calculated_at": datetime(
                         2026, 8, 8, 12, tzinfo=timezone.utc
                     ),
+                    "trade_attempts": 3,
+                    "settled_trades": 2,
+                    "failed_negotiations": 1,
                 }
             ]
         if "FROM arena402.final_settlement_prices" in query:
@@ -435,6 +447,30 @@ class _JoinPreflightConnection(_CreateConnection):
         raise AssertionError(f"Unexpected fetchval query: {query}")
 
 
+class _WithdrawalConnection(_CreateConnection):
+    def __init__(self, *, remaining_humans: int, ready_count: int) -> None:
+        super().__init__()
+        self.remaining_humans = remaining_humans
+        self.ready_count = ready_count
+
+    async def fetchrow(self, query: str, *_: object):
+        self.queries.append(query)
+        if "FROM arena402.current_game AS pointer" in query:
+            return {"phase": "portfolio_setup"}
+        if "WHERE game_participant_id = $1" in query:
+            return {
+                "game_participant_id": "participant-owner",
+                "payment_mandate_id": "mandate-owner",
+                "readiness": "ready",
+            }
+        if "AS human_count" in query:
+            return {
+                "human_count": self.remaining_humans,
+                "ready_count": self.ready_count,
+            }
+        raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+
 def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
     pool = _Pool()
     repository = PostgresPawnhouseRepository(
@@ -493,6 +529,75 @@ def test_current_game_uses_authoritative_pointer_and_safe_projection() -> None:
     )
 
 
+def test_last_human_withdrawal_cancels_the_waiting_game_atomically() -> None:
+    connection = _WithdrawalConnection(remaining_humans=0, ready_count=9)
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    value = asyncio.run(
+        repository.withdraw_current_game_participant(
+            game_id="game-current",
+            participant_id="participant-owner",
+            user_id="owner-user",
+        )
+    )
+
+    assert value == {
+        "gameId": "game-current",
+        "participantId": "participant-owner",
+        "status": "WITHDRAWN",
+        "gameStatus": "CANCELLED",
+        "readyCount": 0,
+        "gameCancelled": True,
+        "schemaVersion": "arena.game-withdrawal.v1",
+    }
+    participant_update = next(
+        query
+        for query, _ in connection.execute_calls
+        if "SET readiness = 'withdrawn'" in query
+    )
+    assert "completed_at = COALESCE" in participant_update
+    assert any(
+        "SET phase = 'cancelled'" in query
+        for query, _ in connection.execute_calls
+    )
+    assert any(
+        arguments[2] == "game.cancelled"
+        for _, arguments in connection.execute_calls
+        if len(arguments) >= 3
+    )
+    counts_query = next(
+        query for query in connection.queries if "AS human_count" in query
+    )
+    assert "LEFT JOIN arena402.official_agent_pool" in counts_query
+
+
+def test_withdrawal_keeps_matching_when_another_human_remains() -> None:
+    connection = _WithdrawalConnection(remaining_humans=1, ready_count=4)
+    repository = PostgresPawnhouseRepository(
+        "postgresql://unused",
+        pool=_CreatePool(connection),
+    )
+
+    value = asyncio.run(
+        repository.withdraw_current_game_participant(
+            game_id="game-current",
+            participant_id="participant-owner",
+            user_id="owner-user",
+        )
+    )
+
+    assert value["gameStatus"] == "WAITING"
+    assert value["readyCount"] == 4
+    assert value["gameCancelled"] is False
+    assert not any(
+        "SET phase = 'cancelled'" in query
+        for query, _ in connection.execute_calls
+    )
+
+
 def test_historical_game_state_exposes_agent_identity_without_owner_data() -> None:
     connection = _HistoricalGameStateConnection()
     repository = PostgresPawnhouseRepository(
@@ -512,6 +617,12 @@ def test_historical_game_state_exposes_agent_identity_without_owner_data() -> No
         }
     ]
     assert value["rankings"][0]["displayName"] == "Player Merchant"
+    assert value["rankings"][0]["reputation"] == {
+        "tradeAttempts": 1,
+        "settledTrades": 1,
+        "successRateBps": 10_000,
+        "failedNegotiations": 0,
+    }
     assert value["pairings"][0]["status"] == "settled"
     assert value["negotiations"][0]["status"] == "settled"
     assert value["negotiations"][0]["acceptedPriceAtomic"] == "4374844"
@@ -557,6 +668,12 @@ def test_recent_rankings_returns_completed_games_with_frozen_values() -> None:
                         "netWorthAtomic": "24000000",
                         "tier": "公爵",
                         "calculatedAt": "2026-08-08T12:00:00+00:00",
+                        "reputation": {
+                            "tradeAttempts": 3,
+                            "settledTrades": 2,
+                            "successRateBps": 6666,
+                            "failedNegotiations": 1,
+                        },
                     }
                 ],
                 "finalPrices": {"grain": "2400000"},
@@ -564,6 +681,13 @@ def test_recent_rankings_returns_completed_games_with_frozen_values() -> None:
         ],
         "schemaVersion": "arena.recent-rankings.v1",
     }
+    ranking_query = next(
+        query
+        for query in connection.queries
+        if "reputation.trade_attempts" in query
+    )
+    assert "pairing.status = 'settled'" in ranking_query
+    assert "accepted_pending_settlement" not in ranking_query
     assert "game.phase = 'completed'" in connection.queries[0]
     assert "ORDER BY game.completed_at DESC" in connection.queries[0]
 

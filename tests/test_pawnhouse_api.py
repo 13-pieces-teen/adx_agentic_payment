@@ -74,7 +74,11 @@ class _Repository:
         return {
             "gameId": values["game_id"],
             "participantId": values["participant_id"],
-            "withdrawn": True,
+            "status": "WITHDRAWN",
+            "gameStatus": "CANCELLED",
+            "readyCount": 0,
+            "gameCancelled": True,
+            "schemaVersion": "arena.game-withdrawal.v1",
         }
 
     async def start_game(self, *, game_id):
@@ -125,6 +129,12 @@ class _Repository:
                             "netWorthAtomic": "24000000",
                             "tier": "公爵",
                             "calculatedAt": "2026-08-08T12:00:00+00:00",
+                            "reputation": {
+                                "tradeAttempts": 3,
+                                "settledTrades": 2,
+                                "successRateBps": 6666,
+                                "failedNegotiations": 1,
+                            },
                         }
                     ],
                     "finalPrices": {"grain": "2400000"},
@@ -377,6 +387,12 @@ def test_read_router_exposes_recent_frozen_rankings() -> None:
         "netWorthAtomic": "24000000",
         "tier": "公爵",
         "calculatedAt": "2026-08-08T12:00:00+00:00",
+        "reputation": {
+            "tradeAttempts": 3,
+            "settledTrades": 2,
+            "successRateBps": 6666,
+            "failedNegotiations": 1,
+        },
     }
     assert response.headers["cache-control"] == "public, max-age=15"
 
@@ -783,7 +799,15 @@ def test_current_game_withdraw_is_authenticated_and_owner_scoped() -> None:
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["withdrawn"] is True
+    assert response.json() == {
+        "gameId": "game_current",
+        "participantId": "gp:game_current:agent-current",
+        "status": "WITHDRAWN",
+        "gameStatus": "CANCELLED",
+        "readyCount": 0,
+        "gameCancelled": True,
+        "schemaVersion": "arena.game-withdrawal.v1",
+    }
 
 
 def test_development_mutations_require_the_explicit_token() -> None:

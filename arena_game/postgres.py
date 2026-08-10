@@ -2062,6 +2062,9 @@ class PostgresPawnhouseRepository:
     ) -> dict[str, object]:
         """Withdraw a waiting participant and revoke its unused mandate."""
 
+        game_status = "WAITING"
+        ready_count = 0
+        game_cancelled = False
         pool = self._require_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
@@ -2077,8 +2080,6 @@ class PostgresPawnhouseRepository:
                 )
                 if game is None:
                     raise PawnhouseRepositoryError("game_not_current")
-                if game["phase"] not in {"registration", "portfolio_setup"}:
-                    raise PawnhouseRepositoryError("game_already_started")
                 participant = await connection.fetchrow(
                     """
                     SELECT game_participant_id, payment_mandate_id, readiness
@@ -2095,17 +2096,54 @@ class PostgresPawnhouseRepository:
                 if participant is None:
                     raise PawnhouseRepositoryError("participant_not_found")
                 if participant["readiness"] == "withdrawn":
+                    game_cancelled = game["phase"] == "cancelled"
+                    game_status = "CANCELLED" if game_cancelled else "WAITING"
+                    if not game_cancelled:
+                        ready_count = int(
+                            await connection.fetchval(
+                                """
+                                SELECT count(*)
+                                FROM arena402.game_participants
+                                WHERE game_id = $1
+                                  AND status <> 'cancelled'
+                                  AND readiness = 'ready'
+                                """,
+                                game_id,
+                            )
+                        )
                     return {
                         "gameId": game_id,
                         "participantId": participant_id,
-                        "withdrawn": True,
+                        "status": "WITHDRAWN",
+                        "gameStatus": game_status,
+                        "readyCount": ready_count,
+                        "gameCancelled": game_cancelled,
+                        "schemaVersion": "arena.game-withdrawal.v1",
                     }
+                if game["phase"] not in {"registration", "portfolio_setup"}:
+                    raise PawnhouseRepositoryError("game_already_started")
                 await connection.execute(
                     """
                     UPDATE arena402.game_participants
                     SET readiness = 'withdrawn', status = 'cancelled',
-                        withdrawn_at = clock_timestamp()
+                        withdrawn_at = clock_timestamp(),
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
                     WHERE game_participant_id = $1
+                    """,
+                    participant_id,
+                )
+                await connection.execute(
+                    """
+                    UPDATE public.game_agents
+                    SET status = 'cancelled',
+                        completed_at = COALESCE(
+                            completed_at,
+                            clock_timestamp()
+                        )
+                    WHERE game_agent_id = $1
                     """,
                     participant_id,
                 )
@@ -2125,10 +2163,104 @@ class PostgresPawnhouseRepository:
                     source_key=f"{game_id}:{participant_id}:withdrawn",
                     public_payload={"participantId": participant_id},
                 )
+                counts = await connection.fetchrow(
+                    """
+                    SELECT
+                        count(*) FILTER (
+                            WHERE official.agent_id IS NULL
+                        ) AS human_count,
+                        count(*) FILTER (
+                            WHERE participant.readiness = 'ready'
+                        ) AS ready_count
+                    FROM arena402.game_participants AS participant
+                    LEFT JOIN arena402.official_agent_pool AS official
+                      ON official.agent_id = participant.agent_id
+                    WHERE participant.game_id = $1
+                      AND participant.status <> 'cancelled'
+                      AND participant.readiness <> 'withdrawn'
+                    """,
+                    game_id,
+                )
+                assert counts is not None
+                ready_count = int(counts["ready_count"])
+                if int(counts["human_count"]) == 0:
+                    game_cancelled = True
+                    game_status = "CANCELLED"
+                    ready_count = 0
+                    await connection.execute(
+                        """
+                        UPDATE arena402.games
+                        SET phase = 'cancelled',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE game_id = $1
+                          AND phase IN ('registration', 'portfolio_setup')
+                        """,
+                        game_id,
+                    )
+                    await connection.execute(
+                        """
+                        UPDATE arena402.game_participants
+                        SET status = 'cancelled',
+                            completed_at = COALESCE(
+                                completed_at,
+                                clock_timestamp()
+                            )
+                        WHERE game_id = $1
+                          AND status <> 'cancelled'
+                        """,
+                        game_id,
+                    )
+                    await connection.execute(
+                        """
+                        UPDATE public.game_agents AS game_agent
+                        SET status = 'cancelled',
+                            completed_at = COALESCE(
+                                game_agent.completed_at,
+                                clock_timestamp()
+                            )
+                        FROM arena402.game_participants AS participant
+                        WHERE participant.game_id = $1
+                          AND participant.game_participant_id =
+                              game_agent.game_agent_id
+                          AND game_agent.status <> 'cancelled'
+                        """,
+                        game_id,
+                    )
+                    await connection.execute(
+                        """
+                        UPDATE arena402.payment_mandates AS mandate
+                        SET revoked_at = COALESCE(
+                            mandate.revoked_at,
+                            clock_timestamp()
+                        )
+                        FROM arena402.game_participants AS participant
+                        WHERE participant.game_id = $1
+                          AND participant.payment_mandate_id =
+                              mandate.mandate_id
+                        """,
+                        game_id,
+                    )
+                    await self._event(
+                        connection,
+                        game_id=game_id,
+                        event_type="game.cancelled",
+                        source_key=f"{game_id}:no-human-participants",
+                        public_payload={
+                            "reason": "no_human_participants",
+                            "withdrawnParticipantId": participant_id,
+                        },
+                    )
         return {
             "gameId": game_id,
             "participantId": participant_id,
-            "withdrawn": True,
+            "status": "WITHDRAWN",
+            "gameStatus": game_status,
+            "readyCount": ready_count,
+            "gameCancelled": game_cancelled,
+            "schemaVersion": "arena.game-withdrawal.v1",
         }
 
     async def start_game(
@@ -9435,7 +9567,10 @@ class PostgresPawnhouseRepository:
                     ) AS display_name,
                     ranking.net_worth_atomic,
                     ranking.tier,
-                    ranking.calculated_at
+                    ranking.calculated_at,
+                    reputation.trade_attempts,
+                    reputation.settled_trades,
+                    reputation.failed_negotiations
                 FROM arena402.rankings AS ranking
                 JOIN arena402.game_participants AS participant
                   ON participant.game_participant_id =
@@ -9445,6 +9580,24 @@ class PostgresPawnhouseRepository:
                      participant.game_participant_id
                 LEFT JOIN public.arena_agents AS agent
                   ON agent.agent_id = participant.agent_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        count(*) AS trade_attempts,
+                        count(*) FILTER (
+                            WHERE pairing.status = 'settled'
+                        ) AS settled_trades,
+                        count(*) FILTER (
+                            WHERE pairing.status IN ('rejected', 'timeout')
+                        ) AS failed_negotiations
+                    FROM arena402.pairings AS pairing
+                    WHERE pairing.game_id = ranking.game_id
+                      AND (
+                          pairing.buyer_participant_id =
+                              ranking.game_participant_id
+                          OR pairing.seller_participant_id =
+                              ranking.game_participant_id
+                      )
+                ) AS reputation ON TRUE
                 WHERE ranking.game_id = ANY($1::text[])
                 ORDER BY ranking.game_id, ranking.rank
                 """,
@@ -9464,6 +9617,8 @@ class PostgresPawnhouseRepository:
             game_id: [] for game_id in game_ids
         }
         for row in ranking_rows:
+            trade_attempts = int(row["trade_attempts"])
+            settled_trades = int(row["settled_trades"])
             rankings_by_game[str(row["game_id"])].append(
                 {
                     "rank": int(row["rank"]),
@@ -9473,6 +9628,18 @@ class PostgresPawnhouseRepository:
                     "netWorthAtomic": str(int(row["net_worth_atomic"])),
                     "tier": str(row["tier"]),
                     "calculatedAt": row["calculated_at"].isoformat(),
+                    "reputation": {
+                        "tradeAttempts": trade_attempts,
+                        "settledTrades": settled_trades,
+                        "successRateBps": (
+                            None
+                            if trade_attempts == 0
+                            else settled_trades * 10_000 // trade_attempts
+                        ),
+                        "failedNegotiations": int(
+                            row["failed_negotiations"]
+                        ),
+                    },
                 }
             )
 
@@ -9587,7 +9754,10 @@ class PostgresPawnhouseRepository:
                         agent.name,
                         p.agent_id
                     ) AS display_name,
-                    r.net_worth_atomic, r.tier, r.calculated_at
+                    r.net_worth_atomic, r.tier, r.calculated_at,
+                    reputation.trade_attempts,
+                    reputation.settled_trades,
+                    reputation.failed_negotiations
                 FROM arena402.rankings AS r
                 JOIN arena402.game_participants AS p
                   ON p.game_participant_id = r.game_participant_id
@@ -9595,6 +9765,24 @@ class PostgresPawnhouseRepository:
                   ON game_agent.game_agent_id = p.game_participant_id
                 LEFT JOIN public.arena_agents AS agent
                   ON agent.agent_id = p.agent_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        count(*) AS trade_attempts,
+                        count(*) FILTER (
+                            WHERE pairing.status = 'settled'
+                        ) AS settled_trades,
+                        count(*) FILTER (
+                            WHERE pairing.status IN ('rejected', 'timeout')
+                        ) AS failed_negotiations
+                    FROM arena402.pairings AS pairing
+                    WHERE pairing.game_id = r.game_id
+                      AND (
+                          pairing.buyer_participant_id =
+                              r.game_participant_id
+                          OR pairing.seller_participant_id =
+                              r.game_participant_id
+                      )
+                ) AS reputation ON TRUE
                 WHERE r.game_id = $1
                 ORDER BY r.rank
                 """,
@@ -9898,6 +10086,20 @@ class PostgresPawnhouseRepository:
                     "netWorthAtomic": str(int(row["net_worth_atomic"])),
                     "tier": str(row["tier"]),
                     "calculatedAt": row["calculated_at"].isoformat(),
+                    "reputation": {
+                        "tradeAttempts": int(row["trade_attempts"]),
+                        "settledTrades": int(row["settled_trades"]),
+                        "successRateBps": (
+                            None
+                            if int(row["trade_attempts"]) == 0
+                            else int(row["settled_trades"])
+                            * 10_000
+                            // int(row["trade_attempts"])
+                        ),
+                        "failedNegotiations": int(
+                            row["failed_negotiations"]
+                        ),
+                    },
                 }
                 for row in rankings
             ],
