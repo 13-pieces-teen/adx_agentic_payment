@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.testclient import TestClient
 
+from connector_gateway.auth import AuthError
 from web.api import _connector_surface_enabled
 from web.connector_api import create_app as create_connector_app
 
@@ -64,13 +66,17 @@ def test_production_routes_connector_to_one_dedicated_worker():
 def test_dedicated_connector_app_mounts_current_game_admin_routes(
     monkeypatch,
 ):
+    class _Auth:
+        async def authenticate(self, _request):
+            raise AuthError(401, "Authentication required")
+
     class _Service:
         def bind_agent_task_result_sink(self, _sink):
             return None
 
     class _Bundle:
         def __init__(self):
-            self.auth = object()
+            self.auth = _Auth()
             self.repository = object()
             self.router = APIRouter()
             self.service = _Service()
@@ -105,3 +111,6 @@ def test_dedicated_connector_app_mounts_current_game_admin_routes(
     assert "/api/v1/admin/current-game" in methods_by_path, methods_by_path
     assert methods_by_path["/api/v1/admin/current-game"] == {"GET"}
     assert methods_by_path["/api/v1/admin/current-game/matchmaking"] == {"PUT"}
+    response = TestClient(app).get("/api/v1/admin/current-game")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authentication required"}

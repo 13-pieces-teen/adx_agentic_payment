@@ -130,6 +130,9 @@ def test_release_checks_runtime_and_public_boundaries() -> None:
         "/api/health",
         "/api/connectors/devices",
         "expected 401",
+        "/api/v1/admin/current-game",
+        "--resolve",
+        "Current Game admin ingress",
         "/api/v1/games/current",
         "current_game_not_found",
         "text/event-stream",
@@ -138,6 +141,14 @@ def test_release_checks_runtime_and_public_boundaries() -> None:
         assert evidence in RELEASE
     assert 'body.get("gameId")' in RELEASE
     assert 'game.get("gameId")' in RELEASE
+    admin_index = RELEASE.index(
+        '"${public_api_url%/}/api/v1/admin/current-game"'
+    )
+    dns_index = RELEASE.index("Public DNS does not resolve")
+    marker_index = RELEASE.index(
+        'write_marker "${release_dir}/DEPLOYED_GIT_SHA"'
+    )
+    assert admin_index < dns_index < marker_index
     assert '-C\n            -o BatchMode=yes' in WORKFLOW
     assert (
         "require_running_service official-agents official-litellm"
