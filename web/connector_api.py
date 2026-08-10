@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse
 
+from arena_game import PostgresPawnhouseRepository
 from arena_core import (
     ArenaResultSink,
     PostgresArenaCoreRepository,
@@ -33,6 +34,7 @@ from connector_gateway import (
 )
 from db.schema_identity import verify_repository_schema_identity
 from web.api import _allowed_origins
+from web.current_game_admin_api import create_current_game_admin_router
 from web.metrics import ApiMetrics, ApiMetricsMiddleware, postgres_readiness
 
 
@@ -55,6 +57,9 @@ def create_app() -> FastAPI:
         ).strip()
     )
     result_core = PostgresArenaCoreRepository(
+        _required("ADX_ARENA_CORE_DATABASE_URL")
+    )
+    current_game_admin_repository = PostgresPawnhouseRepository(
         _required("ADX_ARENA_CORE_DATABASE_URL")
     )
     bundle = build_production_connector(arena_registrar=registrar)
@@ -93,6 +98,7 @@ def create_app() -> FastAPI:
         nonlocal notifier_task
         await registrar.initialize()
         await result_core.initialize()
+        await current_game_admin_repository.initialize()
         await bundle.initialize()
         await verify_repository_schema_identity(repositories)
         if dispatcher is not None:
@@ -119,6 +125,7 @@ def create_app() -> FastAPI:
                     await notifier_task
                     notifier_task = None
             await bundle.close()
+            await current_game_admin_repository.close()
             await registrar.close()
             await result_core.close()
 
@@ -132,6 +139,7 @@ def create_app() -> FastAPI:
         "connector": bundle.repository,
         "connector_registrar": registrar,
         "result_sink": result_core,
+        "current_game_admin": current_game_admin_repository,
     }
     app.add_middleware(ApiMetricsMiddleware, metrics=metrics)
     allowed_origins = _allowed_origins(True)
@@ -139,7 +147,14 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=[
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS",
+        ],
         allow_headers=[
             "Accept",
             "Authorization",
@@ -152,6 +167,20 @@ def create_app() -> FastAPI:
         ],
     )
     app.include_router(bundle.router)
+    admin_subjects = frozenset(
+        value.strip()
+        for value in os.getenv(
+            "ADX_ARENA_ADMIN_GITHUB_SUBJECTS", ""
+        ).split(",")
+        if value.strip().isdigit()
+    )
+    app.include_router(
+        create_current_game_admin_router(
+            auth=bundle.auth,
+            repository=current_game_admin_repository,
+            github_subjects=admin_subjects,
+        )
+    )
     if mcp_broker is not None:
         assert mcp_token_codec is not None
         app.include_router(
