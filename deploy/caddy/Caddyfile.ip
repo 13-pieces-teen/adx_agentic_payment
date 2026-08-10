@@ -50,7 +50,7 @@ https://{$ADX_PUBLIC_HOST} {
 		file_server
 	}
 
-	@connector path /api/connectors* /api/auth* /mcp
+	@connector path /api/connectors* /api/auth* /api/v1/admin/current-game /api/v1/admin/current-game/matchmaking /mcp
 	handle @connector {
 		reverse_proxy connector-api:8000 {
 			health_uri /api/ready
