@@ -212,6 +212,7 @@ jobs:
       PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT || '22' }}
       PROD_EXPECTED_SSH_ED25519_FINGERPRINT: ${{ vars.PROD_EXPECTED_SSH_ED25519_FINGERPRINT }}
       PROD_REPORT_SSH_PUBLIC_KEY: ${{ vars.PROD_REPORT_SSH_PUBLIC_KEY || 'false' }}
+      PROD_REPORT_SSH_DEPLOY_PUBLIC_KEY: ${{ vars.PROD_REPORT_SSH_DEPLOY_PUBLIC_KEY || 'false' }}
       PROD_RELEASE_DIR: ${{ vars.PROD_RELEASE_DIR || '/home/ubuntu/adx_agentic_payment' }}
       PROD_EXPECTED_PUBLIC_IP: ${{ vars.PROD_EXPECTED_PUBLIC_IP }}
       PROD_CURRENT_GAME_ROUND_COUNT: ${{ vars.PROD_CURRENT_GAME_ROUND_COUNT || '8' }}
@@ -235,6 +236,7 @@ jobs:
           [[ "${PROD_SSH_PORT}" =~ ^[0-9]+$ ]]
           [[ "${PROD_EXPECTED_SSH_ED25519_FINGERPRINT}" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]]
           [[ "${PROD_REPORT_SSH_PUBLIC_KEY}" =~ ^(true|false)$ ]]
+          [[ "${PROD_REPORT_SSH_DEPLOY_PUBLIC_KEY}" =~ ^(true|false)$ ]]
           [[ "${PROD_CURRENT_GAME_ROUND_COUNT}" =~ ^[0-9]+$ ]]
           (( PROD_CURRENT_GAME_ROUND_COUNT >= 1 ))
           (( PROD_CURRENT_GAME_ROUND_COUNT <= 10 ))
@@ -304,6 +306,21 @@ jobs:
           printf '%s\n' "${PROD_SSH_PRIVATE_KEY}" > "${HOME}/.ssh/arena402_deploy"
           printf '%s\n' "${PROD_SSH_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
           chmod 0600 "${HOME}/.ssh/arena402_deploy" "${HOME}/.ssh/known_hosts"
+      - name: Report deployment SSH public key
+        if: env.PROD_REPORT_SSH_DEPLOY_PUBLIC_KEY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_key="$(ssh-keygen -y -f "${HOME}/.ssh/arena402_deploy")"
+          [[ "${public_key}" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256)\ [A-Za-z0-9+/=]+$ ]]
+          fingerprint="$(
+            printf '%s\n' "${public_key}" \
+              | ssh-keygen -lf - -E sha256 \
+              | awk '{print $2}'
+          )"
+          [[ "${fingerprint}" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]]
+          printf 'Production deployment SSH public key: %s\n' "${public_key}"
+          printf 'Production deployment SSH public key fingerprint: %s\n' "${fingerprint}"
       - name: Transfer and deploy the verified release
         shell: bash
         run: |
