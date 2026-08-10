@@ -80,6 +80,7 @@ def test_workflow_reports_only_the_public_half_of_the_deployment_key() -> None:
 
     assert "PROD_REPORT_SSH_DEPLOY_PUBLIC_KEY == 'true'" in public_key_report
     assert 'ssh-keygen -y -f "${HOME}/.ssh/arena402_deploy"' in public_key_report
+    assert '^[-A-Za-z0-9@._+]+\\ [A-Za-z0-9+/=]+$' in public_key_report
     assert "Production deployment SSH public key fingerprint" in public_key_report
     assert "PROD_SSH_PRIVATE_KEY" not in public_key_report
     assert "cat " not in public_key_report

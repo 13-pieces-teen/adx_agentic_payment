@@ -312,7 +312,7 @@ jobs:
         run: |
           set -euo pipefail
           public_key="$(ssh-keygen -y -f "${HOME}/.ssh/arena402_deploy")"
-          [[ "${public_key}" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256)\ [A-Za-z0-9+/=]+$ ]]
+          [[ "${public_key}" =~ ^[-A-Za-z0-9@._+]+\ [A-Za-z0-9+/=]+$ ]]
           fingerprint="$(
             printf '%s\n' "${public_key}" \
               | ssh-keygen -lf - -E sha256 \
