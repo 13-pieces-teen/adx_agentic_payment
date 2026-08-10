@@ -453,6 +453,26 @@ if [ "${protected_status}" != "401" ]; then
 fi
 echo "Protected API smoke check returned the expected HTTP 401."
 
+case "${public_api_url}" in
+  https://*) local_ingress_port=443 ;;
+  http://*) local_ingress_port=80 ;;
+esac
+admin_status="$(
+  curl \
+    --silent \
+    --show-error \
+    --max-time 10 \
+    --resolve "${public_host}:${local_ingress_port}:127.0.0.1" \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    "${public_api_url%/}/api/v1/admin/current-game"
+)"
+if [ "${admin_status}" != "401" ]; then
+  echo "Current Game admin ingress returned HTTP ${admin_status}, expected 401." >&2
+  exit 1
+fi
+echo "Current Game admin ingress returned the expected HTTP 401."
+
 current_status="$(
   curl \
     --silent \
