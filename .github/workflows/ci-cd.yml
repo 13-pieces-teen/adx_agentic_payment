@@ -242,6 +242,28 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Report candidate SSH host fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_key="$({
+            ssh-keyscan \
+              -T 10 \
+              -p "${PROD_SSH_PORT}" \
+              -t ed25519 \
+              "${PROD_SSH_HOST}" \
+              2>/dev/null
+          })"
+          test -n "${candidate_key}"
+          fingerprint="$(
+            printf '%s\n' "${candidate_key}" \
+              | ssh-keygen -lf - -E sha256 \
+              | awk '{print $2}' \
+              | sort -u
+          )"
+          test "$(printf '%s\n' "${fingerprint}" | wc -l | tr -d ' ')" -eq 1
+          [[ "${fingerprint}" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]]
+          printf 'Candidate production SSH ED25519 fingerprint: %s\n' "${fingerprint}"
       - name: Create the exact source archive
         id: package
         shell: bash

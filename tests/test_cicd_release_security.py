@@ -47,9 +47,25 @@ def test_workflow_packages_the_exact_revision_without_runtime_secrets() -> None:
         "ADX_WALLET_MASTER",
         "ADX_X402_FACILITATOR_1_BEARER_TOKEN",
         "TENCENTCLOUD_SECRET_KEY",
-        "ssh-keyscan",
     ):
         assert forbidden not in WORKFLOW
+
+
+def test_workflow_reports_unknown_host_fingerprint_without_trusting_it() -> None:
+    diagnostic = WORKFLOW.split(
+        "- name: Report candidate SSH host fingerprint", 1
+    )[1].split("- name: Create the exact source archive", 1)[0]
+    pinned_trust = WORKFLOW.split(
+        "- name: Configure pinned SSH trust", 1
+    )[1].split("- name: Transfer and deploy the verified release", 1)[0]
+
+    assert "ssh-keyscan" in diagnostic
+    assert "ssh-keygen -lf - -E sha256" in diagnostic
+    assert "Candidate production SSH ED25519 fingerprint" in diagnostic
+    assert "known_hosts" not in diagnostic
+    assert "PROD_SSH_KNOWN_HOSTS" in pinned_trust
+    assert '"${HOME}/.ssh/known_hosts"' in pinned_trust
+    assert "ssh-keyscan" not in pinned_trust
 
 
 def test_release_verifies_identity_before_activation_and_marks_after_health() -> None:
