@@ -62,6 +62,11 @@ def test_workflow_reports_unknown_host_fingerprint_without_trusting_it() -> None
     assert "ssh-keyscan" in diagnostic
     assert "ssh-keygen -lf - -E sha256" in diagnostic
     assert "Candidate production SSH ED25519 fingerprint" in diagnostic
+    assert 'test "${fingerprint}" = "${PROD_EXPECTED_SSH_ED25519_FINGERPRINT}"' in (
+        diagnostic
+    )
+    assert '[[ "${PROD_REPORT_SSH_PUBLIC_KEY}" == "true" ]]' in diagnostic
+    assert "Confirmed production SSH ED25519 public key" in diagnostic
     assert "known_hosts" not in diagnostic
     assert "PROD_SSH_KNOWN_HOSTS" in pinned_trust
     assert '"${HOME}/.ssh/known_hosts"' in pinned_trust
