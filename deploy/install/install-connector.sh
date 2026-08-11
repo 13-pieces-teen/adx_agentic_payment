@@ -26,6 +26,8 @@ Options:
   --allow-root PATH      Workspace root managed sessions may access.
   --enable-codex-tasks   Allow Connector-owned Codex task execution.
   --force-reauthorize    Pair a new device even if local credentials exist.
+
+Supported platforms: Linux (systemd --user) and macOS (LaunchAgent).
 EOF
 }
 
@@ -85,12 +87,13 @@ esac
 
 case "$(uname -s)" in
   Linux) platform=linux ;;
-  *) fail "this installer supports Linux; use install-connector.ps1 on Windows" ;;
+  Darwin) platform=darwin ;;
+  *) fail "this installer supports Linux and macOS; use install-connector.ps1 on Windows" ;;
 esac
 case "$(uname -m)" in
   x86_64|amd64) architecture=amd64 ;;
   aarch64|arm64) architecture=arm64 ;;
-  *) fail "ADX Connector supports 64-bit AMD64 and ARM64 Linux" ;;
+  *) fail "ADX Connector supports 64-bit AMD64 and ARM64 ${platform}" ;;
 esac
 
 if [ -z "$binary_url" ]; then
@@ -105,7 +108,13 @@ case "$binary_url" in
   *" "*|*"	"*|*"?"*|*"#"*|*"@"*) fail "binary URL must not contain credentials, query or fragment" ;;
 esac
 
-command -v systemctl >/dev/null 2>&1 || fail "systemd is required"
+if [ "$platform" = "linux" ]; then
+  command -v systemctl >/dev/null 2>&1 || fail "systemd is required on Linux"
+fi
+if [ "$platform" = "darwin" ]; then
+  command -v launchctl >/dev/null 2>&1 || fail "launchctl is required on macOS"
+fi
+
 if command -v curl >/dev/null 2>&1; then
   fetch() {
     case "$1" in
@@ -156,21 +165,30 @@ fi
 [ "$(printf '%s' "$actual_sha" | tr 'A-F' 'a-f')" = "$(printf '%s' "$expected_sha" | tr 'A-F' 'a-f')" ] ||
   fail "ADX Connector checksum verification failed"
 
-systemctl --user stop adx-connector.service >/dev/null 2>&1 || true
-
 install_directory="$HOME/.local/lib/adx-connector"
 install_target="$install_directory/adx-connector"
 command_link="$HOME/.local/bin/adx-connector"
 state_path="${XDG_CONFIG_HOME:-$HOME/.config}/adx/connector/state.json"
 state_directory=$(dirname "$state_path")
-unit_directory="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-unit_path="$unit_directory/adx-connector.service"
 
 [ -d "$allow_root" ] || fail "allow-root must be an existing directory"
 allow_root=$(CDPATH= cd -- "$allow_root" && pwd -P)
 
-mkdir -p "$install_directory" "$HOME/.local/bin" "$state_directory" "$unit_directory"
-chmod 700 "$install_directory" "$HOME/.local/bin" "$state_directory" "$unit_directory"
+if [ "$platform" = "linux" ]; then
+  systemctl --user stop adx-connector.service >/dev/null 2>&1 || true
+  unit_directory="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  unit_path="$unit_directory/adx-connector.service"
+  mkdir -p "$install_directory" "$HOME/.local/bin" "$state_directory" "$unit_directory"
+  chmod 700 "$install_directory" "$HOME/.local/bin" "$state_directory" "$unit_directory"
+else
+  uid=$(id -u)
+  label="com.adx.local-connector"
+  plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+  launchctl bootout "gui/${uid}/${label}" >/dev/null 2>&1 || true
+  mkdir -p "$install_directory" "$HOME/.local/bin" "$state_directory" "$HOME/Library/LaunchAgents"
+  chmod 700 "$install_directory" "$HOME/.local/bin" "$state_directory" "$HOME/Library/LaunchAgents"
+fi
+
 install -m 700 "$download" "$install_target"
 if [ -e "$command_link" ] && [ ! -L "$command_link" ]; then
   fail "$command_link already exists and is not a symlink"
@@ -184,20 +202,22 @@ else
   printf '%s\n' "Existing device authorization found; keeping it."
 fi
 
-systemd_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g'
-}
-
-escaped_target=$(systemd_escape "$install_target")
-escaped_server=$(systemd_escape "$server")
-escaped_state=$(systemd_escape "$state_path")
-escaped_root=$(systemd_escape "$allow_root")
 codex_argument=
 if [ "$enable_codex" = true ]; then
   codex_argument=" --enable-codex-tasks"
 fi
 
-cat >"$unit_path" <<EOF
+if [ "$platform" = "linux" ]; then
+  systemd_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g'
+  }
+
+  escaped_target=$(systemd_escape "$install_target")
+  escaped_server=$(systemd_escape "$server")
+  escaped_state=$(systemd_escape "$state_path")
+  escaped_root=$(systemd_escape "$allow_root")
+
+  cat >"$unit_path" <<EOF
 [Unit]
 Description=ADX Local Connector
 After=network-online.target
@@ -218,20 +238,111 @@ Environment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/.local/share/pnpm:%h/.cargo
 [Install]
 WantedBy=default.target
 EOF
-chmod 600 "$unit_path"
+  chmod 600 "$unit_path"
 
-systemctl --user daemon-reload
-systemctl --user enable --now adx-connector.service
+  systemctl --user daemon-reload
+  systemctl --user enable --now adx-connector.service
 
-if command -v loginctl >/dev/null 2>&1; then
-  linger=$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null || true)
-  if [ "$linger" != "yes" ]; then
-    if loginctl enable-linger "$USER" 2>/dev/null; then
-      printf '%s\n' "Enabled systemd user lingering for boot-time startup."
-    else
-      printf '%s\n' "To start before login, an administrator can run: sudo loginctl enable-linger $USER"
+  if command -v loginctl >/dev/null 2>&1; then
+    linger=$(loginctl show-user "$USER" --property=Linger --value 2>/dev/null || true)
+    if [ "$linger" != "yes" ]; then
+      if loginctl enable-linger "$USER" 2>/dev/null; then
+        printf '%s\n' "Enabled systemd user lingering for boot-time startup."
+      else
+        printf '%s\n' "To start before login, an administrator can run: sudo loginctl enable-linger $USER"
+      fi
     fi
   fi
+else
+  plist_escape() {
+    printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+  }
+
+  xml_target=$(plist_escape "$install_target")
+  xml_server=$(plist_escape "$server")
+  xml_state=$(plist_escape "$state_path")
+  xml_root=$(plist_escape "$allow_root")
+  path_env=$(plist_escape "$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+
+  if [ "$enable_codex" = true ]; then
+    cat >"$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xml_target}</string>
+    <string>run</string>
+    <string>--server</string>
+    <string>${xml_server}</string>
+    <string>--state</string>
+    <string>${xml_state}</string>
+    <string>--auto-pair=false</string>
+    <string>--allow-root</string>
+    <string>${xml_root}</string>
+    <string>--enable-codex-tasks</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${path_env}</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/adx-connector.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/adx-connector.err.log</string>
+</dict>
+</plist>
+EOF
+  else
+    cat >"$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xml_target}</string>
+    <string>run</string>
+    <string>--server</string>
+    <string>${xml_server}</string>
+    <string>--state</string>
+    <string>${xml_state}</string>
+    <string>--auto-pair=false</string>
+    <string>--allow-root</string>
+    <string>${xml_root}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${path_env}</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/adx-connector.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/adx-connector.err.log</string>
+</dict>
+</plist>
+EOF
+  fi
+  chmod 600 "$plist_path"
+  mkdir -p "$HOME/Library/Logs"
+  launchctl bootstrap "gui/${uid}" "$plist_path"
+  launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
+  launchctl kickstart -k "gui/${uid}/${label}" >/dev/null 2>&1 || true
 fi
 
 printf '\n%s\n' "ADX Connector is installed and starting."
