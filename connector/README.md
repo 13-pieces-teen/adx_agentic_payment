@@ -209,9 +209,10 @@ and Connector-created directories without replacing an existing parent
 directory ACL. Device tokens and device codes are never written to logs.
 
 Platform installers under [`deploy/install`](../deploy/install/README.md)
-register a current-user Scheduled Task on Windows or `systemd --user` service
-on Linux. They pair interactively once, then start `run --auto-pair=false` so a
-background service never opens an unexpected authorization browser.
+register a current-user Scheduled Task on Windows, a `systemd --user` service
+on Linux, or a LaunchAgent on macOS. They pair interactively once, then start
+`run --auto-pair=false` so a background service never opens an unexpected
+authorization browser.
 
 For local development, `http://localhost` and `ws://localhost` are allowed.
 Remote enrollment and transport require HTTPS/WSS.

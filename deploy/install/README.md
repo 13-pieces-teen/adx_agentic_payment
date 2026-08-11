@@ -26,6 +26,10 @@ The platform must publish these files (or pass an explicit binary URL):
 /downloads/adx-connector-linux-amd64.sha256
 /downloads/adx-connector-linux-arm64
 /downloads/adx-connector-linux-arm64.sha256
+/downloads/adx-connector-darwin-amd64
+/downloads/adx-connector-darwin-amd64.sha256
+/downloads/adx-connector-darwin-arm64
+/downloads/adx-connector-darwin-arm64.sha256
 ```
 
 The checksum file starts with the binary's 64-character SHA-256 digest.
@@ -55,7 +59,8 @@ Add `-PurgeCredentials` only after revoking the Device in Arena.
 ## Linux
 
 ```sh
-sh ./install-connector.sh --server https://arena.example
+curl --proto '=https' --tlsv1.2 -fsSL https://arena.example/downloads/install.sh \
+  | sh -s -- --server https://arena.example
 ```
 
 It installs under `~/.local`, creates a hardened `systemd --user` unit, enables
@@ -71,9 +76,32 @@ sh ./uninstall-connector.sh
 
 Add `--purge-credentials` only after revoking the Device in Arena.
 
+## macOS
+
+The same `install.sh` / `install-connector.sh` script detects Darwin and
+registers a current-user LaunchAgent instead of systemd:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://arena.example/downloads/install.sh \
+  | sh -s -- --server https://arena.example
+```
+
+It installs under `~/.local`, writes
+`~/Library/LaunchAgents/com.adx.local-connector.plist`, bootstraps it for the
+current GUI session, and starts the Connector immediately. Apple Silicon uses
+`adx-connector-darwin-arm64`; Intel Macs use `adx-connector-darwin-amd64`.
+
+To remove startup and the binary while retaining local credentials:
+
+```sh
+sh ./uninstall-connector.sh
+```
+
+Add `--purge-credentials` only after revoking the Device in Arena.
+
 ## Local capability opt-in
 
-Installers start detection-only by default. `--enable-codex-tasks` on Linux or
-`-EnableCodexTasks` on Windows opts into Connector-owned Codex tasks for the
+Installers start detection-only by default. `--enable-codex-tasks` on Linux/macOS
+or `-EnableCodexTasks` on Windows opts into Connector-owned Codex tasks for the
 selected `allow-root`. Claude task execution remains an explicit unsafe
 development-only CLI flag and is intentionally absent from the installers.
