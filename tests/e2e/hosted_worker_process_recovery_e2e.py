@@ -32,7 +32,9 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 POSTGRES_IMAGE = (
     "postgres:17-alpine3.22@sha256:"
     "b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f"
@@ -906,7 +908,7 @@ def _controller(
             "--entrypoint",
             "python",
             image,
-            "tests/hosted_worker_process_recovery_e2e.py",
+            "tests/e2e/hosted_worker_process_recovery_e2e.py",
             *arguments,
         )
     )
@@ -1124,7 +1126,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
             "--entrypoint",
             "python",
             image,
-            "/workspace/tests/hosted_worker_process_recovery_e2e.py",
+            "/workspace/tests/e2e/hosted_worker_process_recovery_e2e.py",
             "fake-provider",
             "--port",
             "4000",

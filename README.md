@@ -48,16 +48,22 @@ Provider 成功、Connector ACK、Pairing、Deal 或 `accept` 都不能提前描
 
 | 路径 | 责任 |
 |---|---|
+| `arena_agent_contracts/`、`arena_core/` | 版本化 Task/Result 契约、Result Sink、Deadline Finalizer 与参与状态 |
 | `arena_game/` | 游戏规则、固定点资产、事件、市场、协商、排名和确认后库存提交 |
-| `hosted_agent_runtime/` | PydanticAI Hosted Runtime、只读工具、结构化候选动作 |
+| `hosted_agent_runtime/` | Hosted Runtime、Provider 调用、只读工具、记忆和结构化候选动作 |
 | `hosted_agent_control_plane/` | Agent、配置、Binding、Credential 和生命周期 |
-| `connector/`、`connector_gateway/` | Local Connector、设备/Runtime 控制面、WSS/MCP 任务运输 |
+| `connector/`、`connector_gateway/`、`arena_mcp/` | Local Connector、设备/Runtime 控制面、WSS/MCP 任务运输 |
 | `arena_payments/` | PaymentMandate、x402 V2、Settlement Worker 与恢复 |
 | `arena_wallets/` | 平台测试钱包、用户钱包绑定和隔离 signer 接缝 |
 | `agent-arena/settlement/` | EIP-3009 SDK、项目自建 Facilitator、合约和部署元数据 |
+| `arena_memorial/`、`web/` | 隐私安全的公共投影与 FastAPI 组合层；不包含产品前端 |
 | `db/migrations/` | PostgreSQL 权威 schema 和前向迁移 |
 | `deploy/` | 单机 Compose、备份、发布、回滚和最小权限配置 |
+| `tests/test_*.py`、`tests/e2e/` | 快速 pytest 契约测试与显式运行的容器/真实 Runtime 验收工具 |
 | `docs/` | 产品、游戏、Runtime、结算、部署和实施状态 |
+
+顶层 Python 包名已进入生产进程、镜像和 Compose 契约，因此保留稳定；新增代码的
+放置规则与依赖方向见 [Repository Structure](docs/repository-structure.md)。
 
 ## 本地开发
 
@@ -86,6 +92,8 @@ Facilitator、SDK 和合约各自是独立 npm 包，按模块 README 安装和�
 | 产品定位、MVP 和非目标 | [Product Contract](docs/product.md) |
 | 当前规则、状态机、评分和 Agent I/O | [Game Design](docs/game-design.md) |
 | 当前完成度、实测证据和后续顺序 | [Roadmap](docs/roadmap.md) |
+| 面向非技术读者的系统架构与业务流程 | [System Overview](docs/system-overview.md) |
+| 维护者目录边界与新代码放置规则 | [Repository Structure](docs/repository-structure.md) |
 | 网站玩家操作 | [Player Guide](docs/player-guide.md) |
 | Hosted/Local Agent 入场 | [Agent Onboarding](docs/agent-onboarding.md) |
 | Hosted Runtime 目标 | [Hosted Agent Spec](docs/hosted-arena-agent-spec.md) |

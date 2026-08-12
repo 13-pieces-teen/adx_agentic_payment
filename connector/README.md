@@ -124,8 +124,8 @@ local Codex CLI is authenticated. It uses the isolated project
 one-time test users, and no chain writer:
 
 ```powershell
-docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena up --build -d postgres migrate provision-db-roles api arena-worker
-$inviteRaw = docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 2 --json
+docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/e2e/docker-compose.real-runtimes-e2e.yml --profile arena up --build -d postgres migrate provision-db-roles api arena-worker
+$inviteRaw = docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/e2e/docker-compose.real-runtimes-e2e.yml exec -T api python -m connector_gateway.invite_cli --persist --ttl-hours 1 --count 2 --json
 $env:ADX_REAL_RUNTIME_E2E_INVITES = ConvertTo-Json -Compress -InputObject @((ConvertFrom-Json $inviteRaw).invites)
 $env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS = "codex,codex"
 $env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT = "0"
@@ -133,9 +133,9 @@ $env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL = "agent_a2a.v1"
 $env:ADX_REAL_RUNTIME_E2E_ROUND_COUNT = "1"
 $env:ADX_REAL_RUNTIME_E2E_EVENT_SEED = "codex-natural-28"
 $env:ADX_REAL_RUNTIME_E2E_EXPECT_DEAL = "true"
-python tests/real_runtimes_docker_e2e.py
+python tests/e2e/real_runtimes_docker_e2e.py
 Remove-Item Env:ADX_REAL_RUNTIME_E2E_INVITES, Env:ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS, Env:ADX_REAL_RUNTIME_E2E_BUYER_SEAT, Env:ADX_REAL_RUNTIME_E2E_MARKET_PROTOCOL, Env:ADX_REAL_RUNTIME_E2E_ROUND_COUNT, Env:ADX_REAL_RUNTIME_E2E_EVENT_SEED, Env:ADX_REAL_RUNTIME_E2E_EXPECT_DEAL
-docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
+docker compose -p arena402-codex-a2a-e2e -f docker-compose.local.yml -f tests/e2e/docker-compose.real-runtimes-e2e.yml --profile arena down -v --remove-orphans
 ```
 
 That accepted 2026-08-04 run did not cover reconnect, lease expiry, durable
@@ -149,9 +149,9 @@ Run that isolated test from the repository root. It uses project
 test volume:
 
 ```sh
-docker compose -p arena402-mcp-e2e -f docker-compose.local.yml -f tests/docker-compose.mcp-e2e.yml up --build -d postgres migrate provision-db-roles api
-python tests/mcp_docker_e2e.py
-docker compose -p arena402-mcp-e2e -f docker-compose.local.yml -f tests/docker-compose.mcp-e2e.yml down -v --remove-orphans
+docker compose -p arena402-mcp-e2e -f docker-compose.local.yml -f tests/e2e/docker-compose.mcp-e2e.yml up --build -d postgres migrate provision-db-roles api
+python tests/e2e/mcp_docker_e2e.py
+docker compose -p arena402-mcp-e2e -f docker-compose.local.yml -f tests/e2e/docker-compose.mcp-e2e.yml down -v --remove-orphans
 ```
 
 The authority boundaries remain:

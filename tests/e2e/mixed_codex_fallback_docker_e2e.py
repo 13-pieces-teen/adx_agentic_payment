@@ -1,4 +1,4 @@
-"""Hosted + real Codex sequential fallback through the isolated Docker stack.
+"""Hosted + real Codex sequential fallback through the E2E Docker stack.
 
 This payment-disabled acceptance harness uses a scripted Hosted buyer and
 rejecting seller only to make the first attempt deterministic. The remaining
@@ -31,6 +31,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -39,7 +40,11 @@ import uuid
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 import asyncpg
 
-from real_runtimes_docker_e2e import (
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tests.e2e.real_runtimes_docker_e2e import (
     ADMIN_URL,
     API_BASE,
     RealConnector,

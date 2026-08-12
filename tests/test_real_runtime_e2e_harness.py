@@ -6,8 +6,8 @@ from pathlib import Path
 from aiohttp import ClientSession, WSMsgType, web
 import httpx
 
-from mixed_codex_fallback_docker_e2e import MixedRuntimeFaultProxy
-from real_runtimes_docker_e2e import RealConnector, UserSession
+from tests.e2e.mixed_codex_fallback_docker_e2e import MixedRuntimeFaultProxy
+from tests.e2e.real_runtimes_docker_e2e import RealConnector, UserSession
 
 
 class _LiveProcess:

@@ -6,7 +6,7 @@ Run with the local FastAPI server helper:
     python <with_server.py> \
       --server "python -m uvicorn web.api:create_app --factory --host 127.0.0.1 --port 8000" \
       --port 8000 \
-      -- python tests/connector_go_e2e.py
+      -- python tests/e2e/connector_go_e2e.py
 
 The smoke builds and starts the Connector, injects a one-time enrolled device
 credential, waits for real local runtime discovery, and verifies a typed
@@ -27,7 +27,7 @@ from pathlib import Path
 
 
 API_BASE = "http://127.0.0.1:8000"
-WORKSPACE = Path(__file__).resolve().parents[1]
+WORKSPACE = Path(__file__).resolve().parents[2]
 CONNECTOR_ROOT = WORKSPACE / "connector"
 
 

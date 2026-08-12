@@ -35,6 +35,7 @@ jobs:
           arena_agent_contracts
           arena_core
           arena_game
+          arena_mcp
           arena_memorial
           arena_payments
           arena_wallets

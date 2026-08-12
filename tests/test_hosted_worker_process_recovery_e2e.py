@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from tests.hosted_worker_process_recovery_e2e import (
+from tests.e2e.hosted_worker_process_recovery_e2e import (
     _chat_completion,
     _parser,
     _worker_environment,

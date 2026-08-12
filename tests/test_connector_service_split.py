@@ -23,7 +23,7 @@ def test_connector_surface_flag_defaults_on_and_can_be_disabled(monkeypatch):
 def test_production_routes_connector_to_one_dedicated_worker():
     compose = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
     local_compose = (ROOT / "docker-compose.local.yml").read_text(encoding="utf-8")
-    mcp_e2e_compose = (ROOT / "tests/docker-compose.mcp-e2e.yml").read_text(
+    mcp_e2e_compose = (ROOT / "tests/e2e/docker-compose.mcp-e2e.yml").read_text(
         encoding="utf-8"
     )
     dockerfile = (ROOT / "deploy/docker/Dockerfile.api").read_text(encoding="utf-8")

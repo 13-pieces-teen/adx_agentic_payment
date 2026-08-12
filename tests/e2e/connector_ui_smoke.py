@@ -6,7 +6,7 @@ Run through the webapp-testing server helper:
     python <with_server.py> \
       --server "python -m uvicorn web.api:create_app --factory --port 8000" --port 8000 \
       --server "cd frontend && npm run dev -- --port 3000" --port 3000 \
-      -- python tests/connector_ui_smoke.py
+      -- python tests/e2e/connector_ui_smoke.py
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from websockets.sync.client import connect
 
 API_BASE = "http://127.0.0.1:8000"
 WEB_BASE = "http://127.0.0.1:3000"
-WORKSPACE = str(Path(__file__).resolve().parents[1])
+WORKSPACE = str(Path(__file__).resolve().parents[2])
 
 
 def api(method: str, path: str, body: dict | None = None) -> dict:

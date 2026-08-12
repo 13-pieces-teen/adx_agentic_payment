@@ -1,6 +1,6 @@
 import pytest
 
-from tests.real_runtimes_docker_e2e import (
+from tests.e2e.real_runtimes_docker_e2e import (
     assert_terminal_agent_market,
     game_create_payload,
     portfolio_for_seat,

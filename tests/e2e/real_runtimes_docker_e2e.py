@@ -2,7 +2,8 @@
 
 Prerequisites:
 
-* an isolated Compose stack using ``docker-compose.real-runtimes-e2e.yml``;
+* an isolated Compose stack using
+  ``tests/e2e/docker-compose.real-runtimes-e2e.yml``;
 * 2–100 one-time invites in ``ADX_REAL_RUNTIME_E2E_INVITES`` as a JSON array;
 * locally authenticated CLIs selected by ``ADX_REAL_RUNTIME_E2E_RUNTIME_KINDS``;
 * Go available to build the current Connector source.
@@ -39,7 +40,7 @@ import asyncpg
 import httpx
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 API_BASE = os.getenv(
     "ADX_REAL_RUNTIME_E2E_API_BASE",
     "http://127.0.0.1:18001",

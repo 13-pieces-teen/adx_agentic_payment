@@ -1,3 +1,4 @@
+# Disposable loopback-only override for the MCP E2E harness.
 services:
   postgres:
     ports: !override

@@ -1736,7 +1736,7 @@ LiteLLM 真实调用、真实策略收益或生产部署验收。
   `apply_status=applied` 推进记忆；迁移 `066` 现在要求
   `application_outcome=candidate`，并已证明 `good_not_allowed` 对应 patch 被
   `discarded`、memory version 不变。
-- `python tests/hosted_worker_process_recovery_e2e.py run` 进一步构建当前生产
+- `python tests/e2e/hosted_worker_process_recovery_e2e.py run` 进一步构建当前生产
   镜像、应用全部迁移并 provision 最小权限角色，然后对独立
   `hosted_agent_runtime.production_worker` 容器执行真实 `SIGKILL`。Attempt
   前崩溃由新 Worker identity 在 30 秒 lease 到期后完成 Attempt 1；

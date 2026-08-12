@@ -1,3 +1,4 @@
+# Disposable loopback-only override for real local Runtime E2E runs.
 services:
   postgres:
     ports: !override

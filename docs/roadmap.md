@@ -96,7 +96,7 @@ checked item proves only the boundary stated by that item.
   `arena_applied_agent_actions.application_outcome`，只有 `candidate` 才推进
   Game Memory；`default_pass` 的 Result 保留 `good_not_allowed` 审计，但对应
   memory patch 必须 `discarded`。
-- [x] 使用 `tests/hosted_worker_process_recovery_e2e.py` 在全新 PostgreSQL 和
+- [x] 使用 `tests/e2e/hosted_worker_process_recovery_e2e.py` 在全新 PostgreSQL 和
   当前生产镜像上完成外部多容器 `SIGKILL`：Attempt 创建前被杀的 Worker 由新
   identity 在真实 30 秒 lease 到期后执行 Attempt 1；durable `request_sent`
   后被杀的 Worker 由另一 identity 收敛为 `request_outcome_unknown`，本地
