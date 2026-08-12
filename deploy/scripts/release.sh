@@ -365,10 +365,27 @@ case "${expected_connector_wss_workers}" in
     ;;
 esac
 connector_wss_id="$(compose ps --status running --quiet connector-wss)"
-actual_connector_wss_workers="$(
-  docker top "${connector_wss_id}" -eo args \
-    | awk '/multiprocessing.spawn/ {count++} END {print count > 0 ? count : 1}'
+connector_wss_processes="$(docker top "${connector_wss_id}" -eo pid,args)"
+connector_wss_spawn_count="$(
+  printf '%s\n' "${connector_wss_processes}" \
+    | grep -c '[m]ultiprocessing.spawn' \
+    || true
 )"
+case "${connector_wss_spawn_count}" in
+  ""|*[!0-9]*)
+    echo "Could not count Connector WSS worker processes." >&2
+    exit 1
+    ;;
+esac
+if [ "${connector_wss_spawn_count}" -gt 0 ]; then
+  actual_connector_wss_workers=${connector_wss_spawn_count}
+elif printf '%s\n' "${connector_wss_processes}" \
+  | grep -Eq '[p]ython(3)? -m uvicorn'; then
+  actual_connector_wss_workers=1
+else
+  echo "Could not identify the Connector WSS Uvicorn process." >&2
+  exit 1
+fi
 if [ "${actual_connector_wss_workers}" -ne "${expected_connector_wss_workers}" ]; then
   echo "Connector WSS worker count does not match deploy/.env." >&2
   exit 1
