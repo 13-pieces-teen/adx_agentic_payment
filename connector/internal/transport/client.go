@@ -96,6 +96,8 @@ type StateStore interface {
 	RecoverInterruptedReceipts() (int, error)
 	AgentTaskResults() ([]protocol.AgentTaskResultEnvelope, error)
 	AckAgentTaskResult(string, string) error
+	GatewaySequence() (uint64, error)
+	SaveGatewaySequence(uint64) error
 }
 
 type Outbox interface {
@@ -272,14 +274,19 @@ func NewClient(
 		}
 		arenaMCP = configuredMCP
 	}
+	gatewaySequence, err := state.GatewaySequence()
+	if err != nil {
+		return nil, fmt.Errorf("load durable Gateway sequence: %w", err)
+	}
 	return &Client{
-		config:     config,
-		state:      state,
-		outbox:     outbox,
-		supervisor: processSupervisor,
-		logger:     logger,
-		startedAt:  time.Now().UTC(),
-		mcp:        arenaMCP,
+		config:          config,
+		state:           state,
+		outbox:          outbox,
+		supervisor:      processSupervisor,
+		logger:          logger,
+		startedAt:       time.Now().UTC(),
+		mcp:             arenaMCP,
+		gatewaySequence: gatewaySequence,
 		mcpBindings: make(
 			map[string]mcpclient.BindingRef,
 		),
@@ -382,15 +389,8 @@ func (c *Client) runConnection(ctx context.Context) error {
 		Platform:         runtime.GOOS + "/" + runtime.GOARCH,
 		Hostname:         hostname(),
 		StartedAt:        c.startedAt,
+		Capabilities:     []string{protocol.CapabilityTransportResumeV1},
 	}); err != nil {
-		return err
-	}
-	if err := c.send(
-		connection,
-		protocol.MessageInventorySnapshot,
-		0,
-		toInventoryWire(c.supervisor.Inventory()),
-	); err != nil {
 		return err
 	}
 	receipts, err := c.state.Receipts()
@@ -410,6 +410,118 @@ func (c *Client) runConnection(ctx context.Context) error {
 	}
 	replay, err := newEventReplay(pending)
 	if err != nil {
+		return err
+	}
+	welcome, err := awaitMessage(ctx, incoming, readErrors, messageWelcome)
+	if err != nil {
+		return err
+	}
+	if err := c.validateGatewayEnvelope(welcome); err != nil {
+		return err
+	}
+	if gatewaySupports(welcome.Payload, protocol.CapabilityTransportResumeV1) {
+		helloAck, err := awaitMessage(ctx, incoming, readErrors, messageAck)
+		if err != nil {
+			return err
+		}
+		if err := c.validateGatewayEnvelope(helloAck); err != nil {
+			return err
+		}
+		helloBindings, err := c.rememberMCPBindingsFromAck(helloAck.Payload)
+		if err != nil {
+			return err
+		}
+		pendingResultIDs := make([]string, 0, len(taskResults))
+		for _, result := range taskResults {
+			pendingResultIDs = append(pendingResultIDs, result.Result.ResultID)
+		}
+		eventAckThrough := uint64(0)
+		if len(pending) != 0 && pending[0].Sequence > 0 {
+			eventAckThrough = pending[0].Sequence - 1
+		}
+		if err := c.send(
+			connection,
+			protocol.MessageResume,
+			0,
+			protocol.TransportResume{
+				LastGatewaySequence: c.currentGatewaySequence(),
+				EventAckThrough:     eventAckThrough,
+				PendingResultIDs:    pendingResultIDs,
+			},
+		); err != nil {
+			return err
+		}
+		resumeAckEnvelope, err := awaitMessage(
+			ctx,
+			incoming,
+			readErrors,
+			protocol.MessageResumeAck,
+		)
+		if err != nil {
+			return err
+		}
+		if err := c.validateGatewayEnvelope(resumeAckEnvelope); err != nil {
+			return err
+		}
+		var resumeAck protocol.TransportResumeAck
+		if err := json.Unmarshal(resumeAckEnvelope.Payload, &resumeAck); err != nil {
+			return fmt.Errorf("decode transport resume acknowledgement: %w", err)
+		}
+		if !resumeAck.Accepted || resumeAck.ConnectionGeneration == 0 {
+			return errors.New("gateway rejected transport resume")
+		}
+		if err := c.setGatewaySequence(resumeAck.GatewaySequence); err != nil {
+			return c.degradePersistence("persist resumed Gateway sequence", err)
+		}
+		acceptedResultIDs := make(map[string]struct{}, len(resumeAck.AcceptedResultIDs))
+		for _, resultID := range resumeAck.AcceptedResultIDs {
+			acceptedResultIDs[resultID] = struct{}{}
+		}
+		remainingResults := taskResults[:0]
+		for _, result := range taskResults {
+			if _, accepted := acceptedResultIDs[result.Result.ResultID]; accepted {
+				if err := c.state.AckAgentTaskResult(
+					result.Result.TaskID,
+					result.Result.ResultID,
+				); err != nil {
+					return c.degradePersistence(
+						"reconcile accepted AgentTask result",
+						err,
+					)
+				}
+				continue
+			}
+			remainingResults = append(remainingResults, result)
+		}
+		taskResults = remainingResults
+		if resumeAck.EventAckThrough != 0 {
+			if err := c.outbox.AckThrough(resumeAck.EventAckThrough); err != nil {
+				return c.degradePersistence(
+					"reconcile Gateway event acknowledgement",
+					err,
+				)
+			}
+			pending = pending[:0]
+			for _, event := range replay.events {
+				if event.Sequence > resumeAck.EventAckThrough {
+					pending = append(pending, event)
+				}
+			}
+			replay, err = newEventReplay(pending)
+			if err != nil {
+				return err
+			}
+		}
+		if err := c.syncMCPBindings(ctx, connection, helloBindings); err != nil {
+			return err
+		}
+	}
+	if err := c.send(
+		connection,
+		protocol.MessageInventorySnapshot,
+		0,
+		toInventoryWire(c.supervisor.Inventory()),
+	); err != nil {
 		return err
 	}
 	receiptIndex := 0
@@ -610,14 +722,22 @@ func (c *Client) handleIncoming(
 	connection *websocket.Conn,
 	envelope protocol.Envelope,
 ) error {
-	if envelope.ProtocolVersion != protocol.Version {
-		return fmt.Errorf("server selected unsupported protocol version %q", envelope.ProtocolVersion)
+	if err := c.validateGatewayEnvelope(envelope); err != nil {
+		return err
 	}
-	if envelope.DeviceID != "" && envelope.DeviceID != c.config.Credentials.DeviceID {
-		return errors.New("received message for a different device")
-	}
-	if c.config.TaskTransport == "mcp" && envelope.Sequence != 0 {
-		if c.observeGatewaySequence(envelope.Sequence) {
+	if envelope.Sequence != 0 {
+		allowGap := c.config.TaskTransport == "mcp"
+		gap, err := c.observeGatewaySequence(envelope.Sequence, allowGap)
+		if err != nil {
+			return c.degradePersistence("persist Gateway sequence", err)
+		}
+		if gap && !allowGap {
+			return fmt.Errorf(
+				"Gateway sequence gap before %d; reconnecting for durable replay",
+				envelope.Sequence,
+			)
+		}
+		if gap {
 			c.logger.Printf(
 				"gateway sequence gap detected at %d; synchronizing Arena MCP tasks",
 				envelope.Sequence,
@@ -631,25 +751,11 @@ func (c *Client) handleIncoming(
 	case messageWelcome:
 		return nil
 	case messageAck:
-		if c.config.TaskTransport != "mcp" || c.mcp == nil {
-			return nil
+		bindings, err := c.rememberMCPBindingsFromAck(envelope.Payload)
+		if err != nil {
+			return err
 		}
-		var payload struct {
-			Bindings []mcpclient.BindingRef `json:"mcp_bindings"`
-		}
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return fmt.Errorf("decode gateway acknowledgement: %w", err)
-		}
-		if len(payload.Bindings) == 0 {
-			return nil
-		}
-		for _, binding := range payload.Bindings {
-			if err := binding.Validate(); err != nil {
-				return fmt.Errorf("validate MCP binding snapshot: %w", err)
-			}
-			c.rememberMCPBinding(binding)
-		}
-		return c.syncMCPBindings(ctx, connection, payload.Bindings)
+		return c.syncMCPBindings(ctx, connection, bindings)
 	case messageError:
 		var payload struct {
 			Detail string `json:"detail"`
@@ -933,14 +1039,128 @@ func (c *Client) rememberMCPBinding(binding mcpclient.BindingRef) {
 	c.mcpBindings[binding.BindingID] = binding
 }
 
-func (c *Client) observeGatewaySequence(sequence uint64) bool {
+func (c *Client) rememberMCPBindingsFromAck(
+	payload json.RawMessage,
+) ([]mcpclient.BindingRef, error) {
+	if c.config.TaskTransport != "mcp" || c.mcp == nil {
+		return nil, nil
+	}
+	var acknowledgement struct {
+		Bindings []mcpclient.BindingRef `json:"mcp_bindings"`
+	}
+	if err := json.Unmarshal(payload, &acknowledgement); err != nil {
+		return nil, fmt.Errorf("decode gateway acknowledgement: %w", err)
+	}
+	for _, binding := range acknowledgement.Bindings {
+		if err := binding.Validate(); err != nil {
+			return nil, fmt.Errorf("validate MCP binding snapshot: %w", err)
+		}
+		c.rememberMCPBinding(binding)
+	}
+	return acknowledgement.Bindings, nil
+}
+
+func (c *Client) validateGatewayEnvelope(envelope protocol.Envelope) error {
+	if envelope.ProtocolVersion != protocol.Version {
+		return fmt.Errorf(
+			"server selected unsupported protocol version %q",
+			envelope.ProtocolVersion,
+		)
+	}
+	if envelope.DeviceID != "" && envelope.DeviceID != c.config.Credentials.DeviceID {
+		return errors.New("received message for a different device")
+	}
+	return nil
+}
+
+func (c *Client) observeGatewaySequence(
+	sequence uint64,
+	allowGap bool,
+) (bool, error) {
 	c.mcpStateMu.Lock()
-	defer c.mcpStateMu.Unlock()
 	previous := c.gatewaySequence
+	gap := previous != 0 && sequence > previous+1
+	if gap && !allowGap {
+		c.mcpStateMu.Unlock()
+		return true, nil
+	}
 	if sequence > c.gatewaySequence {
 		c.gatewaySequence = sequence
 	}
-	return previous != 0 && sequence > previous+1
+	c.mcpStateMu.Unlock()
+	if sequence > previous {
+		if err := c.state.SaveGatewaySequence(sequence); err != nil {
+			return false, err
+		}
+	}
+	return gap, nil
+}
+
+func (c *Client) currentGatewaySequence() uint64 {
+	c.mcpStateMu.Lock()
+	defer c.mcpStateMu.Unlock()
+	return c.gatewaySequence
+}
+
+func (c *Client) setGatewaySequence(sequence uint64) error {
+	c.mcpStateMu.Lock()
+	if sequence < c.gatewaySequence {
+		c.mcpStateMu.Unlock()
+		return fmt.Errorf(
+			"Gateway sequence moved backwards from %d to %d",
+			c.gatewaySequence,
+			sequence,
+		)
+	}
+	c.gatewaySequence = sequence
+	c.mcpStateMu.Unlock()
+	return c.state.SaveGatewaySequence(sequence)
+}
+
+func awaitMessage(
+	ctx context.Context,
+	incoming <-chan protocol.Envelope,
+	readErrors <-chan error,
+	want string,
+) (protocol.Envelope, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return protocol.Envelope{}, ctx.Err()
+		case err := <-readErrors:
+			return protocol.Envelope{}, err
+		case envelope := <-incoming:
+			if envelope.ProtocolVersion != protocol.Version {
+				return protocol.Envelope{}, fmt.Errorf(
+					"server selected unsupported protocol version %q",
+					envelope.ProtocolVersion,
+				)
+			}
+			if envelope.Type != want {
+				return protocol.Envelope{}, fmt.Errorf(
+					"received %s while waiting for %s",
+					envelope.Type,
+					want,
+				)
+			}
+			return envelope, nil
+		}
+	}
+}
+
+func gatewaySupports(payload json.RawMessage, capability string) bool {
+	var welcome struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(payload, &welcome); err != nil {
+		return false
+	}
+	for _, item := range welcome.Capabilities {
+		if item == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) submitMCPResult(

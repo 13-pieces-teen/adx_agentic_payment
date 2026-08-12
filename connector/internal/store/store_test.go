@@ -80,6 +80,26 @@ func TestFileStoreRoundTripsCredentialsStagedEventAndReceipt(t *testing.T) {
 	}
 }
 
+func TestFileStorePersistsGatewaySequenceAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	fileStore := NewFileStore(path)
+	if err := fileStore.SaveGatewaySequence(7); err != nil {
+		t.Fatal(err)
+	}
+	if err := fileStore.SaveGatewaySequence(5); err == nil {
+		t.Fatal("gateway sequence must not move backwards")
+	}
+
+	restarted := NewFileStore(path)
+	sequence, err := restarted.GatewaySequence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence != 7 {
+		t.Fatalf("gateway sequence after restart = %d, want 7", sequence)
+	}
+}
+
 func TestAgentTaskResultOutboxPersistsUntilAcknowledged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	fileStore := NewFileStore(path)

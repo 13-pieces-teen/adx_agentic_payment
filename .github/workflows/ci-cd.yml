@@ -46,6 +46,63 @@ jobs:
       - name: Run the Python suite
         run: python -m pytest -q -p no:cacheprovider
 
+  postgres-integration:
+    name: PostgreSQL integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine3.22@sha256:b02d9b5bcf608c2719da32cdabee274a33841202487fd5dc9b065b63f886753f
+        env:
+          POSTGRES_DB: arena402
+          POSTGRES_USER: arena402_admin
+          POSTGRES_PASSWORD: arena402-ci-admin-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U arena402_admin -d arena402"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/ci.txt
+      - name: Install hash-locked dependencies
+        run: >-
+          python -m pip install
+          --require-hashes
+          --requirement requirements/ci.txt
+      - name: Apply the complete migration manifest
+        env:
+          DATABASE_URL: postgresql://arena402_admin:arena402-ci-admin-password@127.0.0.1:5432/arena402
+          ADX_CONNECTOR_MIGRATIONS_DIR: db/migrations
+        run: python deploy/scripts/migrate.py --scope all
+      - name: Provision least-privilege integration roles
+        env:
+          ADX_DATABASE_ADMIN_URL: postgresql://arena402_admin:arena402-ci-admin-password@127.0.0.1:5432/arena402
+          ADX_API_DATABASE_PASSWORD: arena402-ci-api-password
+          ADX_HOSTED_WORKER_DATABASE_PASSWORD: arena402-ci-worker-password
+          ADX_ARENA_CORE_DATABASE_PASSWORD: arena402-ci-core-password
+          ADX_SETTLEMENT_DATABASE_PASSWORD: arena402-ci-settlement-password
+          ADX_CREDENTIAL_CONTROLLER_DATABASE_PASSWORD: arena402-ci-controller-password
+          ADX_WALLET_SIGNER_DATABASE_PASSWORD: arena402-ci-wallet-signer-password
+          ADX_WALLET_IMPORTER_DATABASE_PASSWORD: arena402-ci-wallet-importer-password
+        run: python deploy/scripts/provision_db_roles.py
+      - name: Run the PostgreSQL integration layer
+        env:
+          ADX_TEST_POSTGRES_ADMIN_URL: postgresql://arena402_admin:arena402-ci-admin-password@127.0.0.1:5432/arena402
+          ADX_TEST_POSTGRES_API_URL: postgresql://adx_api_login:arena402-ci-api-password@127.0.0.1:5432/arena402
+          ADX_TEST_POSTGRES_WORKER_URL: postgresql://adx_hosted_worker_login:arena402-ci-worker-password@127.0.0.1:5432/arena402
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_connector_wss_postgres_integration.py
+
   connector:
     name: Connector tests
     runs-on: ubuntu-24.04
@@ -145,6 +202,7 @@ jobs:
       - python
       - connector
       - settlement
+      - postgres-integration
     env:
       DOCKER_BUILDKIT: "1"
     steps:
@@ -162,6 +220,12 @@ jobs:
             --file docker-compose.production.yml \
             config --quiet
           rm -f -- deploy/.env /tmp/arena402-ci-invite
+      - name: Check production shell syntax
+        run: >-
+          sh -n
+          deploy/scripts/api-entrypoint.sh
+          deploy/scripts/deploy.sh
+          deploy/scripts/release.sh
       - name: Build the production API image
         run: >-
           docker build
@@ -173,7 +237,7 @@ jobs:
           docker run --rm
           --entrypoint python
           arena402-api:${GITHUB_SHA}
-          -c 'import db_pool_config; import web.api; import web.connector_api'
+          -c 'import db_pool_config; import web.api; import web.connector_api; import web.connector_wss'
       - name: Build the production Facilitator image
         run: >-
           docker build

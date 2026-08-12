@@ -16,6 +16,7 @@ from fastapi import (
 )
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
+from starlette.routing import WebSocketRoute
 
 from .auth import AuthError, AuthPrincipal, ConnectorAuth
 from .models import (
@@ -32,7 +33,7 @@ from .models import (
     RuntimeInventoryItem,
 )
 from .rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
-from .service import ConnectorError, ConnectorGateway
+from .service import ConnectionReplacedError, ConnectorError, ConnectorGateway
 
 
 class ArenaConnectorRegistrar(Protocol):
@@ -260,13 +261,15 @@ def create_connector_router(
                         "protocol_version": service.protocol_version,
                         "heartbeat_interval_seconds": 15,
                         "heartbeat_lease_seconds": service.heartbeat_lease_seconds,
+                        "capabilities": ["transport.resume.v1"],
                     },
                 },
             )
-            await service.deliver_pending(device_id)
+            handshake_state = "awaiting_hello"
             while True:
                 raw = await websocket.receive_json()
                 try:
+                    mark_ready_after_ack = False
                     await service.assert_active_connection(
                         device_id, websocket, connection_generation
                     )
@@ -285,6 +288,15 @@ def create_connector_router(
                         raise ConnectorError(
                             403, "Envelope device_id does not match credentials"
                         )
+                    if handshake_state == "awaiting_hello" and envelope.type != "hello":
+                        raise ConnectorError(426, "Connector hello is required")
+                    if handshake_state == "awaiting_resume" and envelope.type != "resume":
+                        raise ConnectorError(426, "Connector resume is required")
+                    if handshake_state == "ready" and envelope.type in {
+                        "hello",
+                        "resume",
+                    }:
+                        raise ConnectorError(409, "Connector handshake is already complete")
                     await service.observe_inbound_sequence(
                         device_id,
                         envelope.sequence,
@@ -296,10 +308,25 @@ def create_connector_router(
                         envelope,
                         connection_generation,
                     )
+                    if envelope.type == "hello":
+                        capabilities = envelope.payload.get("capabilities", [])
+                        supports_resume = (
+                            isinstance(capabilities, list)
+                            and "transport.resume.v1" in capabilities
+                        )
+                        handshake_state = (
+                            "awaiting_resume" if supports_resume else "ready"
+                        )
+                        if not supports_resume:
+                            mark_ready_after_ack = True
+                    elif envelope.type == "resume":
+                        handshake_state = "ready"
+                        mark_ready_after_ack = True
                     if envelope.message_id:
                         ack_type = {
                             "runtime.event": "event.ack",
                             "agent_task.result": "agent_task.result.ack",
+                            "resume": "resume.ack",
                         }.get(envelope.type, "ack")
                         ack_payload = response or {"accepted": True}
                         if envelope.type == "runtime.event":
@@ -321,20 +348,33 @@ def create_connector_router(
                                 "payload": ack_payload,
                             },
                         )
-                    await service.deliver_pending(device_id)
+                    if mark_ready_after_ack:
+                        await service.mark_transport_ready(
+                            device_id,
+                            connection_generation,
+                        )
+                    if handshake_state == "ready":
+                        await service.deliver_pending(device_id)
                 except ConnectorError as exc:
                     connection_is_invalid = (
-                        exc.status_code == 410
+                        isinstance(exc, ConnectionReplacedError)
+                        or exc.status_code == 410
                         or exc.detail
                         == "WebSocket is no longer an active device connection"
                         or exc.detail == "Unsupported envelope protocol version"
                         or exc.detail.startswith("Unsupported protocol version ")
+                        or exc.detail in {
+                            "Connector hello is required",
+                            "Connector resume is required",
+                        }
                     )
                     if connection_is_invalid:
                         close_code = 4409
                         if exc.status_code == 410:
                             close_code = 4403
                         elif exc.detail.startswith("Unsupported"):
+                            close_code = 4406
+                        elif exc.detail.startswith("Connector "):
                             close_code = 4406
                         await websocket.close(
                             code=close_code,
@@ -379,10 +419,26 @@ def create_connector_router(
     return router
 
 
+def create_connector_websocket_router(service: ConnectorGateway) -> APIRouter:
+    """Mount only the Device WSS data plane on horizontally scaled workers."""
+
+    source = create_connector_router(service)
+    router = APIRouter()
+    router.routes.extend(
+        route
+        for route in source.routes
+        if isinstance(route, WebSocketRoute)
+        and route.path == "/api/connectors/ws"
+    )
+    return router
+
+
 def create_production_connector_router(
     service: ConnectorGateway,
     auth: ConnectorAuth,
     arena_registrar: ArenaConnectorRegistrar | None = None,
+    *,
+    include_websocket: bool = True,
 ) -> APIRouter:
     """Create the remotely reachable, session-authenticated Connector API."""
 
@@ -532,14 +588,19 @@ def create_production_connector_router(
         response.status_code = 204
         return None
 
-    router.include_router(
-        create_connector_router(
-            service,
-            auth=auth,
-            pairing_limiter=pairing_limiter,
-            arena_registrar=arena_registrar,
-        )
+    connector_router = create_connector_router(
+        service,
+        auth=auth,
+        pairing_limiter=pairing_limiter,
+        arena_registrar=arena_registrar,
     )
+    if not include_websocket:
+        connector_router.routes = [
+            route
+            for route in connector_router.routes
+            if not isinstance(route, WebSocketRoute)
+        ]
+    router.include_router(connector_router)
     return router
 
 
@@ -632,6 +693,12 @@ async def _handle_envelope(
             expected_generation=connection_generation,
         )
         return {"accepted": True}
+    if envelope.type == "resume":
+        return await service.resume_transport(
+            device_id,
+            envelope.payload,
+            expected_generation=connection_generation,
+        )
     if envelope.type == "inventory.snapshot":
         raw_runtimes = envelope.payload.get("runtimes", [])
         if not isinstance(raw_runtimes, list):

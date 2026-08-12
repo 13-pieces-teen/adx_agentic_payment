@@ -42,7 +42,11 @@ AgentTask 自动调度与 mixed-Runtime 回合编排也已接入。Connector 的
 
 当前实现仍有五个明确边界：
 
-1. Gateway beta 固定单个 Uvicorn worker；WSS 连接表、发送锁和限流桶仍在进程内，不支持水平扩展。
+1. Connector/Auth/Pairing/REST/MCP 控制面固定单个 Uvicorn worker；Device WSS 数据面
+   已独立部署并默认运行两个 worker。每个 Device 的 socket/发送锁仍归当前进程，
+   PostgreSQL lease + 单调 fencing token 保证同一时刻只有一个 owner；共享 Command
+   polling 与 fenced WSS 写入支持进程间接管。每个 WSS worker 的 Connector 与 Arena
+   两个 pool 默认各限 1 条连接，避免数据库连接预算失控。该形态是单主机扩展，不是跨主机 HA。
 2. Arena 的 Game/Round/Market/Negotiation/Inventory 已由 PostgreSQL 持久化；
    Connector terminal Result 只能进入 Arena-owned Result Sink，不能直接修改这些
    状态；真实 Codex 已完成 payment-disabled、mixed-Runtime 恢复以及正式
@@ -203,7 +207,7 @@ Arena Agent 仍由 Arena identity store 拥有；Arena route 通过 Connector Bi
 
 ## 6. 公开入口防滥用
 
-当前单 worker beta 使用有界、进程内 sliding-window limiter：
+单写控制面使用有界、进程内 sliding-window limiter：
 
 - invite/register/login 共用认证入口限流；
 - Pairing create/approve/exchange 使用独立限流；
@@ -216,7 +220,11 @@ Pairing 状态同时受两层约束：
 - `ADX_CONNECTOR_MAX_PENDING_PAIRINGS` 限制未完成 Pairing 总量；
 - PostgreSQL 状态事务写入后清理已到期的非终态 Pairing 行。
 
-这些控制适合当前单 worker beta。多 worker/多实例部署前，必须把限流、连接 ownership 和 lease 移到共享基础设施。
+这些控制适合当前单写控制面；公开 Auth/Pairing 请求不会进入多 worker WSS 应用，
+因此不需要把限流桶分布式化。Device 连接 lease、Command polling、WSS ACK/Event/
+Result 写入已经进入 PostgreSQL fencing；控制面读取会刷新共享 Device/Binding/
+Command/Event 视图。若未来连控制面也水平扩展，仍需共享限流并把 Pairing/REST
+mutation 改为完整的行级多 writer repository。
 
 ## 7. 持久化与投递语义
 
@@ -235,7 +243,10 @@ Pairing 状态同时受两层约束：
 - `connector_events`
 - `connector_audit`
 
-服务启动时恢复持久状态，所有 Device 被重新投影为 `offline` 或 `revoked`；此前仅标记为 `delivered`、尚未 ACK 的 Command 恢复为 `queued`。
+服务启动时只把没有有效共享 connection lease 的 Device 恢复为 `offline` 或
+`revoked`，并把这些 Device 中仅标记为 `delivered`、尚未 ACK 的 Command 恢复为
+`queued`；standby 不覆盖仍有 live owner 的投影。新的 connect/claim 也会原子重排
+该 Device 未 ACK 的 delivered Command。
 
 ### 7.2 Durable command pre-delivery barrier
 
@@ -251,16 +262,51 @@ validate + create command/audit
 
 任何命令都不能先通过 WSS 被 Connector 观察到、再补写数据库。重启后，已跨越 barrier 但未确认的命令可重新排队，并依赖 `binding_id + idempotency_key` 与 Connector 本地 receipt 避免重复副作用。
 
+默认 WSS 现在通过 capability `transport.resume.v1` 协商显式恢复握手。时序固定为
+`welcome → hello → hello ack → resume → resume.ack → inventory/replay`：
+
+- Connector 持久化已观察到的 Gateway outbound sequence，并上报本地 Event ACK
+  边界和仍待确认的 Result ID；
+- Gateway 返回权威 Event watermark、可安全 ACK 的 Result ID 和仍排队的
+  Command ID；配置 Arena Result Sink 时，只有 Sink 已接受的 Result 才可进入该集合；
+- Command 与 `task.available` 在 `resume.ack` 成功前不允许进入新连接；
+- Gateway 在任何带 sequence 的 WSS 帧可见前先持久化预留 sequence；
+- 纯 WSS 检测到 sequence gap 时不推进本地游标，而是断开并通过下一次 resume
+  重放 durable queued Command；MCP 模式的 gap 仍触发权威 task cursor sync；
+- 未声明该 capability 的旧端继续使用 legacy hello 路径。
+
+这解决的是断线、进程崩溃和 ACK 丢失恢复，不改变 Command receipt、Arena Result
+Sink 和 Deadline Finalizer 的权威边界。它与 7.3 的跨实例 ownership fencing 和
+共享 Command polling 组合后支持同主机多 WSS worker；仍不构成跨主机零停机或
+外部 HA 验收。
+
 Runtime Event 在 Connector 本地先进入 durable outbox，通过 Device-scoped sequence 累计 ACK；Gateway 按 Device/sequence 去重并把 watermark 从 PostgreSQL 状态恢复。
 
 ### 7.3 当前持久化边界
 
-`PersistentConnectorGateway` 当前对 Pairing、Device、Binding 和 Command 使用 snapshot/upsert，对 Event 与 Audit 使用增量 append，并在内存、启动加载和 PostgreSQL 中最多保留最近 10,000 条。累计 ACK watermark 与待补 gap 序列随 Device 状态持久化，因此裁剪旧 Event 不会破坏 Connector outbox 确认。这个实现适合单机 beta，不是高吞吐事件存储设计。WSS socket、per-device sender lock、connection generation 和 rate limiter 仍是进程内对象，因此：
+`PersistentConnectorGateway` 当前对控制面 Pairing/Binding mutation 使用 snapshot/upsert，对 Event 与 Audit 使用增量 append，并在内存、启动加载和 PostgreSQL 中最多保留最近 10,000 条。累计 ACK watermark 与待补 gap 序列随 Device 状态持久化，因此裁剪旧 Event 不会破坏 Connector outbox 确认。WSS owner 的 Device、Binding、Command ACK、Event 与 Result transition 会携带 connection fence，在 takeover/revoke 后整体拒绝旧事务。这个实现适合单机多进程 beta，不是高吞吐事件存储设计。
+
+`connector_device_connection_leases` 已提供跨实例 Device ownership：每次 connect
+原子递增 fencing token，真实 WSS heartbeat 续租；入站校验、Command/wake 下发、
+disconnect 和进程关闭均要求 owner + token 匹配。后来的实例接管后，旧连接在下一次
+协议活动时收到 `4409`，旧 disconnect 不会把新 owner 的 Device 覆盖为 offline。
+claim 或 online 状态持久化失败时会回滚本地 socket owner 并释放 lease。
+
+dedicated WSS workers 现在周期性按 `instance_id + unexpired lease` 从 PostgreSQL
+拉取 queued Command，并一并加载 Binding。outbound sequence 与 `queued → delivered`
+只在 fencing token 仍匹配时提交；接管 claim 会在同一事务把未 ACK 的 delivered
+Command 恢复为 queued。幂等重放先读取共享权威 Command，不能把 terminal/delivered
+状态倒退为旧 snapshot。投递语义仍是至少一次，Connector receipt 负责去重。
+
+WSS worker 在认证时按 Device 增量加载共享 Device/Binding/Command/Result/Event；
+控制面 list/get 会从 PostgreSQL 刷新 Device、Binding、Command 与 Event。Auth、
+Pairing、REST mutation 与 MCP 仍单写，限流桶也只存在于该控制面。`task.available`
+仍是可丢低延迟 hint，MCP 权威恢复依赖既有 cursor sync。因此：
 
 - API 固定一个 Uvicorn worker；
-- 不支持无协调的多副本；
+- 暂不启动多副本；下一步必须完成剩余行级 CAS/refresh、共享限流和 drain；
 - 不宣称零停机或高可用；
-- 扩展前需要把其余 mutable snapshot 改为行级增量 repository，并增加共享 connection ownership/lease、分布式限流和容量测试。
+- 扩展前仍需分布式限流、跨实例故障注入和容量测试。
 
 ## 8. Runtime 发现与控制
 
@@ -477,7 +523,7 @@ private chain-of-thought。
 仓库提供：
 
 - `docker-compose.production.yml`；
-- PostgreSQL 17、migration job、单 worker FastAPI、Caddy 2；
+- PostgreSQL 17、migration job、单 worker Connector 控制面、默认双 worker WSS 数据面、Caddy 2；
 - 域名模式的 Caddy 自动 TLS；
 - 裸 IPv4 的 HTTP challenge bootstrap、Certbot short-lived IP certificate 和 systemd 续期 timer；
 - 只暴露 80/443，PostgreSQL 和 API 仅在 Docker 网络；
@@ -489,8 +535,8 @@ private chain-of-thought。
 见 [`../deploy/install/README.md`](../deploy/install/README.md)。
 
 当前生产后端、WSS Connector 路径和 Phase D mixed-Runtime Game 已有实机证据；
-跨平台安装器、活动局中途整机重启、多实例 WSS ownership 和容量仍应按各自证据
-单独声明，不能由一次生产 Game 推断。
+跨平台安装器、活动局中途整机重启、跨主机 WSS 故障转移和容量仍应按各自证据
+单独声明，不能由一次生产 Game 或 ownership fencing 单测推断。
 
 ## 12. 当前实现矩阵
 
@@ -499,13 +545,13 @@ private chain-of-thought。
 | Self-hosted Auth | `connector_gateway/auth.py`、`repository.py`、`postgres_repository.py` | 已实现公开用户名/密码注册、可选 invite、GitHub OAuth、login/session/logout、Argon2id、签名 Session Cookie、CSRF、session revoke |
 | Production config | `connector_gateway/config.py`、`production.py`、`web/api.py` | 已实现 fail-closed；遗留 Supabase 工厂已删除 |
 | Tenant-like object auth | `connector_gateway/api.py`、`web/api.py` | 已实现 user-owner scope 和跨用户对象隐藏；组织 tenant/RBAC 未实现 |
-| PostgreSQL persistence | `db/migrations/002_connector_gateway.sql`、`020_connector_agent_task_results.sql`、`persistent_service.py` | 已实现 beta 持久化与重启恢复；terminal AgentTaskResult 使用独立 immutable inbox；Event/Audit 增量且有界，其余 mutable state snapshot/upsert、单 worker |
-| Command delivery | `connector_gateway/service.py`、`persistent_service.py` | 已实现 durable pre-delivery barrier、重排与幂等 |
+| PostgreSQL persistence | `db/migrations/002_connector_gateway.sql`、`020_connector_agent_task_results.sql`、`084_connector_connection_lease_fencing.sql`、`persistent_service.py` | 已实现 beta 持久化与重启恢复；terminal AgentTaskResult 使用独立 immutable inbox；Event/Audit 增量且有界；WSS mutable transition 受 Device fence 保护 |
+| Command delivery | `connector_gateway/service.py`、`persistent_service.py`、`command_router.py` | 已实现 durable pre-delivery barrier、owner-scoped 共享 polling、fenced sequence/delivery/ACK、接管重排与幂等；默认双 WSS worker |
 | Public ingress protection | `rate_limit.py`、`service.py` | 已实现 auth/Pairing 限流、key 上限、Pairing 过期清理与容量上限 |
 | Local Connector | `connector/` | 已实现 discovery、pair/connect/run、WSS、outbox/receipt、owned child；默认 detection-only |
 | Onboarding | 外部 `sunruize93-cmyk/arena402`、`deploy/install/` | 已实现浏览器授权、Windows Scheduled Task、Linux systemd user service |
 | Frontend | 外部 `sunruize93-cmyk/arena402` | 产品 UI 的唯一代码源；本仓库只维护后端契约 |
-| Self-hosted deployment | `docker-compose.production.yml`、`deploy/` | 单机生产后端、发布身份、备份/回滚和 Phase D Game 已验收；高可用、多实例 WSS 与容量未验收 |
+| Self-hosted deployment | `docker-compose.production.yml`、`deploy/` | 单写控制面 + 默认双 WSS worker 已配置；单机生产后端、发布身份、备份/回滚和 Phase D Game 已验收；新的双 worker 配置尚未部署，跨主机 HA 与容量未验收 |
 | Arena business durability | `arena_game/`、`arena_core/`、`db/migrations/006_*`–`012_*` | Game/Round/Pool/Pairing/Negotiation/Inventory/Ranking 已持久化；Connector 仍不可直接写入 |
 | Runtime approval | `connector/internal/driver/` | 未实现完整审批闭环；生产 task 必须保持 detection-only |
 | Signed release / SBOM | `deploy/artifacts/` | 未实现；当前仅 HTTPS + SHA-256 |
@@ -523,6 +569,12 @@ private chain-of-thought。
 - [x] Pairing 总量上限和过期清理。
 - [x] PostgreSQL 风格 repository 重启恢复、Device revoke 和旧 token 失效。
 - [x] Command 在 WSS 发送前持久化，重试保持幂等。
+- [x] 非 owner 实例写入的 queued Command 可由当前 WSS owner 拉取；接管重放和
+      delivery/ACK 竞态不会倒退共享 Command 状态。
+- [x] 启动后新注册 Device 可被 WSS worker 增量加载；控制面可读取 WSS owner 更新的
+      Binding/Command/Event；revoke、late ACK 与 disconnect 不能越过旧 fence。
+- [x] 真实 PostgreSQL 双实例测试覆盖 Command takeover、至少一次重放、新 owner ACK
+      和旧 owner fencing；graceful drain 以 `1012` 释放连接 lease。
 - [x] 任意 shell/argv、跨 binding session、云端 resume token 和 stale epoch 被拒绝。
 - [x] Connector event outbox、receipt fail-closed、重连和 replacement/revoke 退出语义。
 - [x] owner-scoped Local Agent 注册与参赛冻结 binding epoch。
@@ -552,7 +604,8 @@ go build ./...
 - [ ] 分别保存 Windows/Linux 公共安装器下载、哈希、授权和自启动证据。
 - [ ] 活动 Game 中途执行整机重启并验证 WSS、Task lease、Result outbox、Settlement
       与 Arena projection 恢复；两局之间重启不能替代本项。
-- [ ] 多 API 实例前实现共享 WSS ownership 与限流，并完成故障转移。
+- [ ] 在目标主机部署新的控制面/WSS 拆分，保存 Caddy upgrade、双 worker 进程、真实
+      Connector 重连与故障注入证据；本地 PostgreSQL 双实例测试不能替代外部验收。
 - [ ] 完成 12/25/50/100 Agent 分档及每 Runtime/Task 的正式 P95/P99 校准。
 - [ ] 公共第三方 Facilitator 兼容验收。
 
@@ -582,8 +635,8 @@ go build ./...
 2. 完成目标服务器部署和外部 E2E，收集安装到 online 的耗时与失败点。
 3. 为 Connector artifacts 增加签名、SBOM、独立信任根和安全升级/回滚渠道。
 4. 将 Runtime Event 默认收敛为 metadata-only，补 retention、删除和隐私说明。
-5. 实现共享限流、WSS connection ownership、mutable state 行级增量 repository
-   和多实例 drain 后再扩展 worker。
+5. 在目标主机执行控制面/WSS 拆分发布与真实 Connector 故障注入；若未来扩展控制面，
+   再增加共享限流和 Pairing/REST mutation 的行级多 writer repository。
 6. 完成 Codex app-server/受支持 Claude SDK 的 approval 闭环与认证兼容矩阵。
 7. 以独立入口设计 Native A2A Endpoint，复用业务身份、任务关联和审计模型，但不
    复用 Device pairing 或本地 process supervisor。

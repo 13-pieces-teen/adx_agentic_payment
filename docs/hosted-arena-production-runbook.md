@@ -506,7 +506,7 @@ hosted task concurrency per replica: 25
 theoretical hosted task slots: 100
 settlement execution concurrency: 4
 facilitator shards: 4 independent EOA services
-API processes: 1
+API processes: 2 stateless + 1 Connector control + 2 Connector WSS
 API max concurrency: 64
 PostgreSQL max_connections: 120
 ```
@@ -518,6 +518,7 @@ Compose 常驻容器内存上限：
 | PostgreSQL | 768 MB |
 | API | 512 MB |
 | Connector API | 384 MB |
+| Connector WSS | 384 MB（容器内 2 worker） |
 | Hosted Worker | 4 × 512 MB |
 | Official LiteLLM | 1536 MB |
 | Arena Worker | 320 MB |
@@ -528,7 +529,7 @@ Compose 常驻容器内存上限：
 | GameCoin Provisioner | 256 MB |
 | Caddy | 128 MB |
 
-上述常驻服务的配置硬上限合计约 `7.5 GiB`；它们不会同时打满，但不能把硬上限
+上述常驻服务的配置硬上限合计约 `7.9 GiB`；它们不会同时打满，但不能把硬上限
 相加后误当成可用 headroom。2026-08-09 的 100-Agent 支付实测整机内存峰值为
 `3.74 GiB`，4 vCPU / 8 GiB 对当前 100 Hosted 单局保有可用余量；下一阶段继续
 测重复运行、20 真人流量叠加和故障恢复。旧 2C4G 主机不再是支持目标；不能通过
@@ -538,6 +539,10 @@ Vercel 前端不占用这台服务器；后端 Compose 不包含 Web 服务。
 120 个数据库连接是当前起步值。所有服务必须继续满足
 `sum(replica_count × pool_max_size) <= 84`，其余至少 30% 留给 migration、健康
 检查、恢复和运维。增加 Worker 副本、API 进程或连接池前必须重新计算预算。
+新的 Connector WSS 容器默认两个进程；每进程各有 Connector 与 Arena 两个 pool，
+每池上限 1，最多增加 4 个 API-side 连接。相对既有实测 `69/120` 峰值，规划峰值为
+`73/120`，仍低于 84 的应用预算。
+这是配置预算推算，需在目标主机发布后以实际连接峰值重新验收。
 
 关键实现要求：
 

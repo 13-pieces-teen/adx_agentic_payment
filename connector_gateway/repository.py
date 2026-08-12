@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 
@@ -14,6 +14,10 @@ class DuplicateIdentityError(Exception):
 
 
 class InvalidInviteError(Exception):
+    pass
+
+
+class ConnectionFenceError(Exception):
     pass
 
 
@@ -77,6 +81,101 @@ class ConnectorRepository(Protocol):
 
     async def save_gateway_state(self, state: dict[str, Any]) -> None: ...
 
+    async def claim_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        lease_seconds: int,
+    ) -> int: ...
+
+    async def is_device_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+    ) -> bool: ...
+
+    async def has_active_device_connection(self, device_id: str) -> bool: ...
+
+    async def renew_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        lease_seconds: int,
+    ) -> bool: ...
+
+    async def release_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+    ) -> bool: ...
+
+    async def release_device_connection_and_save_device(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        device: dict[str, Any],
+    ) -> bool: ...
+
+    async def list_queued_command_routes_for_connection_owner(
+        self,
+        instance_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def get_command_by_idempotency_key(
+        self,
+        binding_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def get_binding(self, binding_id: str) -> dict[str, Any] | None: ...
+
+    async def save_command_for_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        command: dict[str, Any],
+    ) -> bool: ...
+
+    async def save_outbound_sequence_for_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        sequence: int,
+    ) -> bool: ...
+
+    async def get_device(self, device_id: str) -> dict[str, Any] | None: ...
+
+    async def load_device_runtime_state(self, device_id: str) -> dict[str, Any]: ...
+
+    async def list_devices(self, owner_id: str | None = None) -> list[dict[str, Any]]: ...
+
+    async def list_bindings(self, device_id: str | None = None) -> list[dict[str, Any]]: ...
+
+    async def list_commands(
+        self,
+        binding_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def list_events(
+        self,
+        binding_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
+
+    async def list_audit(
+        self,
+        limit: int,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
 
 class MemoryConnectorRepository:
     """In-memory repository used only by contract tests and local unit tests."""
@@ -97,6 +196,7 @@ class MemoryConnectorRepository:
             "events": [],
             "audit": [],
         }
+        self.connection_leases: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> None:
         return None
@@ -270,6 +370,28 @@ class MemoryConnectorRepository:
 
     async def save_gateway_state(self, state: dict[str, Any]) -> None:
         async with self._lock:
+            fence = state.get("_connection_fence")
+            if fence is not None:
+                device_id = str(fence["device_id"])
+                lease = self.connection_leases.get(device_id)
+                current_device = next(
+                    (
+                        item
+                        for item in self.gateway_state.get("devices", [])
+                        if str(item["device_id"]) == device_id
+                    ),
+                    None,
+                )
+                if not (
+                    lease
+                    and lease["instance_id"] == str(fence["instance_id"])
+                    and int(lease["fencing_token"])
+                    == int(fence["fencing_token"])
+                    and lease["lease_expires_at"] > datetime.now(timezone.utc)
+                    and current_device is not None
+                    and not current_device.get("revoked_at")
+                ):
+                    raise ConnectionFenceError
             # Mutable entities are snapshots. Events and audit entries are
             # append-only deltas so production heartbeats do not replay the
             # complete observability history.
@@ -316,3 +438,350 @@ class MemoryConnectorRepository:
                 "events": list(current_events.values())[-10_000:],
                 "audit": list(current_audit.values())[-10_000:],
             }
+
+    async def claim_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        lease_seconds: int,
+    ) -> int:
+        async with self._lock:
+            previous = self.connection_leases.get(device_id)
+            fencing_token = int(previous["fencing_token"]) + 1 if previous else 1
+            now = datetime.now(timezone.utc)
+            self.connection_leases[device_id] = {
+                "device_id": device_id,
+                "instance_id": instance_id,
+                "fencing_token": fencing_token,
+                "lease_expires_at": now + timedelta(seconds=lease_seconds),
+            }
+            for command in self.gateway_state.get("commands", []):
+                if (
+                    command["device_id"] == device_id
+                    and command["status"] == "delivered"
+                ):
+                    command["status"] = "queued"
+                    command["delivered_at"] = None
+                    command["updated_at"] = now.isoformat().replace("+00:00", "Z")
+            return fencing_token
+
+    async def is_device_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+    ) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            return bool(
+                lease
+                and lease["instance_id"] == instance_id
+                and int(lease["fencing_token"]) == fencing_token
+                and lease["lease_expires_at"] > datetime.now(timezone.utc)
+            )
+
+    async def has_active_device_connection(self, device_id: str) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            return bool(
+                lease
+                and lease["lease_expires_at"] > datetime.now(timezone.utc)
+            )
+
+    async def renew_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        lease_seconds: int,
+    ) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            now = datetime.now(timezone.utc)
+            if not (
+                lease
+                and lease["instance_id"] == instance_id
+                and int(lease["fencing_token"]) == fencing_token
+                and lease["lease_expires_at"] > now
+            ):
+                return False
+            lease["lease_expires_at"] = now + timedelta(seconds=lease_seconds)
+            return True
+
+    async def release_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+    ) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            if not (
+                lease
+                and lease["instance_id"] == instance_id
+                and int(lease["fencing_token"]) == fencing_token
+            ):
+                return False
+            # Retain the row/token so a future claim cannot reuse a stale token.
+            lease["lease_expires_at"] = datetime.now(timezone.utc)
+            return True
+
+    async def release_device_connection_and_save_device(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        device: dict[str, Any],
+    ) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            if not (
+                lease
+                and lease["instance_id"] == instance_id
+                and int(lease["fencing_token"]) == fencing_token
+            ):
+                return False
+            lease["lease_expires_at"] = datetime.now(timezone.utc)
+            devices = {
+                str(item["device_id"]): copy.deepcopy(item)
+                for item in self.gateway_state.get("devices", [])
+            }
+            current = devices.get(device_id)
+            # A control-plane revoke is monotonic. A WSS worker can still be
+            # unwinding an old socket, but its offline projection must not
+            # restore the old token or erase revoked_at.
+            if current is None or not current.get("revoked_at"):
+                devices[device_id] = copy.deepcopy(device)
+            self.gateway_state["devices"] = list(devices.values())
+            return True
+
+    async def list_queued_command_routes_for_connection_owner(
+        self,
+        instance_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        async with self._lock:
+            owned_device_ids = {
+                device_id
+                for device_id, lease in self.connection_leases.items()
+                if lease["instance_id"] == instance_id
+                and lease["lease_expires_at"] > now
+            }
+            revoked_device_ids = {
+                str(device["device_id"])
+                for device in self.gateway_state.get("devices", [])
+                if device.get("revoked_at")
+            }
+            owned_device_ids.difference_update(revoked_device_ids)
+            bindings = {
+                str(binding["binding_id"]): binding
+                for binding in self.gateway_state.get("bindings", [])
+            }
+            routes = [
+                {
+                    "command": copy.deepcopy(command),
+                    "binding": copy.deepcopy(bindings[str(command["binding_id"])]),
+                }
+                for command in self.gateway_state.get("commands", [])
+                if command["device_id"] in owned_device_ids
+                and command["status"] == "queued"
+                and str(command["binding_id"]) in bindings
+                and datetime.fromisoformat(
+                    str(command["expires_at"]).replace("Z", "+00:00")
+                )
+                > now
+            ]
+            routes.sort(
+                key=lambda route: (
+                    str(route["command"]["created_at"]),
+                    str(route["command"]["command_id"]),
+                )
+            )
+            return routes[:limit]
+
+    async def get_command_by_idempotency_key(
+        self,
+        binding_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        async with self._lock:
+            command = next(
+                (
+                    item
+                    for item in self.gateway_state.get("commands", [])
+                    if item["binding_id"] == binding_id
+                    and item["idempotency_key"] == idempotency_key
+                ),
+                None,
+            )
+            return copy.deepcopy(command) if command is not None else None
+
+    async def get_binding(self, binding_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            binding = next(
+                (
+                    item
+                    for item in self.gateway_state.get("bindings", [])
+                    if str(item["binding_id"]) == binding_id
+                ),
+                None,
+            )
+            return copy.deepcopy(binding) if binding is not None else None
+
+    async def save_command_for_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        command: dict[str, Any],
+    ) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            if not (
+                lease
+                and lease["instance_id"] == instance_id
+                and int(lease["fencing_token"]) == fencing_token
+                and lease["lease_expires_at"] > datetime.now(timezone.utc)
+            ):
+                return False
+            commands = {
+                str(item["command_id"]): copy.deepcopy(item)
+                for item in self.gateway_state.get("commands", [])
+            }
+            current = commands.get(str(command["command_id"]))
+            if current is None or current.get("status") != "queued":
+                return False
+            commands[str(command["command_id"])] = copy.deepcopy(command)
+            self.gateway_state["commands"] = list(commands.values())
+            return True
+
+    async def save_outbound_sequence_for_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        sequence: int,
+    ) -> bool:
+        async with self._lock:
+            lease = self.connection_leases.get(device_id)
+            if not (
+                lease
+                and lease["instance_id"] == instance_id
+                and int(lease["fencing_token"]) == fencing_token
+                and lease["lease_expires_at"] > datetime.now(timezone.utc)
+            ):
+                return False
+            for device in self.gateway_state.get("devices", []):
+                if str(device["device_id"]) == device_id:
+                    device["outbound_sequence"] = sequence
+                    return True
+            return False
+
+    async def get_device(self, device_id: str) -> dict[str, Any] | None:
+        async with self._lock:
+            device = next(
+                (
+                    item
+                    for item in self.gateway_state.get("devices", [])
+                    if str(item["device_id"]) == device_id
+                ),
+                None,
+            )
+            return copy.deepcopy(device) if device is not None else None
+
+    async def load_device_runtime_state(self, device_id: str) -> dict[str, Any]:
+        async with self._lock:
+            device = next(
+                (
+                    item
+                    for item in self.gateway_state.get("devices", [])
+                    if str(item["device_id"]) == device_id
+                ),
+                None,
+            )
+            return {
+                "device": copy.deepcopy(device),
+                "bindings": [
+                    copy.deepcopy(item)
+                    for item in self.gateway_state.get("bindings", [])
+                    if str(item["device_id"]) == device_id
+                ],
+                "commands": [
+                    copy.deepcopy(item)
+                    for item in self.gateway_state.get("commands", [])
+                    if str(item["device_id"]) == device_id
+                ],
+                "agent_task_results": [
+                    copy.deepcopy(item)
+                    for item in self.gateway_state.get("agent_task_results", [])
+                    if str(item["device_id"]) == device_id
+                ],
+                "events": [
+                    copy.deepcopy(item)
+                    for item in self.gateway_state.get("events", [])
+                    if str(item["device_id"]) == device_id
+                ],
+            }
+
+    async def list_devices(self, owner_id: str | None = None) -> list[dict[str, Any]]:
+        async with self._lock:
+            now = datetime.now(timezone.utc)
+            return [
+                {
+                    **copy.deepcopy(item),
+                    "_has_active_connection": bool(
+                        (lease := self.connection_leases.get(str(item["device_id"])))
+                        and lease["lease_expires_at"] > now
+                    ),
+                }
+                for item in self.gateway_state.get("devices", [])
+                if owner_id is None or str(item["owner_id"]) == owner_id
+            ]
+
+    async def list_bindings(
+        self,
+        device_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [
+                copy.deepcopy(item)
+                for item in self.gateway_state.get("bindings", [])
+                if device_id is None or str(item["device_id"]) == device_id
+            ]
+
+    async def list_commands(
+        self,
+        binding_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [
+                copy.deepcopy(item)
+                for item in self.gateway_state.get("commands", [])
+                if str(item["binding_id"]) == binding_id
+            ][-limit:]
+
+    async def list_events(
+        self,
+        binding_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [
+                copy.deepcopy(item)
+                for item in self.gateway_state.get("events", [])
+                if str(item["binding_id"]) == binding_id
+            ][-limit:]
+
+    async def list_audit(
+        self,
+        limit: int,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [
+                copy.deepcopy(item)
+                for item in self.gateway_state.get("audit", [])
+                if owner_id is None or item.get("owner_id") == owner_id
+            ][-limit:]

@@ -1,4 +1,4 @@
-"""Bounded single-worker rate limiting for public Connector ingress."""
+"""Bounded rate limiting for the single-writer public control plane."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class RateLimitExceeded(Exception):
 
 
 class SlidingWindowRateLimiter:
-    """In-memory limiter matching the production beta's one-worker boundary."""
+    """In-memory limiter matching the production control-plane boundary."""
 
     def __init__(
         self,

@@ -48,6 +48,7 @@ type state struct {
 	SchemaVersion    int                                         `json:"schema_version"`
 	Credentials      Credentials                                 `json:"credentials"`
 	NextSequence     uint64                                      `json:"next_sequence"`
+	GatewaySequence  uint64                                      `json:"gateway_sequence,omitempty"`
 	StagedEvent      *protocol.RuntimeEvent                      `json:"staged_event,omitempty"`
 	CommandReceipts  map[string]protocol.CommandAck              `json:"command_receipts,omitempty"`
 	AgentTaskResults map[string]protocol.AgentTaskResultEnvelope `json:"agent_task_results,omitempty"`
@@ -104,6 +105,45 @@ func (s *FileStore) SaveCredentials(credentials Credentials) error {
 	}
 	credentials.UpdatedAt = time.Now().UTC()
 	current.Credentials = credentials
+	return s.save(current)
+}
+
+func (s *FileStore) GatewaySequence() (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := s.load()
+	if errors.Is(err, ErrNotInitialized) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return current.GatewaySequence, nil
+}
+
+func (s *FileStore) SaveGatewaySequence(sequence uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := s.load()
+	if err != nil && !errors.Is(err, ErrNotInitialized) {
+		return err
+	}
+	if errors.Is(err, ErrNotInitialized) {
+		current = newState()
+	}
+	if sequence < current.GatewaySequence {
+		return fmt.Errorf(
+			"gateway sequence cannot move backwards from %d to %d",
+			current.GatewaySequence,
+			sequence,
+		)
+	}
+	if sequence == current.GatewaySequence {
+		return nil
+	}
+	current.GatewaySequence = sequence
 	return s.save(current)
 }
 
