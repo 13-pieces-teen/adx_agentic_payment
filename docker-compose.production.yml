@@ -293,6 +293,49 @@ services:
     mem_limit: 384m
     logging: *default-logging
 
+  connector-wss:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    init: true
+    environment:
+      <<: *api-environment
+      ADX_ASGI_APP: web.connector_wss:create_app
+      ADX_API_WORKERS: ${ADX_CONNECTOR_WSS_WORKERS:-2}
+      ADX_API_MAX_CONCURRENCY: ${ADX_CONNECTOR_WSS_MAX_CONCURRENCY:-1024}
+      ADX_API_DB_POOL_MAX_SIZE: ${ADX_CONNECTOR_WSS_DB_POOL_MAX_SIZE:-1}
+      ADX_FORWARDED_ALLOW_IPS: "*"
+    depends_on:
+      provision-db-roles:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen("http://127.0.0.1:8000/api/ready", timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    stop_grace_period: 45s
+    cpus: 0.40
+    mem_limit: 384m
+    logging: *default-logging
+
   hosted-worker:
     profiles:
       - hosted
@@ -1016,6 +1059,8 @@ services:
       api:
         condition: service_healthy
       connector-api:
+        condition: service_healthy
+      connector-wss:
         condition: service_healthy
     environment:
       ADX_PUBLIC_HOST: ${ADX_PUBLIC_HOST:?Set ADX_PUBLIC_HOST in deploy/.env}

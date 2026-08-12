@@ -37,6 +37,8 @@ def build_production_connector(
     repository: ConnectorRepository | None = None,
     github_oauth_client: GithubOAuthClient | None = None,
     arena_registrar: ArenaConnectorRegistrar | None = None,
+    *,
+    include_websocket: bool = True,
 ) -> ProductionConnectorBundle:
     """Build a fail-closed production bundle without performing network I/O."""
 
@@ -74,5 +76,6 @@ def build_production_connector(
             service,
             auth,
             arena_registrar=arena_registrar,
+            include_websocket=include_websocket,
         ),
     )

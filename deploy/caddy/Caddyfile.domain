@@ -36,6 +36,15 @@
 		file_server
 	}
 
+	@connectorWss path /api/connectors/ws
+	handle @connectorWss {
+		reverse_proxy connector-wss:8000 {
+			health_uri /api/ready
+			health_interval 30s
+			health_timeout 5s
+		}
+	}
+
 	@connector path /api/connectors* /api/auth* /api/v1/admin/current-game /api/v1/admin/current-game/matchmaking /mcp
 	handle @connector {
 		reverse_proxy connector-api:8000 {

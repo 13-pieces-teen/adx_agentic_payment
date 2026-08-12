@@ -38,6 +38,11 @@ class ConnectorError(Exception):
         self.detail = detail
 
 
+class ConnectionReplacedError(ConnectorError):
+    def __init__(self, detail: str = "WebSocket was replaced by a newer connection"):
+        super().__init__(409, detail)
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -134,6 +139,7 @@ class ConnectorGateway:
         self.audit: list[dict[str, Any]] = []
         self.connections: dict[str, Any] = {}
         self.connection_sets: dict[str, set[Any]] = {}
+        self.connection_ready_generations: dict[str, int] = {}
         self._send_locks: dict[str, asyncio.Lock] = {}
         # Connector event sequences are monotonic per device so a single
         # cumulative ACK can safely compact the device's durable outbox.
@@ -313,6 +319,7 @@ class ConnectorGateway:
                 generation = int(device["_connection_generation"])
                 previous = self.connections.get(device_id)
                 self.connections[device_id] = websocket
+                self.connection_ready_generations.pop(device_id, None)
                 self.connection_sets.setdefault(device_id, set()).add(websocket)
                 # A command may have reached the previous socket immediately before
                 # it was lost. Requeue only the unacknowledged delivery; the
@@ -347,6 +354,7 @@ class ConnectorGateway:
                     self.connection_sets.pop(device_id, None)
             if self.connections.get(device_id) is websocket:
                 self.connections.pop(device_id, None)
+                self.connection_ready_generations.pop(device_id, None)
                 device = self.devices.get(device_id)
                 if device:
                     device["status"] = "offline"
@@ -517,9 +525,20 @@ class ConnectorGateway:
                 generation is not None
                 and device["_connection_generation"] != generation
             ):
-                raise ConnectorError(
-                    409, "WebSocket is no longer an active device connection"
+                raise ConnectionReplacedError(
+                    "WebSocket is no longer an active device connection"
                 )
+
+    async def mark_transport_ready(
+        self,
+        device_id: str,
+        expected_generation: int,
+    ) -> None:
+        async with self._lock:
+            device = self._get_device(device_id)
+            self._ensure_not_revoked(device)
+            self._ensure_connection_generation(device, expected_generation)
+            self.connection_ready_generations[device_id] = expected_generation
 
     async def send_active_message(
         self,
@@ -827,6 +846,34 @@ class ConnectorGateway:
 
         return None
 
+    async def _prepare_outbound_sequence(
+        self,
+        device_id: str,
+        sequence: int,
+    ) -> None:
+        """Persistence hook after reserving a sequence and before WSS delivery."""
+
+        return None
+
+    async def _commit_command_delivery(
+        self,
+        device_id: str,
+        websocket: Any,
+        generation: int,
+        command: dict[str, Any],
+    ) -> None:
+        """Persistence hook after a Command frame is written to the socket."""
+
+        return None
+
+    async def _can_deliver_to_connection(
+        self,
+        device_id: str,
+        websocket: Any,
+        generation: int,
+    ) -> bool:
+        return True
+
     async def deliver_pending(self, device_id: str) -> int:
         """Deliver queued commands to the active socket without holding the state lock."""
         send_lock = self._send_locks.setdefault(device_id, asyncio.Lock())
@@ -839,6 +886,7 @@ class ConnectorGateway:
             self._ensure_not_revoked(device)
             websocket = self.connections.get(device_id)
             generation = int(device["_connection_generation"])
+            ready = self.connection_ready_generations.get(device_id) == generation
             now = utc_now()
             queued: list[dict[str, Any]] = []
             for command in self.commands.values():
@@ -851,11 +899,23 @@ class ConnectorGateway:
                     command["updated_at"] = iso(now)
                     continue
                 queued.append(command)
-        if websocket is None:
+        if websocket is None or not ready:
+            return 0
+        if not await self._can_deliver_to_connection(
+            device_id,
+            websocket,
+            generation,
+        ):
             return 0
 
         delivered = 0
         for command in queued:
+            if not await self._can_deliver_to_connection(
+                device_id,
+                websocket,
+                generation,
+            ):
+                break
             async with self._lock:
                 device = self._get_device(device_id)
                 self._ensure_not_revoked(device)
@@ -869,6 +929,13 @@ class ConnectorGateway:
                     continue
                 device["outbound_sequence"] += 1
                 sequence = device["outbound_sequence"]
+            await self._prepare_outbound_sequence(device_id, int(sequence))
+            if not await self._can_deliver_to_connection(
+                device_id,
+                websocket,
+                generation,
+            ):
+                break
             try:
                 await websocket.send_json(
                     {
@@ -911,6 +978,16 @@ class ConnectorGateway:
                     current["delivery_attempts"] += 1
                     current["updated_at"] = current["delivered_at"]
                     delivered += 1
+                    delivered_command = dict(current)
+                else:
+                    delivered_command = None
+            if delivered_command is not None:
+                await self._commit_command_delivery(
+                    device_id,
+                    websocket,
+                    generation,
+                    delivered_command,
+                )
         return delivered
 
     async def observe_inbound_sequence(
@@ -939,6 +1016,97 @@ class ConnectorGateway:
             if previous is None or sequence > previous:
                 device["last_inbound_sequence"] = sequence
 
+    async def resume_transport(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Reconcile durable WSS cursors before replaying queued commands."""
+
+        required = {
+            "last_gateway_sequence",
+            "event_ack_through",
+            "pending_result_ids",
+        }
+        if set(payload) != required:
+            raise ConnectorError(422, "Invalid transport resume payload")
+        last_gateway_sequence = payload["last_gateway_sequence"]
+        event_ack_through = payload["event_ack_through"]
+        pending_result_ids = payload["pending_result_ids"]
+        if (
+            not isinstance(last_gateway_sequence, int)
+            or isinstance(last_gateway_sequence, bool)
+            or not isinstance(event_ack_through, int)
+            or isinstance(event_ack_through, bool)
+            or last_gateway_sequence < 0
+            or event_ack_through < 0
+            or not isinstance(pending_result_ids, list)
+            or len(pending_result_ids) > 512
+            or any(
+                not isinstance(item, str) or not item or len(item) > 256
+                for item in pending_result_ids
+            )
+        ):
+            raise ConnectorError(422, "Invalid transport resume payload")
+
+        async with self._lock:
+            device = self._get_device(device_id)
+            self._ensure_not_revoked(device)
+            self._ensure_connection_generation(device, expected_generation)
+            gateway_sequence = int(device.get("outbound_sequence", 0))
+            if last_gateway_sequence > gateway_sequence:
+                raise ConnectorError(
+                    409,
+                    "Connector resume cursor is ahead of the Gateway",
+                )
+            authoritative_event_ack = self.event_ack_watermarks.get(device_id, 0)
+            if event_ack_through > authoritative_event_ack:
+                raise ConnectorError(
+                    409,
+                    "Connector event resume cursor is ahead of the Gateway",
+                )
+            accepted_result_ids = {
+                str(record["result_id"])
+                for record in self.agent_task_results.values()
+                if record["device_id"] == device_id
+                and self._result_ready_for_transport_ack(record)
+            }
+            now = utc_now()
+            pending_command_ids = sorted(
+                str(command["command_id"])
+                for command in self.commands.values()
+                if command["device_id"] == device_id
+                and command["status"] == CommandStatus.QUEUED.value
+                and self._parse_time(command["expires_at"]) > now
+            )
+            self._append_audit(
+                "transport.resumed",
+                device_id,
+                {
+                    "device_id": device_id,
+                    "last_gateway_sequence": last_gateway_sequence,
+                    "gateway_sequence": gateway_sequence,
+                    "event_ack_through": authoritative_event_ack,
+                    "pending_command_count": len(pending_command_ids),
+                },
+            )
+            return {
+                "accepted": True,
+                "connection_generation": int(device["_connection_generation"]),
+                "gateway_sequence": gateway_sequence,
+                "event_ack_through": authoritative_event_ack,
+                "accepted_result_ids": sorted(
+                    accepted_result_ids.intersection(pending_result_ids)
+                ),
+                "pending_command_ids": pending_command_ids,
+            }
+
+    def _result_ready_for_transport_ack(self, record: dict[str, Any]) -> bool:
+        """Whether resume may replace the normal result acknowledgement."""
+
+        return True
+
     async def notify_task_available(
         self,
         binding_id: str,
@@ -966,11 +1134,18 @@ class ConnectorGateway:
             self._ensure_not_revoked(device)
             websocket = self.connections.get(device_id)
             generation = int(device["_connection_generation"])
+            ready = self.connection_ready_generations.get(device_id) == generation
             send_lock = self._send_locks.setdefault(
                 device_id,
                 asyncio.Lock(),
             )
-        if websocket is None:
+        if websocket is None or not ready:
+            return False
+        if not await self._can_deliver_to_connection(
+            device_id,
+            websocket,
+            generation,
+        ):
             return False
         async with send_lock:
             async with self._lock:
@@ -978,10 +1153,18 @@ class ConnectorGateway:
                 if (
                     self.connections.get(device_id) is not websocket
                     or int(device["_connection_generation"]) != generation
+                    or self.connection_ready_generations.get(device_id) != generation
                 ):
                     return False
                 device["outbound_sequence"] += 1
                 sequence = int(device["outbound_sequence"])
+            await self._prepare_outbound_sequence(device_id, sequence)
+            if not await self._can_deliver_to_connection(
+                device_id,
+                websocket,
+                generation,
+            ):
+                return False
             try:
                 await websocket.send_json(
                     {

@@ -350,10 +350,10 @@ def test_production_deploy_targets_external_frontend_and_github_oauth() -> None:
     assert "legacy-web" not in compose
     assert "Dockerfile.web" not in compose
     assert (
-        "compose build --pull api connector-api migrate provision-db-roles"
+        "compose build --pull api connector-api connector-wss migrate provision-db-roles"
         in deploy
     )
-    assert "compose up -d api connector-api" in deploy
+    assert "compose up -d api connector-api connector-wss" in deploy
     assert "compose up -d --force-recreate caddy" in deploy
     assert "compose up -d api web caddy" not in deploy
     assert "--app-url" in generator

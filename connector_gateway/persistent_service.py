@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional, Protocol
 
 from arena_agent_contracts import AgentTaskResultV1
 
 from .models import CommandAction, RuntimeInventoryItem
-from .repository import ConnectorRepository
-from .service import ConnectorError, ConnectorGateway
+from .repository import ConnectionFenceError, ConnectorRepository
+from .service import (
+    ConnectionReplacedError,
+    ConnectorError,
+    ConnectorGateway,
+    iso,
+    utc_now,
+)
 
 
 class AgentTaskResultSink(Protocol):
@@ -21,8 +28,10 @@ class AgentTaskResultSink(Protocol):
 class PersistentConnectorGateway(ConnectorGateway):
     """Persist every completed state transition to a Connector repository.
 
-    The deployment intentionally runs one ASGI worker: sockets and send locks
-    are process-local, while all protocol state survives restarts in PostgreSQL.
+    Device connection ownership and WSS mutations are fenced in the shared
+    repository. Sockets and sender locks remain process-local by design; each
+    Device has exactly one shared owner while the REST control plane stays a
+    separate single writer.
     """
 
     def __init__(
@@ -31,18 +40,29 @@ class PersistentConnectorGateway(ConnectorGateway):
         verification_uri: Optional[str] = None,
         max_pending_pairings: int = 500,
         agent_task_result_sink: AgentTaskResultSink | None = None,
+        instance_id: str | None = None,
+        connection_lease_seconds: int = 45,
     ) -> None:
         super().__init__(
             verification_uri=verification_uri,
             max_pending_pairings=max_pending_pairings,
         )
         self.repository = repository
+        self.instance_id = instance_id or f"gateway-{uuid.uuid4().hex}"
+        if not self.instance_id or len(self.instance_id) > 128:
+            raise ValueError("Gateway instance_id must be 1-128 characters")
+        if not 15 <= connection_lease_seconds <= 300:
+            raise ValueError("Connection lease must be between 15 and 300 seconds")
+        self.connection_lease_seconds = connection_lease_seconds
+        self._connection_lease_tokens: dict[Any, int] = {}
+        self._shared_command_route_lock = asyncio.Lock()
         self._agent_task_result_sink = agent_task_result_sink
         self._initialization_lock = asyncio.Lock()
         self._persistence_lock = asyncio.Lock()
         self._persisted_event_ids: set[str] = set()
         self._persisted_audit_ids: set[str] = set()
         self._initialized = False
+        self._draining = False
 
     def bind_agent_task_result_sink(self, sink: AgentTaskResultSink) -> None:
         if self._initialized:
@@ -57,6 +77,15 @@ class PersistentConnectorGateway(ConnectorGateway):
                 return
             await self.repository.initialize()
             state = await self.repository.load_gateway_state()
+            active_lease_device_ids = {
+                str(record["device_id"])
+                for record in state.get("devices", [])
+                if await self.repository.has_active_device_connection(
+                    str(record["device_id"])
+                )
+            }
+            recovered_device_ids: set[str] = set()
+            recovered_command_ids: set[str] = set()
             async with self._lock:
                 self.pairings = {
                     str(record["user_code"]).upper(): record
@@ -92,28 +121,59 @@ class PersistentConnectorGateway(ConnectorGateway):
                 self._persisted_audit_ids = {
                     str(record["audit_id"]) for record in self.audit
                 }
-                for device in self.devices.values():
+                for device_id, device in self.devices.items():
+                    if device_id in active_lease_device_ids:
+                        continue
                     device["status"] = (
                         "revoked" if device.get("revoked_at") else "offline"
                     )
                     device["_connection_generation"] = (
                         int(device.get("_connection_generation", 0)) + 1
                     )
+                    recovered_device_ids.add(device_id)
                 for command in self.commands.values():
-                    if command.get("status") == "delivered":
+                    if (
+                        command.get("status") == "delivered"
+                        and str(command["device_id"]) not in active_lease_device_ids
+                    ):
                         command["status"] = "queued"
                         command["delivered_at"] = None
+                        recovered_command_ids.add(str(command["command_id"]))
                     # Presence in the loaded snapshot proves that the command
                     # crossed the durable barrier before the prior shutdown.
                     command["_durable_ready"] = True
                 self._remove_expired_pairings(datetime.now(timezone.utc))
                 self._rebuild_event_watermarks()
             self._initialized = True
-            # Startup recovery can touch every loaded device and command.
-            await self._persist_current(full=True)
+            # Do not rewrite live owners from a standby process. Startup
+            # recovery mutates only Devices without an unexpired shared lease.
+            await self._persist_current(
+                replace_pairings=True,
+                device_ids=recovered_device_ids,
+                command_ids=recovered_command_ids,
+            )
 
     async def close(self) -> None:
+        await self.begin_drain()
+        # Locally replaced sockets can retain only already-fenced tokens until
+        # their handlers exit; no current lease remains for them to release.
+        self._connection_lease_tokens.clear()
         await self.repository.close()
+
+    async def begin_drain(self) -> None:
+        """Stop accepting WSS ownership and ask Connectors to reconnect."""
+
+        self._draining = True
+        active_connections = list(self.connections.items())
+        for device_id, websocket in active_connections:
+            try:
+                await websocket.close(
+                    code=1012,
+                    reason="Gateway worker restarting",
+                )
+            except Exception:
+                pass
+            await self.disconnect_device(device_id, websocket)
 
     async def _persist_current(
         self,
@@ -126,6 +186,7 @@ class PersistentConnectorGateway(ConnectorGateway):
         command_ids: set[str] | None = None,
         result_task_ids: set[str] | None = None,
         replace_pairings: bool = False,
+        connection_fence: tuple[str, int] | None = None,
     ) -> None:
         """Persist only the entities touched by one completed transition.
 
@@ -227,7 +288,18 @@ class PersistentConnectorGateway(ConnectorGateway):
                     "events": copy.deepcopy(new_events),
                     "audit": copy.deepcopy(new_audit),
                 }
-            await self.repository.save_gateway_state(state)
+                if connection_fence is not None:
+                    state["_connection_fence"] = {
+                        "device_id": connection_fence[0],
+                        "instance_id": self.instance_id,
+                        "fencing_token": connection_fence[1],
+                    }
+            try:
+                await self.repository.save_gateway_state(state)
+            except ConnectionFenceError as exc:
+                raise ConnectionReplacedError(
+                    "WebSocket was replaced by a connection on another Gateway instance",
+                ) from exc
             async with self._lock:
                 self._persisted_event_ids.update(
                     str(event["event_id"]) for event in new_events
@@ -298,27 +370,198 @@ class PersistentConnectorGateway(ConnectorGateway):
 
     async def authenticate_device(self, device_id: str, token: str) -> dict[str, Any]:
         await self.initialize()
+        shared_device = await self.repository.get_device(device_id)
+        if shared_device is not None:
+            async with self._lock:
+                self.devices[device_id] = shared_device
         return await super().authenticate_device(device_id, token)
+
+    async def _refresh_device_runtime_state(self, device_id: str) -> bool:
+        """Refresh one Device route without reloading another worker's sockets."""
+
+        state = await self.repository.load_device_runtime_state(device_id)
+        shared_device = state.get("device")
+        if not isinstance(shared_device, dict):
+            return False
+        async with self._lock:
+            existing_device = self.devices.get(device_id)
+            if existing_device is not None:
+                shared_device["_connection_generation"] = max(
+                    int(shared_device.get("_connection_generation", 0)),
+                    int(existing_device.get("_connection_generation", 0)),
+                )
+            self.devices[device_id] = shared_device
+
+            self.bindings = {
+                binding_id: binding
+                for binding_id, binding in self.bindings.items()
+                if str(binding["device_id"]) != device_id
+            }
+            self.bindings.update(
+                {
+                    str(binding["binding_id"]): binding
+                    for binding in state.get("bindings", [])
+                }
+            )
+            self.commands = {
+                command_id: command
+                for command_id, command in self.commands.items()
+                if str(command["device_id"]) != device_id
+            }
+            for command in state.get("commands", []):
+                command["_durable_ready"] = True
+                self.commands[str(command["command_id"])] = command
+            self.agent_task_results = {
+                task_id: result
+                for task_id, result in self.agent_task_results.items()
+                if str(result["device_id"]) != device_id
+            }
+            self.agent_task_results.update(
+                {
+                    str(result["task_id"]): result
+                    for result in state.get("agent_task_results", [])
+                }
+            )
+            self.events = [
+                event
+                for event in self.events
+                if str(event["device_id"]) != device_id
+            ] + list(state.get("events", []))
+            self._persisted_event_ids.update(
+                str(event["event_id"]) for event in state.get("events", [])
+            )
+            self._rebuild_event_watermarks()
+        return True
 
     async def connect_device(self, device_id: str, websocket: Any) -> int:
         await self.initialize()
+        if self._draining:
+            raise ConnectorError(503, "Gateway worker is draining")
+        await self._refresh_device_runtime_state(device_id)
         result = await super().connect_device(device_id, websocket)
-        async with self._lock:
-            command_ids = {
-                str(item["command_id"])
-                for item in self.commands.values()
-                if item["device_id"] == device_id
-            }
-        await self._persist_current(
-            device_ids={device_id},
-            command_ids=command_ids,
-        )
+        try:
+            fencing_token = await self.repository.claim_device_connection(
+                device_id,
+                self.instance_id,
+                self.connection_lease_seconds,
+            )
+        except Exception:
+            await super().disconnect_device(device_id, websocket)
+            raise
+        self._connection_lease_tokens[websocket] = fencing_token
+        shared_device = await self.repository.get_device(device_id)
+        if shared_device is not None:
+            async with self._lock:
+                device = self.devices[device_id]
+                device["outbound_sequence"] = max(
+                    int(device.get("outbound_sequence", 0)),
+                    int(shared_device.get("outbound_sequence", 0)),
+                )
+                device["event_ack_watermark"] = max(
+                    int(device.get("event_ack_watermark", 0)),
+                    int(shared_device.get("event_ack_watermark", 0)),
+                )
+                device["event_pending_sequences"] = sorted(
+                    {
+                        int(value)
+                        for value in device.get("event_pending_sequences", [])
+                    }
+                    | {
+                        int(value)
+                        for value in shared_device.get(
+                            "event_pending_sequences",
+                            [],
+                        )
+                    }
+                )
+        try:
+            await self._persist_current(
+                device_ids={device_id},
+                connection_fence=(device_id, fencing_token),
+            )
+        except Exception:
+            self._connection_lease_tokens.pop(websocket, None)
+            await self.repository.release_device_connection(
+                device_id,
+                self.instance_id,
+                fencing_token,
+            )
+            await super().disconnect_device(device_id, websocket)
+            raise
         return result
 
     async def disconnect_device(self, device_id: str, websocket: Any) -> None:
         await self.initialize()
+        fencing_token = self._connection_lease_tokens.pop(websocket, None)
         await super().disconnect_device(device_id, websocket)
-        await self._persist_current(device_ids={device_id})
+        if fencing_token is not None:
+            async with self._lock:
+                device = copy.deepcopy(self.devices[device_id])
+            released = await self.repository.release_device_connection_and_save_device(
+                device_id,
+                self.instance_id,
+                fencing_token,
+                device,
+            )
+            if released:
+                # The Device projection was committed under the same fence as
+                # lease release. Persist only the appended disconnect audit.
+                await self._persist_current(full=False)
+
+    async def assert_active_connection(
+        self,
+        device_id: str,
+        websocket: Any,
+        generation: Optional[int] = None,
+    ) -> None:
+        await self.initialize()
+        shared_device = await self.repository.get_device(device_id)
+        if shared_device is not None and shared_device.get("revoked_at"):
+            raise ConnectorError(410, "Device has been revoked")
+        await super().assert_active_connection(device_id, websocket, generation)
+        fencing_token = self._connection_lease_tokens.get(websocket)
+        if fencing_token is None or not await self.repository.is_device_connection_owner(
+            device_id,
+            self.instance_id,
+            fencing_token,
+        ):
+            raise ConnectionReplacedError(
+                "WebSocket was replaced by a connection on another Gateway instance",
+            )
+
+    async def _can_deliver_to_connection(
+        self,
+        device_id: str,
+        websocket: Any,
+        generation: int,
+    ) -> bool:
+        fencing_token = self._connection_lease_tokens.get(websocket)
+        if fencing_token is None:
+            return False
+        return await self.repository.is_device_connection_owner(
+            device_id,
+            self.instance_id,
+            fencing_token,
+        )
+
+    def _transition_fence(
+        self,
+        device_id: str,
+        expected_generation: Optional[int],
+    ) -> tuple[str, int] | None:
+        if expected_generation is None:
+            return None
+        websocket = self.connections.get(device_id)
+        fencing_token = (
+            self._connection_lease_tokens.get(websocket)
+            if websocket is not None
+            else None
+        )
+        if fencing_token is None:
+            raise ConnectionReplacedError(
+                "WebSocket was replaced by a connection on another Gateway instance",
+            )
+        return device_id, fencing_token
 
     async def apply_hello(
         self,
@@ -337,6 +580,10 @@ class PersistentConnectorGateway(ConnectorGateway):
         await self._persist_current(
             device_ids={device_id},
             binding_ids=binding_ids,
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
         )
         return result
 
@@ -348,7 +595,29 @@ class PersistentConnectorGateway(ConnectorGateway):
     ) -> None:
         await self.initialize()
         await super().heartbeat(device_id, payload, expected_generation)
-        await self._persist_current(device_ids={device_id})
+        if expected_generation is not None:
+            websocket = self.connections.get(device_id)
+            fencing_token = (
+                self._connection_lease_tokens.get(websocket)
+                if websocket is not None
+                else None
+            )
+            if fencing_token is None or not await self.repository.renew_device_connection(
+                device_id,
+                self.instance_id,
+                fencing_token,
+                self.connection_lease_seconds,
+            ):
+                raise ConnectionReplacedError(
+                    "WebSocket was replaced by a connection on another Gateway instance",
+                )
+        await self._persist_current(
+            device_ids={device_id},
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
+        )
 
     async def update_inventory(
         self,
@@ -364,6 +633,10 @@ class PersistentConnectorGateway(ConnectorGateway):
         await self._persist_current(
             device_ids={device_id},
             runtime_device_ids={device_id},
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
         )
         return result
 
@@ -371,14 +644,53 @@ class PersistentConnectorGateway(ConnectorGateway):
         self, owner_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
         await self.initialize()
-        return await super().list_devices(owner_id)
+        shared_devices = await self.repository.list_devices(owner_id)
+        active_device_ids = {
+            str(shared_device["device_id"])
+            for shared_device in shared_devices
+            if shared_device.pop("_has_active_connection", False)
+        }
+        async with self._lock:
+            for shared_device in shared_devices:
+                device_id = str(shared_device["device_id"])
+                existing = self.devices.get(device_id)
+                if existing is not None:
+                    shared_device["_connection_generation"] = max(
+                        int(shared_device.get("_connection_generation", 0)),
+                        int(existing.get("_connection_generation", 0)),
+                    )
+                self.devices[device_id] = shared_device
+            devices = [
+                self._public_device(device)
+                for device in self.devices.values()
+                if owner_id is None or device["owner_id"] == owner_id
+            ]
+            for device in devices:
+                if (
+                    not device.get("revoked_at")
+                    and str(device["device_id"]) in active_device_ids
+                ):
+                    device["status"] = "online"
+            return sorted(
+                devices,
+                key=lambda value: value["created_at"],
+                reverse=True,
+            )
 
     async def get_device(self, device_id: str) -> dict[str, Any]:
         await self.initialize()
-        return await super().get_device(device_id)
+        await self._refresh_device_runtime_state(device_id)
+        device = await super().get_device(device_id)
+        if (
+            not device.get("revoked_at")
+            and await self.repository.has_active_device_connection(device_id)
+        ):
+            device["status"] = "online"
+        return device
 
     async def revoke_device(self, device_id: str, owner_id: str) -> dict[str, Any]:
         await self.initialize()
+        await self._refresh_device_runtime_state(device_id)
         result = await super().revoke_device(device_id, owner_id)
         async with self._lock:
             binding_ids = {
@@ -401,6 +713,7 @@ class PersistentConnectorGateway(ConnectorGateway):
         working_directory: Optional[str] = None,
     ) -> dict[str, Any]:
         await self.initialize()
+        await self._refresh_device_runtime_state(device_id)
         result = await super().create_binding(
             device_id,
             runtime_id,
@@ -415,6 +728,25 @@ class PersistentConnectorGateway(ConnectorGateway):
         self, device_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
         await self.initialize()
+        shared_bindings = await self.repository.list_bindings(device_id)
+        async with self._lock:
+            if device_id is None:
+                self.bindings = {
+                    str(binding["binding_id"]): binding
+                    for binding in shared_bindings
+                }
+            else:
+                self.bindings = {
+                    binding_id: binding
+                    for binding_id, binding in self.bindings.items()
+                    if str(binding["device_id"]) != device_id
+                }
+                self.bindings.update(
+                    {
+                        str(binding["binding_id"]): binding
+                        for binding in shared_bindings
+                    }
+                )
         return await super().list_bindings(device_id)
 
     async def queue_command(
@@ -426,6 +758,20 @@ class PersistentConnectorGateway(ConnectorGateway):
         expires_in_seconds: int,
     ) -> dict[str, Any]:
         await self.initialize()
+        shared_binding = await self.repository.get_binding(binding_id)
+        if shared_binding is not None:
+            await self._refresh_device_runtime_state(
+                str(shared_binding["device_id"])
+            )
+        if idempotency_key:
+            shared = await self.repository.get_command_by_idempotency_key(
+                binding_id,
+                idempotency_key,
+            )
+            if shared is not None:
+                shared["_durable_ready"] = True
+                async with self._lock:
+                    self.commands[str(shared["command_id"])] = shared
         result = await super().queue_command(
             binding_id,
             action,
@@ -433,25 +779,112 @@ class PersistentConnectorGateway(ConnectorGateway):
             idempotency_key,
             expires_in_seconds,
         )
-        await self._persist_current(command_ids={str(result["command_id"])})
         return result
 
     async def _prepare_command_delivery(self, command_id: str) -> None:
         # The full queued command, its idempotency key and its audit record must
         # be committed before the active WebSocket can observe the command.
+        async with self._lock:
+            command = self.commands.get(command_id)
+            if command is not None and command.get("_durable_ready", False):
+                return
         await self._persist_current(command_ids={command_id})
+
+    async def _prepare_outbound_sequence(
+        self,
+        device_id: str,
+        sequence: int,
+    ) -> None:
+        # The durable resume cursor must never lag a frame already visible to
+        # the Connector. Persist the reserved sequence before the socket write.
+        async with self._lock:
+            websocket = self.connections.get(device_id)
+        fencing_token = (
+            self._connection_lease_tokens.get(websocket)
+            if websocket is not None
+            else None
+        )
+        if fencing_token is None or not await self.repository.save_outbound_sequence_for_connection_owner(
+            device_id,
+            self.instance_id,
+            fencing_token,
+            sequence,
+        ):
+            raise ConnectionReplacedError(
+                "WebSocket was replaced by a connection on another Gateway instance",
+            )
+
+    async def _commit_command_delivery(
+        self,
+        device_id: str,
+        websocket: Any,
+        generation: int,
+        command: dict[str, Any],
+    ) -> None:
+        fencing_token = self._connection_lease_tokens.get(websocket)
+        if fencing_token is None:
+            return
+        try:
+            committed = await self.repository.save_command_for_connection_owner(
+                device_id,
+                self.instance_id,
+                fencing_token,
+                command,
+            )
+        except Exception:
+            await self._restore_local_command_for_replay(command)
+            raise
+        if committed:
+            return
+        # A takeover or a faster ACK won the shared-state race. Keep the local
+        # view replayable until the next shared refresh rather than treating a
+        # stale delivery commit as authoritative.
+        await self._restore_local_command_for_replay(command)
+
+    async def _restore_local_command_for_replay(
+        self,
+        command: dict[str, Any],
+    ) -> None:
+        async with self._lock:
+            current = self.commands.get(str(command["command_id"]))
+            if current is not None and current.get("status") == "delivered":
+                current["status"] = "queued"
+                current["delivered_at"] = None
 
     async def deliver_pending(self, device_id: str) -> int:
         await self.initialize()
-        result = await super().deliver_pending(device_id)
-        async with self._lock:
-            command_ids = {
-                str(item["command_id"])
-                for item in self.commands.values()
-                if item["device_id"] == device_id
-            }
-        await self._persist_current(command_ids=command_ids)
-        return result
+        return await super().deliver_pending(device_id)
+
+    async def route_shared_commands_once(self, *, limit: int = 100) -> int:
+        """Pull queued Commands whose Device lease belongs to this instance."""
+
+        if limit < 1 or limit > 500:
+            raise ValueError("Shared Command route limit must be between 1 and 500")
+        await self.initialize()
+        async with self._shared_command_route_lock:
+            routes = (
+                await self.repository.list_queued_command_routes_for_connection_owner(
+                    self.instance_id,
+                    limit,
+                )
+            )
+            route_device_ids: set[str] = set()
+            async with self._lock:
+                for route in routes:
+                    command = route["command"]
+                    binding = route["binding"]
+                    command_id = str(command["command_id"])
+                    current = self.commands.get(command_id)
+                    if current is not None and current.get("status") != "queued":
+                        continue
+                    command["_durable_ready"] = True
+                    self.bindings[str(binding["binding_id"])] = binding
+                    self.commands[command_id] = command
+                    route_device_ids.add(str(command["device_id"]))
+            delivered = 0
+            for device_id in sorted(route_device_ids):
+                delivered += await self.deliver_pending(device_id)
+            return delivered
 
     async def notify_task_available(
         self,
@@ -470,8 +903,20 @@ class PersistentConnectorGateway(ConnectorGateway):
                 None,
             )
             if binding is not None:
+                device_id = str(binding["device_id"])
+                websocket = self.connections.get(device_id)
+                fencing_token = (
+                    self._connection_lease_tokens.get(websocket)
+                    if websocket is not None
+                    else None
+                )
+                if fencing_token is None:
+                    raise ConnectionReplacedError(
+                        "WebSocket was replaced by a connection on another Gateway instance",
+                    )
                 await self._persist_current(
-                    device_ids={str(binding["device_id"])}
+                    device_ids={device_id},
+                    connection_fence=(device_id, fencing_token),
                 )
         return result
 
@@ -483,7 +928,39 @@ class PersistentConnectorGateway(ConnectorGateway):
     ) -> None:
         await self.initialize()
         await super().observe_inbound_sequence(device_id, sequence, expected_generation)
-        await self._persist_current(device_ids={device_id})
+        await self._persist_current(
+            device_ids={device_id},
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
+        )
+
+    async def resume_transport(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        expected_generation: Optional[int] = None,
+    ) -> dict[str, Any]:
+        await self.initialize()
+        result = await super().resume_transport(
+            device_id,
+            payload,
+            expected_generation,
+        )
+        await self._persist_current(
+            device_ids={device_id},
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
+        )
+        return result
+
+    def _result_ready_for_transport_ack(self, record: dict[str, Any]) -> bool:
+        if self._agent_task_result_sink is None:
+            return True
+        return bool(record.get("arena_sink_accepted_at"))
 
     async def acknowledge_task_available(
         self,
@@ -497,7 +974,13 @@ class PersistentConnectorGateway(ConnectorGateway):
             payload,
             expected_generation,
         )
-        await self._persist_current(device_ids={device_id})
+        await self._persist_current(
+            device_ids={device_id},
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
+        )
         return result
 
     async def acknowledge_command(
@@ -513,6 +996,10 @@ class PersistentConnectorGateway(ConnectorGateway):
         await self._persist_current(
             command_ids={str(result["command_id"])},
             binding_ids={str(result["binding_id"])},
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
         )
         return result
 
@@ -526,7 +1013,15 @@ class PersistentConnectorGateway(ConnectorGateway):
         result = await super().append_runtime_event(
             device_id, payload, expected_generation
         )
-        await self._persist_current(device_ids={device_id})
+        binding_id = str(payload.get("binding_id", ""))
+        await self._persist_current(
+            device_ids={device_id},
+            binding_ids={binding_id} if binding_id else set(),
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
+        )
         return result
 
     async def submit_agent_task_result(
@@ -552,6 +1047,10 @@ class PersistentConnectorGateway(ConnectorGateway):
         )
         await self._persist_current(
             result_task_ids={task_id} if task_id else set(),
+            connection_fence=self._transition_fence(
+                device_id,
+                expected_generation,
+            ),
         )
         if self._agent_task_result_sink is not None:
             # Re-submit exact Gateway replays to the Arena-owned idempotent
@@ -565,6 +1064,14 @@ class PersistentConnectorGateway(ConnectorGateway):
                 # The Connector must retry, but internal Arena or database
                 # details must not cross the public WebSocket boundary.
                 raise ConnectorError(503, "Arena Result Sink unavailable") from exc
+            if task_id:
+                async with self._lock:
+                    accepted = self.agent_task_results.get(task_id)
+                    if accepted is not None and not accepted.get(
+                        "arena_sink_accepted_at"
+                    ):
+                        accepted["arena_sink_accepted_at"] = iso(utc_now())
+                await self._persist_current(result_task_ids={task_id})
         # The Connector receives its result acknowledgement only after both
         # the Gateway durable inbox and the configured Arena Sink succeed.
         return result
@@ -573,16 +1080,31 @@ class PersistentConnectorGateway(ConnectorGateway):
         self, binding_id: str, limit: int = 200
     ) -> list[dict[str, Any]]:
         await self.initialize()
-        return await super().list_events(binding_id, limit)
+        bounded_limit = max(1, min(limit, 1000))
+        if not any(
+            binding["binding_id"] == binding_id
+            for binding in await self.repository.list_bindings()
+        ):
+            raise ConnectorError(404, "Binding not found")
+        return await self.repository.list_events(binding_id, bounded_limit)
 
     async def list_commands(
         self, binding_id: str, limit: int = 100
     ) -> list[dict[str, Any]]:
         await self.initialize()
-        return await super().list_commands(binding_id, limit)
+        bounded_limit = max(1, min(limit, 500))
+        if not any(
+            binding["binding_id"] == binding_id
+            for binding in await self.repository.list_bindings()
+        ):
+            raise ConnectorError(404, "Binding not found")
+        return await self.repository.list_commands(binding_id, bounded_limit)
 
     async def list_audit(
         self, limit: int = 200, owner_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
         await self.initialize()
-        return await super().list_audit(limit, owner_id)
+        return await self.repository.list_audit(
+            max(1, min(limit, 1000)),
+            owner_id,
+        )

@@ -20,7 +20,7 @@ def test_connector_surface_flag_defaults_on_and_can_be_disabled(monkeypatch):
     assert _connector_surface_enabled() is False
 
 
-def test_production_routes_connector_to_one_dedicated_worker():
+def test_production_splits_single_writer_control_from_multi_worker_wss():
     compose = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
     local_compose = (ROOT / "docker-compose.local.yml").read_text(encoding="utf-8")
     mcp_e2e_compose = (ROOT / "tests/e2e/docker-compose.mcp-e2e.yml").read_text(
@@ -32,11 +32,19 @@ def test_production_routes_connector_to_one_dedicated_worker():
     caddy = (ROOT / "deploy/caddy/Caddyfile.domain").read_text(encoding="utf-8")
     ip_caddy = (ROOT / "deploy/caddy/Caddyfile.ip").read_text(encoding="utf-8")
     connector_api = (ROOT / "web/connector_api.py").read_text(encoding="utf-8")
+    connector_wss = (ROOT / "web/connector_wss.py").read_text(encoding="utf-8")
     entrypoint = (ROOT / "deploy/scripts/api-entrypoint.sh").read_text(encoding="utf-8")
 
     assert "  connector-api:\n" in compose
+    assert "  connector-wss:\n" in compose
     assert "ADX_ASGI_APP: web.connector_api:create_app" in compose
     assert 'ADX_API_WORKERS: "1"' in compose
+    assert "ADX_ASGI_APP: web.connector_wss:create_app" in compose
+    assert "ADX_API_WORKERS: ${ADX_CONNECTOR_WSS_WORKERS:-2}" in compose
+    assert "ADX_API_DB_POOL_MAX_SIZE: ${ADX_CONNECTOR_WSS_DB_POOL_MAX_SIZE:-1}" in compose
+    assert "      connector-wss:\n        condition: service_healthy" in compose.replace(
+        "\r\n", "\n"
+    )
     assert 'ADX_CONNECTOR_SURFACE_ENABLED: "false"' in compose
     assert 'ADX_ARENA_MCP_ENABLED: "false"' in compose
     assert "ADX_ARENA_MCP_ENABLED: ${ADX_ARENA_MCP_ENABLED:-false}" in (local_compose)
@@ -50,17 +58,34 @@ def test_production_routes_connector_to_one_dedicated_worker():
     assert "/api/v1/admin/current-game /api/v1/admin/current-game/matchmaking" in (
         ip_caddy
     )
+    assert caddy.index("@connectorWss path /api/connectors/ws") < caddy.index(
+        "@connector path"
+    )
+    assert "reverse_proxy connector-wss:8000" in caddy
     assert "reverse_proxy connector-api:8000" in caddy
     assert "create_current_game_admin_router" in connector_api
+    assert "ConnectorSharedCommandRouter" not in connector_api
+    assert 'name="connector-shared-command-router"' not in connector_api
+    assert "create_connector_websocket_router" in connector_wss
+    assert "ConnectorSharedCommandRouter" in connector_wss
+    assert "await bundle.service.begin_drain()" in connector_wss
     assert '"PUT"' in connector_api
     assert '--workers "${workers}"' in entrypoint
     assert "compose up -d --force-recreate caddy" in deploy
+    release = (ROOT / "deploy/scripts/release.sh").read_text(encoding="utf-8")
+    assert "Connector WSS worker count does not match deploy/.env." in release
+    assert "docker top \"${connector_wss_id}\" -eo args" in release
+    assert "/multiprocessing.spawn/" in release
+    assert "sh -n" in workflow
     assert "COPY --chown=adx:adx db_pool_config.py ./db_pool_config.py" in dockerfile
     assert "COPY --chown=adx:adx arena_mcp ./arena_mcp" in dockerfile
     assert "127.0.0.1:18000:8000" in mcp_e2e_compose
     assert 'ADX_ARENA_PAYMENTS_ENABLED: "false"' in mcp_e2e_compose
     assert "Smoke-test production API imports" in workflow
-    assert "import db_pool_config; import web.api; import web.connector_api" in workflow
+    assert (
+        "import db_pool_config; import web.api; import web.connector_api; "
+        "import web.connector_wss"
+    ) in workflow
 
 
 def test_dedicated_connector_app_mounts_current_game_admin_routes(

@@ -11,8 +11,8 @@ port="${ADX_API_PORT:-8000}"
 forwarded_allow_ips="${ADX_FORWARDED_ALLOW_IPS:-*}"
 workers="${ADX_API_WORKERS:-1}"
 
-# The dedicated Connector service stays at one worker because WebSocket
-# ownership is process-local. Stateless API services may set a larger value.
+# Connector control-plane services stay at one worker. The dedicated WSS app
+# may use multiple workers because shared leases and fencing own each Device.
 exec python -m uvicorn "${app_module}" \
   --factory \
   --host "${host}" \

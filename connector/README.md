@@ -3,8 +3,8 @@
 > Current status — 2026-08-09: a real Codex Connector has completed the formal
 > eight-round `agent_a2a.v1` payment-enabled Game alongside nine Hosted Agents.
 > Earlier Connector-only evidence below remains intentionally payment-disabled.
-> The later 100-Agent runs exercised Hosted capacity; Connector scale and
-> multi-instance WSS ownership are tracked separately in the Roadmap.
+> The later 100-Agent runs exercised Hosted capacity; Connector scale,
+> multi-instance routing, and HA are tracked separately in the Roadmap.
 
 `adx-connector` is the user-side execution bridge between locally installed
 agent runtimes and Arena 402. The executable retains the `adx-connector` name
@@ -18,6 +18,42 @@ Task transport defaults to the existing WSS path. A feature-gated
 heartbeats, Session control, and safe `task.available` wake hints, while MCP
 Streamable HTTP performs the authoritative task claim, result submission, and
 lease release. The two transports do not create separate Arena task models.
+
+The default WSS path negotiates `transport.resume.v1` after `welcome + hello`
+and before inventory or durable replay. The Connector reports its persisted
+Gateway sequence, local Event ACK boundary, and pending Result IDs; the Gateway
+returns its authoritative Event watermark, Result IDs that are safe to ACK,
+and queued Command IDs. When an Arena Result Sink is configured, a Result is
+safe to ACK only after that Sink has accepted it. Command
+and `task.available` delivery remains gated until `resume.ack`, and the Gateway
+persists each reserved outbound sequence before exposing its frame. A WSS
+sequence gap fails the connection without advancing the Connector cursor, so
+the next connection replays the Gateway's durable queued Commands. Gateways or
+Connectors that do not advertise the capability retain the legacy hello path.
+This closes reconnect/crash windows on the active Gateway transport; the resume
+protocol is combined with the shared ownership layer below for cross-process
+takeover, but it does not by itself prove zero-downtime HA.
+
+The production WSS data plane now runs separately from the single-writer
+Connector/Auth control plane and defaults to two Uvicorn workers. Every Device
+connection claims a
+PostgreSQL lease with a monotonically increasing fencing token. The dedicated
+WSS workers poll shared queued Commands for only the Devices they own,
+hydrates their Binding snapshot, and commits sequence/delivery changes under
+that same fence. A takeover atomically requeues unacknowledged delivered
+Commands. Inbound processing, Command replay, `task.available`, heartbeat
+renewal, ACK/Event/Result persistence, disconnect, and shutdown are owner-scoped;
+a connection replaced on another Gateway instance is rejected with `4409` on
+its next protocol activity, and the stale instance cannot release the new
+lease or make subsequent writes to its old socket. WSS workers incrementally
+load newly enrolled Devices and shared Device/Binding/Command/Result/Event
+state; control-plane reads refresh shared Devices, Bindings, Commands and
+Events. Graceful drain closes owned sockets with `1012` and releases leases.
+Auth, Pairing, REST and MCP control-plane mutations remain on one ASGI worker,
+so their bounded in-memory rate limiters do not become distributed state.
+The real-PostgreSQL double-instance test proves process-level takeover and
+replay; external load-balancer, host-loss and zero-downtime production HA
+acceptance remain separate.
 
 The default policy is detection-only: the Connector can discover runtimes and
 answer `runtime.probe`, but it does not start an Agent task until the user opts

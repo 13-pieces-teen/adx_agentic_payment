@@ -24,6 +24,10 @@ const (
 	MessageAgentTaskResultAck = "agent_task.result.ack"
 	MessageTaskAvailable      = "task.available"
 	MessageTaskAvailableAck   = "task.available.ack"
+	MessageResume             = "resume"
+	MessageResumeAck          = "resume.ack"
+
+	CapabilityTransportResumeV1 = "transport.resume.v1"
 
 	CommandRuntimeProbe  = "runtime.probe"
 	CommandSessionStart  = "session.start"
@@ -120,6 +124,22 @@ type Hello struct {
 	Platform         string    `json:"platform"`
 	Hostname         string    `json:"hostname"`
 	StartedAt        time.Time `json:"started_at"`
+	Capabilities     []string  `json:"capabilities,omitempty"`
+}
+
+type TransportResume struct {
+	LastGatewaySequence uint64   `json:"last_gateway_sequence"`
+	EventAckThrough     uint64   `json:"event_ack_through"`
+	PendingResultIDs    []string `json:"pending_result_ids"`
+}
+
+type TransportResumeAck struct {
+	Accepted             bool     `json:"accepted"`
+	ConnectionGeneration uint64   `json:"connection_generation"`
+	GatewaySequence      uint64   `json:"gateway_sequence"`
+	EventAckThrough      uint64   `json:"event_ack_through"`
+	AcceptedResultIDs    []string `json:"accepted_result_ids"`
+	PendingCommandIDs    []string `json:"pending_command_ids"`
 }
 
 type Heartbeat struct {

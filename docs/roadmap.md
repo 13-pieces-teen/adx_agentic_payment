@@ -364,7 +364,8 @@ Arena 402 的对外叙事固定为三层：
 - [x] Concurrency hardening foundation: Connector entity-level incremental
   persistence, batched decide-result polling/application, batched FCFS pairing
   writes and Deadline Finalizer, shared per-Game SSE fan-out, bounded API
-  database pools, a dedicated single-worker Connector/WebSocket service plus
+  database pools, a single-writer Connector control plane plus a dedicated
+  multi-worker WSS data plane and
   multi-worker stateless API, cross-replica Provider admission/fair
   scheduling, Runtime Run lease fencing/renewal, broadcast/confirmation
   decoupling, readiness and Prometheus metrics, plus a read-only load probe.
@@ -635,6 +636,28 @@ create game
 - [x] Go Connector 会从已认证 Device 的 hello 绑定快照恢复冻结 route，并在
       启动/重连和 Gateway sequence gap 时主动执行有界 MCP cursor sync；Gateway
       周期性重发未完成 Task wake 继续作为低延迟提示和额外恢复路径。
+- [x] 默认纯 WSS 已增加 capability 协商的 `resume/resume.ack`：Connector 持久化
+      Gateway sequence，并在 inventory/result/event replay 前对齐 Gateway 的权威
+      Event watermark、可安全 ACK 的 Result 和待重放 Command；配置 Arena Result
+      Sink 时必须先由 Sink 接受。Gateway 在握手完成前冻结
+      Command/wake 下发，并在帧可见前持久化 outbound sequence。纯 WSS sequence
+      gap 不推进本地游标而是强制重连恢复。该协议与下述 ownership fencing 组合
+      支持同一主机内多 WSS worker 接管，但不代表外部零停机或整机故障 HA 验收。
+- [x] 增加多实例 WSS ownership/fencing 基础：PostgreSQL 按 Device 保存 instance
+      owner、lease expiry 和单调 fencing token；跨实例接管后，旧连接的入站、
+      Command replay、`task.available`、heartbeat、disconnect 和 shutdown 均不能越过
+      新 token，并以 `4409` 终止。claim/状态持久化失败会回滚 lease。WSS 数据面已
+      与单写 Connector/Auth 控制面拆分，默认启用两个 Uvicorn worker；Auth/Pairing/
+      REST/MCP 仍由一个控制面 worker 承载，因此限流桶仍安全地保持进程内。该完成项
+      不等于跨主机或外部零停机 HA 验收。
+- [x] dedicated Connector service 已增加 owner-scoped PostgreSQL Command polling：
+      落到非 WSS owner 实例的 queued Command 会被当前 lease owner 连同 Binding 拉取；
+      outbound sequence 与 delivery commit 受 fencing token 约束，接管 claim 原子重排
+      未 ACK 的 delivered Command，且幂等重放/晚到 delivery commit 不能覆盖 terminal
+      ACK。WSS owner 的 Device/ACK/Event/Result 写入均带同一 fencing token，worker
+      能加载启动后新注册的 Device，控制面查询从共享库刷新 Binding/Command/Event；
+      drain 以 `1012` 断开并释放 lease。真实 PostgreSQL 双实例集成测试已验证接管、
+      重放与新 owner ACK，但尚无外部负载均衡器或整机故障转移证据。
 - [x] 隔离 Docker 协议 E2E 已覆盖全新迁移、登录/配对、WSS hello/session/wake、
       Device token、MCP discover/list/sync/claim/submit/status、PostgreSQL Result
       Sink 与零链写入。

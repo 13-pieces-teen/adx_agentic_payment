@@ -406,7 +406,7 @@ fi
 
 compose config --quiet
 compose pull postgres caddy certbot
-compose build --pull api connector-api migrate provision-db-roles
+compose build --pull api connector-api connector-wss migrate provision-db-roles
 if [ "${enable_hosted_runtime}" = "true" ]; then
   compose --profile hosted build --pull hosted-worker credential-controller
 fi
@@ -452,7 +452,7 @@ stop_background_workers() {
 stop_background_workers
 compose up -d postgres
 compose run --rm migrate
-compose up -d api connector-api
+compose up -d api connector-api connector-wss
 compose up -d --force-recreate caddy
 if [ "${enable_official_litellm}" = "true" ]; then
   compose --profile official-agents up -d --force-recreate official-litellm

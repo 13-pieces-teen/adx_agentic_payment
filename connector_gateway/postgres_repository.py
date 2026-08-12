@@ -10,7 +10,11 @@ from typing import Any
 
 from db_pool_config import api_pool_max_size
 
-from .repository import DuplicateIdentityError, InvalidInviteError
+from .repository import (
+    ConnectionFenceError,
+    DuplicateIdentityError,
+    InvalidInviteError,
+)
 
 
 def _record(value: Any) -> dict[str, Any]:
@@ -44,11 +48,11 @@ def _optional_timestamp(value: Any) -> datetime | None:
 
 
 class PostgresConnectorRepository:
-    """Single-writer repository for a one-worker Gateway deployment.
+    """Durable Gateway state plus cross-instance Device connection fencing.
 
-    WebSocket ownership remains process-local. Durable entities are upserted in
-    one transaction, so a restart can reconstruct device, runtime, binding,
-    command, event and audit state without persisting socket objects.
+    Socket objects remain process-local. Device connection leases, shared
+    routing and WSS mutation fences let multiple data-plane workers coexist;
+    Connector/Auth control-plane mutations remain a separate single writer.
     """
 
     def __init__(self, database_url: str) -> None:
@@ -84,6 +88,459 @@ class PostgresConnectorRepository:
         if self._pool is None:
             raise RuntimeError("Connector repository is not initialized")
         return self._pool
+
+    async def claim_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        lease_seconds: int,
+    ) -> int:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                fencing_token = await connection.fetchval(
+                    """
+                    INSERT INTO connector_device_connection_leases (
+                        device_id, instance_id, fencing_token, lease_expires_at
+                    )
+                    VALUES (
+                        $1, $2, 1,
+                        clock_timestamp() + pg_catalog.make_interval(secs => $3)
+                    )
+                    ON CONFLICT (device_id) DO UPDATE SET
+                        instance_id = EXCLUDED.instance_id,
+                        fencing_token =
+                            connector_device_connection_leases.fencing_token + 1,
+                        lease_expires_at = EXCLUDED.lease_expires_at
+                    RETURNING fencing_token
+                    """,
+                    device_id,
+                    instance_id,
+                    lease_seconds,
+                )
+                await connection.execute(
+                    """
+                    UPDATE connector_commands
+                    SET status = 'queued',
+                        record = jsonb_set(
+                            jsonb_set(
+                                jsonb_set(record, '{status}', '"queued"'::jsonb),
+                                '{delivered_at}',
+                                'null'::jsonb
+                            ),
+                            '{updated_at}',
+                            to_jsonb(clock_timestamp())
+                        )
+                    WHERE device_id = $1
+                      AND status = 'delivered'
+                    """,
+                    device_id,
+                )
+        return int(fencing_token)
+
+    async def is_device_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+    ) -> bool:
+        return bool(
+            await self._require_pool().fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM connector_device_connection_leases
+                    WHERE device_id = $1
+                      AND instance_id = $2
+                      AND fencing_token = $3
+                      AND lease_expires_at > clock_timestamp()
+                )
+                """,
+                device_id,
+                instance_id,
+                fencing_token,
+            )
+        )
+
+    async def has_active_device_connection(self, device_id: str) -> bool:
+        return bool(
+            await self._require_pool().fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM connector_device_connection_leases
+                    WHERE device_id = $1
+                      AND lease_expires_at > clock_timestamp()
+                )
+                """,
+                device_id,
+            )
+        )
+
+    async def renew_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        lease_seconds: int,
+    ) -> bool:
+        result = await self._require_pool().execute(
+            """
+            UPDATE connector_device_connection_leases
+            SET lease_expires_at =
+                clock_timestamp() + pg_catalog.make_interval(secs => $4)
+            WHERE device_id = $1
+              AND instance_id = $2
+              AND fencing_token = $3
+              AND lease_expires_at > clock_timestamp()
+            """,
+            device_id,
+            instance_id,
+            fencing_token,
+            lease_seconds,
+        )
+        return result == "UPDATE 1"
+
+    async def release_device_connection(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+    ) -> bool:
+        result = await self._require_pool().execute(
+            """
+            UPDATE connector_device_connection_leases
+            SET lease_expires_at = clock_timestamp()
+            WHERE device_id = $1
+              AND instance_id = $2
+              AND fencing_token = $3
+            """,
+            device_id,
+            instance_id,
+            fencing_token,
+        )
+        return result == "UPDATE 1"
+
+    async def release_device_connection_and_save_device(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        device: dict[str, Any],
+    ) -> bool:
+        released_device_id = await self._require_pool().fetchval(
+            """
+            WITH released AS (
+                UPDATE connector_device_connection_leases
+                SET lease_expires_at = clock_timestamp()
+                WHERE device_id = $1
+                  AND instance_id = $2
+                  AND fencing_token = $3
+                RETURNING device_id
+            )
+            UPDATE connector_devices AS device
+            SET owner_id = CASE
+                    WHEN device.revoked_at IS NULL THEN $4
+                    ELSE device.owner_id
+                END,
+                token_hash = CASE
+                    WHEN device.revoked_at IS NULL THEN $5
+                    ELSE device.token_hash
+                END,
+                status = CASE
+                    WHEN device.revoked_at IS NULL THEN $6
+                    ELSE device.status
+                END,
+                revoked_at = COALESCE(device.revoked_at, $7),
+                record = CASE
+                    WHEN device.revoked_at IS NULL THEN $8::jsonb
+                    ELSE device.record
+                END
+            FROM released
+            WHERE device.device_id = released.device_id
+            RETURNING device.device_id
+            """,
+            device_id,
+            instance_id,
+            fencing_token,
+            device["owner_id"],
+            device["token_hash"],
+            device["status"],
+            _optional_timestamp(device.get("revoked_at")),
+            json.dumps(device),
+        )
+        return released_device_id is not None
+
+    async def list_queued_command_routes_for_connection_owner(
+        self,
+        instance_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT command.record AS command_record,
+                   binding.record AS binding_record
+            FROM connector_commands AS command
+            JOIN connector_bindings AS binding
+              ON binding.binding_id = command.binding_id
+            JOIN connector_device_connection_leases AS lease
+              ON lease.device_id = command.device_id
+            JOIN connector_devices AS device
+              ON device.device_id = command.device_id
+            WHERE lease.instance_id = $1
+              AND lease.lease_expires_at > clock_timestamp()
+              AND device.revoked_at IS NULL
+              AND command.status = 'queued'
+              AND command.expires_at > clock_timestamp()
+            ORDER BY command.created_at ASC, command.command_id ASC
+            LIMIT $2
+            """,
+            instance_id,
+            limit,
+        )
+        return [
+            {
+                "command": _record(row["command_record"]),
+                "binding": _record(row["binding_record"]),
+            }
+            for row in rows
+        ]
+
+    async def get_command_by_idempotency_key(
+        self,
+        binding_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT record
+            FROM connector_commands
+            WHERE binding_id = $1
+              AND idempotency_key = $2
+            """,
+            binding_id,
+            idempotency_key,
+        )
+        return _record(row["record"]) if row else None
+
+    async def get_binding(self, binding_id: str) -> dict[str, Any] | None:
+        row = await self._require_pool().fetchrow(
+            "SELECT record FROM connector_bindings WHERE binding_id = $1",
+            binding_id,
+        )
+        return _record(row["record"]) if row else None
+
+    async def save_command_for_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        command: dict[str, Any],
+    ) -> bool:
+        updated_command_id = await self._require_pool().fetchval(
+            """
+            UPDATE connector_commands AS command_row
+            SET status = $4,
+                record = $5::jsonb
+            FROM connector_device_connection_leases AS lease
+            WHERE command_row.command_id = $6
+              AND command_row.device_id = $1
+              AND command_row.status = 'queued'
+              AND lease.device_id = command_row.device_id
+              AND lease.instance_id = $2
+              AND lease.fencing_token = $3
+              AND lease.lease_expires_at > clock_timestamp()
+            RETURNING command_row.command_id
+            """,
+            device_id,
+            instance_id,
+            fencing_token,
+            command["status"],
+            json.dumps(command),
+            command["command_id"],
+        )
+        return updated_command_id is not None
+
+    async def save_outbound_sequence_for_connection_owner(
+        self,
+        device_id: str,
+        instance_id: str,
+        fencing_token: int,
+        sequence: int,
+    ) -> bool:
+        updated_device_id = await self._require_pool().fetchval(
+            """
+            UPDATE connector_devices AS device_row
+            SET record = jsonb_set(
+                record,
+                '{outbound_sequence}',
+                to_jsonb($4::bigint)
+            )
+            FROM connector_device_connection_leases AS lease
+            WHERE device_row.device_id = $1
+              AND lease.device_id = device_row.device_id
+              AND lease.instance_id = $2
+              AND lease.fencing_token = $3
+              AND lease.lease_expires_at > clock_timestamp()
+            RETURNING device_row.device_id
+            """,
+            device_id,
+            instance_id,
+            fencing_token,
+            sequence,
+        )
+        return updated_device_id is not None
+
+    async def get_device(self, device_id: str) -> dict[str, Any] | None:
+        row = await self._require_pool().fetchrow(
+            "SELECT record FROM connector_devices WHERE device_id = $1",
+            device_id,
+        )
+        return _record(row["record"]) if row else None
+
+    async def load_device_runtime_state(self, device_id: str) -> dict[str, Any]:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            device_row = await connection.fetchrow(
+                "SELECT record FROM connector_devices WHERE device_id = $1",
+                device_id,
+            )
+            state: dict[str, Any] = {
+                "device": _record(device_row["record"]) if device_row else None,
+            }
+            for key, table, order_by in (
+                ("bindings", "connector_bindings", "created_at"),
+                ("commands", "connector_commands", "created_at"),
+            ):
+                rows = await connection.fetch(
+                    f"SELECT record FROM {table} "
+                    f"WHERE device_id = $1 ORDER BY {order_by} ASC",
+                    device_id,
+                )
+                state[key] = [_record(row["record"]) for row in rows]
+            result_rows = await connection.fetch(
+                """
+                SELECT record || jsonb_build_object(
+                    'arena_sink_accepted_at', arena_sink_accepted_at
+                ) AS record
+                FROM connector_agent_task_results
+                WHERE device_id = $1
+                ORDER BY received_at ASC
+                """,
+                device_id,
+            )
+            state["agent_task_results"] = [
+                _record(row["record"]) for row in result_rows
+            ]
+            event_rows = await connection.fetch(
+                """
+                SELECT record
+                FROM connector_events
+                WHERE device_id = $1
+                ORDER BY received_at ASC, event_id ASC
+                """,
+                device_id,
+            )
+            state["events"] = [_record(row["record"]) for row in event_rows]
+            return state
+
+    async def list_devices(self, owner_id: str | None = None) -> list[dict[str, Any]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT device.record || jsonb_build_object(
+                '_has_active_connection',
+                COALESCE(lease.lease_expires_at > clock_timestamp(), FALSE)
+            ) AS record
+            FROM connector_devices AS device
+            LEFT JOIN connector_device_connection_leases AS lease
+              ON lease.device_id = device.device_id
+            WHERE $1::text IS NULL OR device.owner_id = $1
+            ORDER BY device.created_at DESC
+            """,
+            owner_id,
+        )
+        return [_record(row["record"]) for row in rows]
+
+    async def list_bindings(
+        self,
+        device_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT record
+            FROM connector_bindings
+            WHERE $1::text IS NULL OR device_id = $1
+            ORDER BY created_at DESC
+            """,
+            device_id,
+        )
+        return [_record(row["record"]) for row in rows]
+
+    async def list_commands(
+        self,
+        binding_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT record
+            FROM (
+                SELECT record, created_at, command_id
+                FROM connector_commands
+                WHERE binding_id = $1
+                ORDER BY created_at DESC, command_id DESC
+                LIMIT $2
+            ) retained
+            ORDER BY created_at ASC, command_id ASC
+            """,
+            binding_id,
+            limit,
+        )
+        return [_record(row["record"]) for row in rows]
+
+    async def list_events(
+        self,
+        binding_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT record
+            FROM (
+                SELECT record, received_at, event_id
+                FROM connector_events
+                WHERE binding_id = $1
+                ORDER BY received_at DESC, event_id DESC
+                LIMIT $2
+            ) retained
+            ORDER BY received_at ASC, event_id ASC
+            """,
+            binding_id,
+            limit,
+        )
+        return [_record(row["record"]) for row in rows]
+
+    async def list_audit(
+        self,
+        limit: int,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT record
+            FROM (
+                SELECT record, occurred_at, audit_id
+                FROM connector_audit
+                WHERE $1::text IS NULL OR owner_id = $1
+                ORDER BY occurred_at DESC, audit_id DESC
+                LIMIT $2
+            ) retained
+            ORDER BY occurred_at ASC, audit_id ASC
+            """,
+            owner_id,
+            limit,
+        )
+        return [_record(row["record"]) for row in rows]
 
     async def seed_invite(
         self, token_hash: str, expires_at: datetime | None = None
@@ -357,7 +814,13 @@ class PostgresConnectorRepository:
             state: dict[str, Any] = {}
             for key, table, order_by in tables:
                 rows = await connection.fetch(
-                    f"SELECT record FROM {table} ORDER BY {order_by} ASC"
+                    (
+                        "SELECT record || jsonb_build_object("
+                        "'arena_sink_accepted_at', arena_sink_accepted_at) AS record "
+                        f"FROM {table} ORDER BY {order_by} ASC"
+                        if table == "connector_agent_task_results"
+                        else f"SELECT record FROM {table} ORDER BY {order_by} ASC"
+                    )
                 )
                 state[key] = [_record(row["record"]) for row in rows]
             for key, table, order_by in (
@@ -392,6 +855,27 @@ class PostgresConnectorRepository:
             )
         async with pool.acquire() as connection:
             async with connection.transaction():
+                fence = state.get("_connection_fence")
+                if fence is not None:
+                    fenced_device_id = await connection.fetchval(
+                        """
+                        SELECT lease.device_id
+                        FROM connector_device_connection_leases AS lease
+                        JOIN connector_devices AS device
+                          ON device.device_id = lease.device_id
+                        WHERE lease.device_id = $1
+                          AND lease.instance_id = $2
+                          AND lease.fencing_token = $3
+                          AND lease.lease_expires_at > clock_timestamp()
+                          AND device.revoked_at IS NULL
+                        FOR UPDATE OF lease, device
+                        """,
+                        str(fence["device_id"]),
+                        str(fence["instance_id"]),
+                        int(fence["fencing_token"]),
+                    )
+                    if fenced_device_id is None:
+                        raise ConnectionFenceError
                 for pairing in state["pairings"]:
                     await connection.execute(
                         """
@@ -504,10 +988,14 @@ class PostgresConnectorRepository:
                         INSERT INTO connector_agent_task_results (
                             task_id, result_id, binding_id, device_id,
                             command_id, binding_epoch, result_hash,
-                            received_at, record
+                            received_at, arena_sink_accepted_at, record
                         )
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
-                        ON CONFLICT (task_id) DO NOTHING
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+                        ON CONFLICT (task_id) DO UPDATE SET
+                            arena_sink_accepted_at = COALESCE(
+                                connector_agent_task_results.arena_sink_accepted_at,
+                                EXCLUDED.arena_sink_accepted_at
+                            )
                         """,
                         result["task_id"],
                         result["result_id"],
@@ -517,7 +1005,14 @@ class PostgresConnectorRepository:
                         result["binding_epoch"],
                         result["result_hash"],
                         _timestamp(result["received_at"]),
-                        json.dumps(result),
+                        _optional_timestamp(result.get("arena_sink_accepted_at")),
+                        json.dumps(
+                            {
+                                key: value
+                                for key, value in result.items()
+                                if key != "arena_sink_accepted_at"
+                            }
+                        ),
                     )
                 for event in state["events"]:
                     await connection.execute(

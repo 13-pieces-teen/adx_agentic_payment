@@ -241,6 +241,199 @@ def test_hello_ack_includes_only_device_binding_refs_for_mcp_sync():
     }
 
 
+def test_resume_handshake_precedes_pending_wss_command_replay():
+    client = TestClient(create_app(connector_demo_enabled=True))
+    _, credential = _enroll(client)
+    device_id = credential["device_id"]
+    service = client.app.state.connector_gateway
+
+    async def prepare_binding():
+        await service.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex CLI",
+                    executable_path="C:\\tools\\codex.exe",
+                    available=True,
+                    capabilities=["runtime.probe"],
+                )
+            ],
+        )
+        binding = await service.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            "Resume binding",
+        )
+        return binding
+
+    binding = asyncio.run(prepare_binding())
+    socket_path = f"/api/connectors/ws?device_id={device_id}"
+    with client.websocket_connect(
+        socket_path,
+        headers={"Authorization": f"Device {credential['device_token']}"},
+    ) as socket:
+        welcome = socket.receive_json()
+        assert welcome["type"] == "welcome"
+        assert "transport.resume.v1" in welcome["payload"]["capabilities"]
+
+        socket.send_json(
+            {
+                "type": "hello",
+                "message_id": "hello-resume-1",
+                "payload": {
+                    "protocol_version": "1.0",
+                    "connector_version": "0.1.0",
+                    "platform": "windows/amd64",
+                    "hostname": "alice-pc",
+                    "capabilities": ["transport.resume.v1"],
+                },
+            }
+        )
+        hello_ack = socket.receive_json()
+        assert hello_ack["type"] == "ack"
+        assert hello_ack["message_id"] == "hello-resume-1"
+
+        command_response = client.post(
+            f"/api/connectors/bindings/{binding['binding_id']}/commands",
+            json={
+                "action": "runtime.probe",
+                "payload": {},
+                "idempotency_key": "resume-probe-1",
+            },
+        )
+        assert command_response.status_code == 202
+        pending = command_response.json()
+        assert pending["status"] == "queued"
+
+        socket.send_json(
+            {
+                "type": "resume",
+                "message_id": "resume-1",
+                "payload": {
+                    "last_gateway_sequence": 0,
+                    "event_ack_through": 0,
+                    "pending_result_ids": [],
+                },
+            }
+        )
+        resume_ack = socket.receive_json()
+        assert resume_ack["type"] == "resume.ack"
+        assert resume_ack["message_id"] == "resume-1"
+        assert resume_ack["payload"]["event_ack_through"] == 0
+        assert resume_ack["payload"]["pending_command_ids"] == [
+            pending["command_id"]
+        ]
+
+        replayed = socket.receive_json()
+        assert replayed["type"] == "command"
+        assert replayed["message_id"] == pending["command_id"]
+        assert replayed["sequence"] == resume_ack["payload"]["gateway_sequence"] + 1
+
+
+def test_resume_cannot_bypass_hello_handshake():
+    client = TestClient(create_app(connector_demo_enabled=True))
+    _, credential = _enroll(client)
+    socket_path = f"/api/connectors/ws?device_id={credential['device_id']}"
+
+    with client.websocket_connect(
+        socket_path,
+        headers={"Authorization": f"Device {credential['device_token']}"},
+    ) as socket:
+        assert socket.receive_json()["type"] == "welcome"
+        socket.send_json(
+            {
+                "type": "resume",
+                "message_id": "resume-without-hello",
+                "payload": {
+                    "last_gateway_sequence": 0,
+                    "event_ack_through": 0,
+                    "pending_result_ids": [],
+                },
+            }
+        )
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_json()
+
+    assert closed.value.code == 4406
+
+
+def test_resume_rejects_non_integer_and_ahead_event_cursors():
+    async def scenario():
+        service, credential, _ = await _enrolled_service()
+        device_id = credential["device_id"]
+        with pytest.raises(ConnectorError) as invalid:
+            await service.resume_transport(
+                device_id,
+                {
+                    "last_gateway_sequence": "0",
+                    "event_ack_through": 0,
+                    "pending_result_ids": [],
+                },
+            )
+        assert invalid.value.status_code == 422
+
+        with pytest.raises(ConnectorError) as ahead:
+            await service.resume_transport(
+                device_id,
+                {
+                    "last_gateway_sequence": 0,
+                    "event_ack_through": 1,
+                    "pending_result_ids": [],
+                },
+            )
+        assert ahead.value.status_code == 409
+
+    asyncio.run(scenario())
+
+
+def test_task_available_waits_until_transport_resume_is_ready():
+    async def scenario():
+        service = ConnectorGateway()
+        pairing = await service.create_pairing("owner-1", "Alice laptop")
+        await service.approve_pairing(pairing["user_code"], "owner-1")
+        credential = await service.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await service.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex CLI",
+                    executable_path="C:\\tools\\codex.exe",
+                    available=True,
+                )
+            ],
+        )
+        binding = await service.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            "Resume binding",
+        )
+        socket = _FakeSocket()
+        generation = await service.connect_device(device_id, socket)
+        wake = {
+            "wake_id": "wake-before-resume",
+            "task_id": "task-before-resume",
+            "binding_id": binding["binding_id"],
+            "binding_epoch": binding["binding_epoch"],
+            "deadline_at": "2026-08-12T12:00:00Z",
+        }
+
+        assert await service.notify_task_available(binding["binding_id"], wake) is False
+        assert socket.sent == []
+
+        await service.mark_transport_ready(device_id, generation)
+        assert await service.notify_task_available(binding["binding_id"], wake) is True
+        assert socket.sent[0]["type"] == "task.available"
+
+    asyncio.run(scenario())
+
+
 def test_outbound_socket_inventory_binding_command_and_event_flow():
     client = TestClient(create_app(connector_demo_enabled=True))
     _, credential = _enroll(client)
@@ -943,6 +1136,19 @@ def test_websocket_accepts_agent_task_result_as_its_own_message_type():
         headers={"Authorization": f"Device {credential['device_token']}"},
     ) as socket:
         assert socket.receive_json()["type"] == "welcome"
+        socket.send_json(
+            {
+                "type": "hello",
+                "message_id": "hello-agent-task-result",
+                "payload": {
+                    "protocol_version": "1.0",
+                    "connector_version": "0.1.0",
+                    "platform": "windows/amd64",
+                    "hostname": "alice-pc",
+                },
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
         delivered = socket.receive_json()
         assert delivered["type"] == "command"
         assert delivered["payload"]["payload"]["task"]["taskId"] == task["taskId"]
@@ -985,7 +1191,8 @@ def test_single_sender_and_revocation_cover_every_authenticated_socket():
         )
 
         first = _FakeSocket()
-        await service.connect_device(device_id, first)
+        first_generation = await service.connect_device(device_id, first)
+        await service.mark_transport_ready(device_id, first_generation)
         await asyncio.gather(
             service.deliver_pending(device_id),
             service.deliver_pending(device_id),
@@ -1162,6 +1369,7 @@ def test_connection_handover_requeues_command_sent_during_replacement():
         )
         old_socket = _BlockingSocket()
         old_generation = await service.connect_device(device_id, old_socket)
+        await service.mark_transport_ready(device_id, old_generation)
 
         old_delivery = asyncio.create_task(service.deliver_pending(device_id))
         await old_socket.send_started.wait()
@@ -1176,6 +1384,7 @@ def test_connection_handover_requeues_command_sent_during_replacement():
         assert new_generation > old_generation
         assert service.commands[command["command_id"]]["status"] == "queued"
 
+        await service.mark_transport_ready(device_id, new_generation)
         await service.deliver_pending(device_id)
         assert any(
             payload.get("message_id") == command["command_id"]

@@ -21,7 +21,7 @@ from connector_gateway.models import CommandAction, RuntimeInventoryItem
 from connector_gateway.persistent_service import PersistentConnectorGateway
 from connector_gateway.production import build_production_connector
 from connector_gateway.repository import MemoryConnectorRepository
-from connector_gateway.service import ConnectorError
+from connector_gateway.service import ConnectionReplacedError, ConnectorError
 
 
 def _hash(value: str) -> str:
@@ -810,6 +810,1377 @@ def test_revocation_invalidates_device_token_and_state_survives_restart():
     asyncio.run(revoked_scenario())
 
 
+def test_shared_connection_lease_fences_the_replaced_gateway_instance():
+    repository = MemoryConnectorRepository()
+    first = PersistentConnectorGateway(
+        repository,
+        verification_uri="https://arena.example.test/connect",
+        instance_id="gateway-a",
+    )
+
+    class Socket:
+        def __init__(self):
+            self.closed: list[tuple[int, str]] = []
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            self.closed.append((code, reason))
+
+    async def scenario():
+        await first.initialize()
+        pairing = await first.create_pairing(None, "Lease laptop")
+        await first.approve_pairing(pairing["user_code"], "owner-lease")
+        credential = await first.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await first.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await first.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+
+        second = PersistentConnectorGateway(
+            repository,
+            verification_uri="https://arena.example.test/connect",
+            instance_id="gateway-b",
+        )
+        await second.initialize()
+        first_socket = Socket()
+        second_socket = Socket()
+        first_generation = await first.connect_device(device_id, first_socket)
+        await first.mark_transport_ready(device_id, first_generation)
+        await first.assert_active_connection(
+            device_id,
+            first_socket,
+            first_generation,
+        )
+
+        second_generation = await second.connect_device(device_id, second_socket)
+        await second.assert_active_connection(
+            device_id,
+            second_socket,
+            second_generation,
+        )
+        with pytest.raises(ConnectorError, match="replaced"):
+            await first.assert_active_connection(
+                device_id,
+                first_socket,
+                first_generation,
+            )
+        stale_command = await first.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "stale-instance-probe",
+            300,
+        )
+        assert stale_command["status"] == "queued"
+        assert first_socket.sent == []
+
+        await first.disconnect_device(device_id, first_socket)
+        await second.assert_active_connection(
+            device_id,
+            second_socket,
+            second_generation,
+        )
+        persisted = await repository.load_gateway_state()
+        persisted_device = next(
+            device for device in persisted["devices"] if device["device_id"] == device_id
+        )
+        assert persisted_device["status"] == "online"
+
+    asyncio.run(scenario())
+
+
+def test_stale_disconnect_cannot_persist_offline_during_a_new_claim():
+    class TakeoverOnReleaseRepository(MemoryConnectorRepository):
+        def __init__(self):
+            super().__init__()
+            self.before_release = None
+
+        async def release_device_connection_and_save_device(
+            self,
+            device_id: str,
+            instance_id: str,
+            fencing_token: int,
+            device: dict,
+        ) -> bool:
+            callback = self.before_release
+            self.before_release = None
+            if callback is not None:
+                await callback()
+            return await super().release_device_connection_and_save_device(
+                device_id,
+                instance_id,
+                fencing_token,
+                device,
+            )
+
+    repository = TakeoverOnReleaseRepository()
+    first = PersistentConnectorGateway(repository, instance_id="gateway-old")
+
+    class Socket:
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await first.initialize()
+        pairing = await first.create_pairing(None, "Race laptop")
+        await first.approve_pairing(pairing["user_code"], "owner-race")
+        credential = await first.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        second = PersistentConnectorGateway(repository, instance_id="gateway-new")
+        await second.initialize()
+        old_socket = Socket()
+        new_socket = Socket()
+        await first.connect_device(device_id, old_socket)
+
+        async def claim_from_new_gateway():
+            await second.connect_device(device_id, new_socket)
+
+        repository.before_release = claim_from_new_gateway
+        await first.disconnect_device(device_id, old_socket)
+
+        persisted = await repository.load_gateway_state()
+        persisted_device = next(
+            item for item in persisted["devices"] if item["device_id"] == device_id
+        )
+        assert persisted_device["status"] == "online"
+        await second.assert_active_connection(device_id, new_socket)
+
+    asyncio.run(scenario())
+
+
+def test_gateway_close_releases_its_owned_connection_lease():
+    repository = MemoryConnectorRepository()
+    service = PersistentConnectorGateway(
+        repository,
+        instance_id="gateway-close",
+    )
+
+    class Socket:
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await service.initialize()
+        pairing = await service.create_pairing(None, "Close laptop")
+        await service.approve_pairing(pairing["user_code"], "owner-close")
+        credential = await service.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        socket = Socket()
+        await service.connect_device(device_id, socket)
+        fencing_token = int(
+            repository.connection_leases[device_id]["fencing_token"]
+        )
+        assert await repository.is_device_connection_owner(
+            device_id,
+            "gateway-close",
+            fencing_token,
+        )
+
+        await service.close()
+
+        assert not await repository.is_device_connection_owner(
+            device_id,
+            "gateway-close",
+            fencing_token,
+        )
+        persisted = await repository.load_gateway_state()
+        persisted_device = next(
+            item for item in persisted["devices"] if item["device_id"] == device_id
+        )
+        assert persisted_device["status"] == "offline"
+
+    asyncio.run(scenario())
+
+
+def test_connection_claim_failure_rolls_back_the_local_socket_owner():
+    class FailingClaimRepository(MemoryConnectorRepository):
+        async def claim_device_connection(
+            self,
+            device_id: str,
+            instance_id: str,
+            lease_seconds: int,
+        ) -> int:
+            raise RuntimeError("lease database unavailable")
+
+    repository = FailingClaimRepository()
+    service = PersistentConnectorGateway(repository, instance_id="gateway-fail")
+
+    class Socket:
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await service.initialize()
+        pairing = await service.create_pairing(None, "Fail laptop")
+        await service.approve_pairing(pairing["user_code"], "owner-fail")
+        credential = await service.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        socket = Socket()
+
+        with pytest.raises(RuntimeError, match="lease database unavailable"):
+            await service.connect_device(device_id, socket)
+
+        assert device_id not in service.connections
+        assert service.devices[device_id]["status"] == "offline"
+
+    asyncio.run(scenario())
+
+
+def test_connection_persistence_failure_releases_the_claimed_lease():
+    class FailingPersistRepository(MemoryConnectorRepository):
+        def __init__(self):
+            super().__init__()
+            self.fail_online_save = False
+
+        async def save_gateway_state(self, state):
+            if self.fail_online_save and any(
+                device.get("status") == "online" for device in state.get("devices", [])
+            ):
+                raise RuntimeError("connection persistence unavailable")
+            await super().save_gateway_state(state)
+
+    repository = FailingPersistRepository()
+    service = PersistentConnectorGateway(
+        repository,
+        instance_id="gateway-persist-fail",
+    )
+
+    class Socket:
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await service.initialize()
+        pairing = await service.create_pairing(None, "Persist fail laptop")
+        await service.approve_pairing(pairing["user_code"], "owner-persist-fail")
+        credential = await service.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        socket = Socket()
+        repository.fail_online_save = True
+
+        with pytest.raises(RuntimeError, match="connection persistence unavailable"):
+            await service.connect_device(device_id, socket)
+
+        lease = repository.connection_leases[device_id]
+        assert not await repository.is_device_connection_owner(
+            device_id,
+            "gateway-persist-fail",
+            int(lease["fencing_token"]),
+        )
+        assert device_id not in service.connections
+
+    asyncio.run(scenario())
+
+
+def test_standby_startup_does_not_recover_a_device_with_a_live_owner():
+    repository = MemoryConnectorRepository()
+    owner = PersistentConnectorGateway(repository, instance_id="gateway-owner")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await owner.initialize()
+        pairing = await owner.create_pairing(None, "Standby laptop")
+        await owner.approve_pairing(pairing["user_code"], "owner-standby")
+        credential = await owner.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await owner.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await owner.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        socket = Socket()
+        generation = await owner.connect_device(device_id, socket)
+        await owner.mark_transport_ready(device_id, generation)
+        command = await owner.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "standby-probe",
+            300,
+        )
+        assert command["status"] == "delivered"
+
+        standby = PersistentConnectorGateway(
+            repository,
+            instance_id="gateway-standby",
+        )
+        await standby.initialize()
+
+        persisted = await repository.load_gateway_state()
+        persisted_device = next(
+            device for device in persisted["devices"] if device["device_id"] == device_id
+        )
+        persisted_command = next(
+            item
+            for item in persisted["commands"]
+            if item["command_id"] == command["command_id"]
+        )
+        assert persisted_device["status"] == "online"
+        assert persisted_command["status"] == "delivered"
+        await owner.assert_active_connection(device_id, socket, generation)
+
+    asyncio.run(scenario())
+
+
+def test_wss_owner_routes_a_command_queued_on_another_gateway_instance():
+    repository = MemoryConnectorRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Routed laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-routed")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        owner = PersistentConnectorGateway(repository, instance_id="gateway-owner")
+        await owner.initialize()
+        socket = Socket()
+        generation = await owner.connect_device(device_id, socket)
+        await owner.mark_transport_ready(device_id, generation)
+
+        queued = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "cross-instance-probe",
+            300,
+        )
+        assert queued["status"] == "queued"
+        assert socket.sent == []
+
+        assert await owner.route_shared_commands_once() == 1
+        assert len(socket.sent) == 1
+        assert socket.sent[0]["message_id"] == queued["command_id"]
+        routed = await owner.list_commands(binding["binding_id"])
+        assert next(
+            item for item in routed if item["command_id"] == queued["command_id"]
+        )["status"] == "delivered"
+
+        assert await owner.route_shared_commands_once() == 0
+        assert len(socket.sent) == 1
+
+    asyncio.run(scenario())
+
+
+def test_cross_instance_idempotent_replay_cannot_regress_delivered_command():
+    repository = MemoryConnectorRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Monotonic laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-monotonic")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        owner = PersistentConnectorGateway(repository, instance_id="gateway-owner")
+        await owner.initialize()
+        socket = Socket()
+        generation = await owner.connect_device(device_id, socket)
+        await owner.mark_transport_ready(device_id, generation)
+        created = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "monotonic-probe",
+            300,
+        )
+        assert await owner.route_shared_commands_once() == 1
+
+        replay = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "monotonic-probe",
+            300,
+        )
+        assert replay["command_id"] == created["command_id"]
+
+        observer = PersistentConnectorGateway(
+            repository,
+            instance_id="gateway-observer",
+        )
+        await observer.initialize()
+        observed = await observer.list_commands(binding["binding_id"])
+        assert next(
+            item for item in observed if item["command_id"] == created["command_id"]
+        )["status"] == "delivered"
+
+    asyncio.run(scenario())
+
+
+def test_shared_command_route_hydrates_a_binding_created_after_owner_startup():
+    repository = MemoryConnectorRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Late binding laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-late-binding")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        owner = PersistentConnectorGateway(repository, instance_id="gateway-owner")
+        await owner.initialize()
+        socket = Socket()
+        generation = await owner.connect_device(device_id, socket)
+        await owner.mark_transport_ready(device_id, generation)
+
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "late-binding-probe",
+            300,
+        )
+
+        assert await owner.route_shared_commands_once() == 1
+        owner_bindings = await owner.list_bindings(device_id)
+        assert any(
+            item["binding_id"] == binding["binding_id"] for item in owner_bindings
+        )
+
+    asyncio.run(scenario())
+
+
+def test_new_wss_owner_replays_a_shared_delivered_command_after_takeover():
+    repository = MemoryConnectorRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Takeover laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-takeover")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        old_owner = PersistentConnectorGateway(repository, instance_id="gateway-old")
+        new_owner = PersistentConnectorGateway(repository, instance_id="gateway-new")
+        await old_owner.initialize()
+        await new_owner.initialize()
+        old_socket = Socket()
+        old_generation = await old_owner.connect_device(device_id, old_socket)
+        await old_owner.mark_transport_ready(device_id, old_generation)
+        command = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "takeover-probe",
+            300,
+        )
+        assert await old_owner.route_shared_commands_once() == 1
+        assert old_socket.sent[0]["message_id"] == command["command_id"]
+
+        new_socket = Socket()
+        new_generation = await new_owner.connect_device(device_id, new_socket)
+        await new_owner.mark_transport_ready(device_id, new_generation)
+        assert await new_owner.route_shared_commands_once() == 1
+        assert len(new_socket.sent) == 1
+        assert new_socket.sent[0]["message_id"] == command["command_id"]
+
+    asyncio.run(scenario())
+
+
+def test_takeover_between_socket_write_and_delivery_commit_keeps_replay_queued():
+    class TakeoverBeforeDeliveryCommitRepository(MemoryConnectorRepository):
+        def __init__(self):
+            super().__init__()
+            self.before_delivery_commit = None
+
+        async def save_command_for_connection_owner(
+            self,
+            device_id: str,
+            instance_id: str,
+            fencing_token: int,
+            command: dict,
+        ) -> bool:
+            callback = self.before_delivery_commit
+            self.before_delivery_commit = None
+            if callback is not None:
+                await callback()
+            return await super().save_command_for_connection_owner(
+                device_id,
+                instance_id,
+                fencing_token,
+                command,
+            )
+
+    repository = TakeoverBeforeDeliveryCommitRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Commit race laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-commit-race")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        old_owner = PersistentConnectorGateway(repository, instance_id="gateway-old")
+        new_owner = PersistentConnectorGateway(repository, instance_id="gateway-new")
+        await old_owner.initialize()
+        await new_owner.initialize()
+        old_socket = Socket()
+        old_generation = await old_owner.connect_device(device_id, old_socket)
+        await old_owner.mark_transport_ready(device_id, old_generation)
+        command = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "commit-race-probe",
+            300,
+        )
+        new_socket = Socket()
+
+        async def takeover():
+            generation = await new_owner.connect_device(device_id, new_socket)
+            await new_owner.mark_transport_ready(device_id, generation)
+
+        repository.before_delivery_commit = takeover
+        assert await old_owner.route_shared_commands_once() == 1
+        assert old_socket.sent[0]["message_id"] == command["command_id"]
+        assert await new_owner.route_shared_commands_once() == 1
+        assert new_socket.sent[0]["message_id"] == command["command_id"]
+
+    asyncio.run(scenario())
+
+
+def test_terminal_ack_wins_over_a_late_shared_delivery_commit():
+    class AckBeforeDeliveryCommitRepository(MemoryConnectorRepository):
+        def __init__(self):
+            super().__init__()
+            self.before_delivery_commit = None
+
+        async def save_command_for_connection_owner(
+            self,
+            device_id: str,
+            instance_id: str,
+            fencing_token: int,
+            command: dict,
+        ) -> bool:
+            callback = self.before_delivery_commit
+            self.before_delivery_commit = None
+            if callback is not None:
+                await callback()
+            return await super().save_command_for_connection_owner(
+                device_id,
+                instance_id,
+                fencing_token,
+                command,
+            )
+
+    repository = AckBeforeDeliveryCommitRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "ACK race laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-ack-race")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        owner = PersistentConnectorGateway(repository, instance_id="gateway-owner")
+        await owner.initialize()
+        socket = Socket()
+        generation = await owner.connect_device(device_id, socket)
+        await owner.mark_transport_ready(device_id, generation)
+        command = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "ack-race-probe",
+            300,
+        )
+
+        async def acknowledge():
+            await owner.acknowledge_command(
+                device_id,
+                {
+                    "command_id": command["command_id"],
+                    "status": "succeeded",
+                    "result": {"available": True},
+                },
+                generation,
+            )
+
+        repository.before_delivery_commit = acknowledge
+        assert await owner.route_shared_commands_once() == 1
+        observer = PersistentConnectorGateway(repository, instance_id="gateway-observer")
+        await observer.initialize()
+        observed = await observer.list_commands(binding["binding_id"])
+        assert next(
+            item for item in observed if item["command_id"] == command["command_id"]
+        )["status"] == "succeeded"
+
+    asyncio.run(scenario())
+
+
+def test_new_owner_inherits_the_shared_outbound_sequence_before_resume():
+    repository = MemoryConnectorRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Resume takeover laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-resume-takeover")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        old_owner = PersistentConnectorGateway(repository, instance_id="gateway-old")
+        new_owner = PersistentConnectorGateway(repository, instance_id="gateway-new")
+        await old_owner.initialize()
+        await new_owner.initialize()
+        old_socket = Socket()
+        old_generation = await old_owner.connect_device(device_id, old_socket)
+        await old_owner.mark_transport_ready(device_id, old_generation)
+        await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "resume-takeover-probe",
+            300,
+        )
+        assert await old_owner.route_shared_commands_once() == 1
+        observed_sequence = old_socket.sent[0]["sequence"]
+
+        new_socket = Socket()
+        new_generation = await new_owner.connect_device(device_id, new_socket)
+        resumed = await new_owner.resume_transport(
+            device_id,
+            {
+                "last_gateway_sequence": observed_sequence,
+                "event_ack_through": 0,
+                "pending_result_ids": [],
+            },
+            new_generation,
+        )
+        assert resumed["gateway_sequence"] >= observed_sequence
+
+    asyncio.run(scenario())
+
+
+def test_wss_worker_refreshes_a_device_enrolled_after_worker_startup():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+    wss_worker = PersistentConnectorGateway(repository, instance_id="gateway-wss")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await wss_worker.initialize()
+        await control.initialize()
+        pairing = await control.create_pairing(None, "Late enrolled laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-late-device")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await control.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await control.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+
+        authenticated = await wss_worker.authenticate_device(
+            device_id,
+            credential["device_token"],
+        )
+        assert authenticated["device_id"] == device_id
+        generation = await wss_worker.connect_device(device_id, Socket())
+        assert generation > 0
+        assert [
+            item["binding_id"]
+            for item in await wss_worker.list_bindings(device_id)
+        ] == [binding["binding_id"]]
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_revoke_cannot_be_undone_by_stale_wss_disconnect():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await control.initialize()
+        pairing = await control.create_pairing(None, "Revoked laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-revoked-device")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+
+        wss_worker = PersistentConnectorGateway(repository, instance_id="gateway-wss")
+        await wss_worker.initialize()
+        socket = Socket()
+        await wss_worker.connect_device(device_id, socket)
+
+        revoked = await control.revoke_device(device_id, "owner-revoked-device")
+        assert revoked["status"] == "revoked"
+        await wss_worker.disconnect_device(device_id, socket)
+
+        observer = PersistentConnectorGateway(
+            repository,
+            instance_id="gateway-observer",
+        )
+        await observer.initialize()
+        observed = await observer.get_device(device_id)
+        assert observed["status"] == "revoked"
+        assert observed["revoked_at"] == revoked["revoked_at"]
+
+    asyncio.run(scenario())
+
+
+def test_takeover_fences_a_late_command_ack_commit():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await control.initialize()
+        pairing = await control.create_pairing(None, "ACK takeover laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-ack-takeover")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await control.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await control.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        old_owner = PersistentConnectorGateway(repository, instance_id="gateway-old")
+        new_owner = PersistentConnectorGateway(repository, instance_id="gateway-new")
+        await old_owner.initialize()
+        await new_owner.initialize()
+        old_socket = Socket()
+        old_generation = await old_owner.connect_device(device_id, old_socket)
+        await old_owner.mark_transport_ready(device_id, old_generation)
+        command = await control.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "late-ack-probe",
+            300,
+        )
+        assert await old_owner.route_shared_commands_once() == 1
+
+        await new_owner.connect_device(device_id, Socket())
+        with pytest.raises(ConnectionReplacedError):
+            await old_owner.acknowledge_command(
+                device_id,
+                {
+                    "command_id": command["command_id"],
+                    "status": "succeeded",
+                    "result": {"available": True},
+                },
+                old_generation,
+            )
+
+        observer = PersistentConnectorGateway(
+            repository,
+            instance_id="gateway-observer",
+        )
+        await observer.initialize()
+        observed = await observer.list_commands(binding["binding_id"])
+        assert next(
+            item for item in observed if item["command_id"] == command["command_id"]
+        )["status"] == "queued"
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_observes_binding_lifecycle_written_by_wss_worker():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await control.initialize()
+        pairing = await control.create_pairing(None, "Binding refresh laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-binding-refresh")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await control.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=["session.start"],
+                )
+            ],
+        )
+        binding = await control.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        command = await control.queue_command(
+            binding["binding_id"],
+            CommandAction.SESSION_START,
+            {"working_directory": "C:/arena"},
+            "binding-refresh-start",
+            300,
+        )
+
+        wss_worker = PersistentConnectorGateway(repository, instance_id="gateway-wss")
+        await wss_worker.initialize()
+        socket = Socket()
+        generation = await wss_worker.connect_device(device_id, socket)
+        await wss_worker.mark_transport_ready(device_id, generation)
+        assert await wss_worker.route_shared_commands_once() == 1
+        await wss_worker.acknowledge_command(
+            device_id,
+            {
+                "command_id": command["command_id"],
+                "status": "succeeded",
+                "result": {"session_id": "session-shared"},
+            },
+            generation,
+        )
+
+        observed = next(
+            item
+            for item in await control.list_bindings(device_id)
+            if item["binding_id"] == binding["binding_id"]
+        )
+        assert observed["status"] == "running"
+        assert observed["last_session_id"] == "session-shared"
+        audit = await control.list_audit(owner_id="owner-binding-refresh")
+        assert any(
+            item["action"] == "command.acknowledged"
+            and item["metadata"]["command_id"] == command["command_id"]
+            for item in audit
+        )
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_can_bind_runtime_inventory_written_by_wss_worker():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+
+    class Socket:
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await control.initialize()
+        pairing = await control.create_pairing(None, "Inventory refresh laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-inventory-refresh")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+
+        worker = PersistentConnectorGateway(repository, instance_id="gateway-wss")
+        await worker.initialize()
+        socket = Socket()
+        generation = await worker.connect_device(device_id, socket)
+        await worker.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+            expected_generation=generation,
+        )
+
+        binding = await control.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        assert binding["runtime_id"] == "codex-default"
+        observed_device = next(
+            item
+            for item in await control.list_devices("owner-inventory-refresh")
+            if item["device_id"] == device_id
+        )
+        assert observed_device["status"] == "online"
+        assert (await control.get_device(device_id))["status"] == "online"
+
+    asyncio.run(scenario())
+
+
+def test_control_plane_can_revoke_a_device_enrolled_after_startup():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+    enrollment = PersistentConnectorGateway(
+        repository,
+        instance_id="gateway-enrollment",
+    )
+
+    async def scenario():
+        await control.initialize()
+        await enrollment.initialize()
+        pairing = await enrollment.create_pairing(None, "Late revoke laptop")
+        await enrollment.approve_pairing(pairing["user_code"], "owner-late-revoke")
+        credential = await enrollment.exchange_pairing(pairing["device_code"])
+
+        revoked = await control.revoke_device(
+            credential["device_id"],
+            "owner-late-revoke",
+        )
+        assert revoked["status"] == "revoked"
+
+    asyncio.run(scenario())
+
+
+def test_wss_worker_drain_closes_connections_and_rejects_new_ones():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+
+    class Socket:
+        def __init__(self):
+            self.closed: list[tuple[int, str]] = []
+
+        async def send_json(self, payload):
+            return None
+
+        async def close(self, code: int, reason: str):
+            self.closed.append((code, reason))
+
+    async def scenario():
+        await control.initialize()
+        pairing = await control.create_pairing(None, "Drain laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-drain")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+
+        worker = PersistentConnectorGateway(repository, instance_id="gateway-wss")
+        await worker.initialize()
+        socket = Socket()
+        await worker.connect_device(device_id, socket)
+        assert await repository.has_active_device_connection(device_id)
+
+        await worker.begin_drain()
+        assert socket.closed == [(1012, "Gateway worker restarting")]
+        assert not await repository.has_active_device_connection(device_id)
+        with pytest.raises(ConnectorError) as rejected:
+            await worker.connect_device(device_id, Socket())
+        assert rejected.value.status_code == 503
+
+    asyncio.run(scenario())
+
+
+def test_revoked_device_cannot_receive_a_command_from_background_router():
+    repository = MemoryConnectorRepository()
+    control = PersistentConnectorGateway(repository, instance_id="gateway-control")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await control.initialize()
+        pairing = await control.create_pairing(None, "Revoked route laptop")
+        await control.approve_pairing(pairing["user_code"], "owner-revoked-route")
+        credential = await control.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await control.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await control.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        worker = PersistentConnectorGateway(repository, instance_id="gateway-wss")
+        await worker.initialize()
+        socket = Socket()
+        generation = await worker.connect_device(device_id, socket)
+        await worker.mark_transport_ready(device_id, generation)
+        await control.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "revoked-route-probe",
+            300,
+        )
+        await control.revoke_device(device_id, "owner-revoked-route")
+
+        assert await worker.route_shared_commands_once() == 0
+        assert socket.sent == []
+
+    asyncio.run(scenario())
+
+
+def test_delivery_commit_failure_keeps_shared_command_replayable():
+    class FailOnceDeliveryCommitRepository(MemoryConnectorRepository):
+        def __init__(self):
+            super().__init__()
+            self.fail_next_delivery_commit = True
+
+        async def save_command_for_connection_owner(
+            self,
+            device_id: str,
+            instance_id: str,
+            fencing_token: int,
+            command: dict,
+        ) -> bool:
+            if self.fail_next_delivery_commit:
+                self.fail_next_delivery_commit = False
+                raise RuntimeError("delivery commit database unavailable")
+            return await super().save_command_for_connection_owner(
+                device_id,
+                instance_id,
+                fencing_token,
+                command,
+            )
+
+    repository = FailOnceDeliveryCommitRepository()
+    ingress = PersistentConnectorGateway(repository, instance_id="gateway-ingress")
+
+    class Socket:
+        def __init__(self):
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+        async def close(self, code: int, reason: str):
+            return None
+
+    async def scenario():
+        await ingress.initialize()
+        pairing = await ingress.create_pairing(None, "Commit retry laptop")
+        await ingress.approve_pairing(pairing["user_code"], "owner-commit-retry")
+        credential = await ingress.exchange_pairing(pairing["device_code"])
+        device_id = credential["device_id"]
+        await ingress.update_inventory(
+            device_id,
+            [
+                RuntimeInventoryItem(
+                    runtime_id="codex-default",
+                    kind="codex",
+                    display_name="Codex",
+                    executable_path="codex",
+                    capabilities=[],
+                )
+            ],
+        )
+        binding = await ingress.create_binding(
+            device_id,
+            "codex-default",
+            None,
+            None,
+        )
+        owner = PersistentConnectorGateway(repository, instance_id="gateway-owner")
+        await owner.initialize()
+        socket = Socket()
+        generation = await owner.connect_device(device_id, socket)
+        await owner.mark_transport_ready(device_id, generation)
+        command = await ingress.queue_command(
+            binding["binding_id"],
+            CommandAction.RUNTIME_PROBE,
+            {},
+            "commit-retry-probe",
+            300,
+        )
+
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await owner.route_shared_commands_once()
+        assert socket.sent[0]["message_id"] == command["command_id"]
+        assert await owner.route_shared_commands_once() == 1
+        assert [frame["message_id"] for frame in socket.sent] == [
+            command["command_id"],
+            command["command_id"],
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_public_auth_and_pairing_ingress_are_rate_limited():
     bundle, _, client = _bundle(
         "invite-rate-limit-that-is-long-enough",
@@ -893,6 +2264,12 @@ def test_command_is_persisted_before_websocket_delivery_and_retry_is_idempotent(
                 for command in self.repository.gateway_state["commands"]
             }
             assert command_id in persisted_ids
+            persisted_device = next(
+                device
+                for device in self.repository.gateway_state["devices"]
+                if device["device_id"] == frame["device_id"]
+            )
+            assert persisted_device["outbound_sequence"] >= frame["sequence"]
             self.frames.append(frame)
 
     invite_code = "invite-command-order-that-is-long-enough"
@@ -930,7 +2307,12 @@ def test_command_is_persisted_before_websocket_delivery_and_retry_is_idempotent(
             None,
         )
         socket = RecordingSocket(repository)
-        await bundle.service.connect_device(credential["device_id"], socket)
+        generation = await bundle.service.connect_device(
+            credential["device_id"], socket
+        )
+        await bundle.service.mark_transport_ready(
+            credential["device_id"], generation
+        )
 
         repository.fail_next_command_save = True
         with pytest.raises(RuntimeError, match="database outage"):
@@ -1161,6 +2543,15 @@ def test_terminal_agent_task_result_survives_gateway_restart():
         assert exc.value.status_code == 503
         assert exc.value.detail == "Arena Result Sink unavailable"
         assert repository.gateway_state["agent_task_results"][0]["task_id"] == task_id
+        failed_resume = await service.resume_transport(
+            "device-result",
+            {
+                "last_gateway_sequence": 0,
+                "event_ack_through": 0,
+                "pending_result_ids": ["result-persistent-1"],
+            },
+        )
+        assert failed_resume["accepted_result_ids"] == []
 
         sink.fail = False
         restarted = PersistentConnectorGateway(
@@ -1178,5 +2569,20 @@ def test_terminal_agent_task_result_survives_gateway_restart():
         assert restarted.agent_task_results[task_id]["result_id"] == (
             "result-persistent-1"
         )
+        final_restart = PersistentConnectorGateway(
+            repository,
+            verification_uri="https://arena.example.test/connect",
+            agent_task_result_sink=sink,
+        )
+        await final_restart.initialize()
+        accepted_resume = await final_restart.resume_transport(
+            "device-result",
+            {
+                "last_gateway_sequence": 0,
+                "event_ack_through": 0,
+                "pending_result_ids": ["result-persistent-1"],
+            },
+        )
+        assert accepted_resume["accepted_result_ids"] == ["result-persistent-1"]
 
     asyncio.run(scenario())

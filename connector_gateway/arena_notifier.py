@@ -37,6 +37,7 @@ class ConnectorArenaTaskNotifier:
         gateway: ConnectorGateway,
         resend_seconds: float = 5.0,
         monotonic: Callable[[], float] | None = None,
+        manage_sessions: bool = True,
     ) -> None:
         if resend_seconds < 1 or resend_seconds > 60:
             raise ValueError("Connector wake resend interval is invalid")
@@ -44,6 +45,7 @@ class ConnectorArenaTaskNotifier:
         self._gateway = gateway
         self._resend_seconds = resend_seconds
         self._monotonic = monotonic or time.monotonic
+        self._manage_sessions = manage_sessions
         self._last_sent: dict[str, float] = {}
         self._stopping = asyncio.Event()
 
@@ -52,6 +54,10 @@ class ConnectorArenaTaskNotifier:
 
     async def run_once(self, *, limit: int = 100) -> int:
         routes = await self._repository.list_connector_task_wakes(limit=limit)
+        bindings = {
+            str(binding["binding_id"]): binding
+            for binding in await self._gateway.list_bindings()
+        }
         active_wakes: set[str] = set()
         sent = 0
         for route in routes:
@@ -61,21 +67,17 @@ class ConnectorArenaTaskNotifier:
             previous = self._last_sent.get(wake_id)
             if previous is not None and now - previous < self._resend_seconds:
                 continue
-            binding = next(
-                (
-                    item
-                    for item in await self._gateway.list_bindings()
-                    if item["binding_id"] == route.connector_binding_id
-                ),
-                None,
-            )
+            binding = bindings.get(route.connector_binding_id)
             if (
                 binding is None
                 or int(binding.get("binding_epoch", 0)) != route.connector_binding_epoch
             ):
                 continue
             if not str(binding.get("last_session_id") or "").strip():
-                if await self._ensure_managed_session(route, binding):
+                if self._manage_sessions and await self._ensure_managed_session(
+                    route,
+                    binding,
+                ):
                     sent += 1
                 continue
             delivered = await self._gateway.notify_task_available(
@@ -147,7 +149,6 @@ class ConnectorArenaTaskNotifier:
         except ConnectorError:
             return False
         return True
-
 
 def _wake_id(route: ConnectorTaskRoute) -> str:
     return f"wake:{route.task.task_id}:" f"{route.connector_binding_epoch}"

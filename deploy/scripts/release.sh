@@ -353,7 +353,26 @@ require_running_service() {
 require_running_service "" postgres
 require_running_service "" api
 require_running_service "" connector-api
+require_running_service "" connector-wss
 require_running_service "" caddy
+
+expected_connector_wss_workers="$(env_value ADX_CONNECTOR_WSS_WORKERS)"
+[ -n "${expected_connector_wss_workers}" ] || expected_connector_wss_workers=2
+case "${expected_connector_wss_workers}" in
+  *[!0-9]*|0)
+    echo "ADX_CONNECTOR_WSS_WORKERS must be a positive integer." >&2
+    exit 1
+    ;;
+esac
+connector_wss_id="$(compose ps --status running --quiet connector-wss)"
+actual_connector_wss_workers="$(
+  docker top "${connector_wss_id}" -eo args \
+    | awk '/multiprocessing.spawn/ {count++} END {print count > 0 ? count : 1}'
+)"
+if [ "${actual_connector_wss_workers}" -ne "${expected_connector_wss_workers}" ]; then
+  echo "Connector WSS worker count does not match deploy/.env." >&2
+  exit 1
+fi
 
 if [ "$(env_value ADX_ENABLE_OFFICIAL_LITELLM)" = "true" ]; then
   require_running_service official-agents official-litellm

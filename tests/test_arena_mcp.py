@@ -477,7 +477,8 @@ def test_wss_notifier_sends_only_safe_task_hint_and_throttles_replay():
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         socket = _Socket()
-        gateway.connections["device-1"] = socket
+        generation = await gateway.connect_device("device-1", socket)
+        await gateway.mark_transport_ready("device-1", generation)
         now = 10.0
         notifier = ConnectorArenaTaskNotifier(
             repository=_WakeRepository(route),
@@ -497,5 +498,43 @@ def test_wss_notifier_sends_only_safe_task_hint_and_throttles_replay():
             "binding_epoch",
             "deadline_at",
         }
+
+    asyncio.run(scenario())
+
+
+def test_wss_notifier_does_not_create_sessions_on_the_data_plane():
+    async def scenario():
+        route = ConnectorTaskRoute(
+            task=_task(),
+            connector_binding_id="binding-1",
+            connector_binding_epoch=7,
+            status=TaskStatus.QUEUED,
+            leased_by=None,
+            lease_expires_at=None,
+        )
+
+        class Gateway:
+            async def list_bindings(self):
+                return [
+                    {
+                        "binding_id": "binding-1",
+                        "binding_epoch": 7,
+                        "last_session_id": None,
+                        "working_directory": "C:/arena",
+                    }
+                ]
+
+            async def notify_task_available(self, binding_id, payload):
+                raise AssertionError("wake must wait for a managed session")
+
+            async def queue_command(self, *args, **kwargs):
+                raise AssertionError("WSS worker must not create Commands")
+
+        notifier = ConnectorArenaTaskNotifier(
+            repository=_WakeRepository(route),
+            gateway=Gateway(),
+            manage_sessions=False,
+        )
+        assert await notifier.run_once() == 0
 
     asyncio.run(scenario())

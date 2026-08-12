@@ -26,6 +26,11 @@ BUILD_CONNECTOR_ARTIFACTS = (
 def test_workflow_deploys_only_main_after_all_ci_gates() -> None:
     assert "github.ref == 'refs/heads/main'" in WORKFLOW
     assert "needs:\n      - python\n      - connector\n      - settlement" in WORKFLOW
+    assert "postgres-integration:" in WORKFLOW
+    assert "- postgres-integration" in WORKFLOW
+    assert "tests/test_connector_wss_postgres_integration.py" in WORKFLOW
+    assert "deploy/scripts/migrate.py --scope all" in WORKFLOW
+    assert "deploy/scripts/provision_db_roles.py" in WORKFLOW
     assert "production-images" in WORKFLOW
     assert "group: arena402-production" in WORKFLOW
     assert "cancel-in-progress: false" in WORKFLOW

@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,6 +50,7 @@ type fakeArenaMCPClient struct {
 	syncBindings []mcpclient.BindingRef
 	claims       []mcpclient.TaskAvailable
 	syncPages    []mcpclient.SyncPage
+	onSync       func()
 }
 
 func (f *fakeArenaMCPClient) Claim(
@@ -78,6 +81,9 @@ func (f *fakeArenaMCPClient) Sync(
 	_ *string,
 	_ int,
 ) (mcpclient.SyncPage, error) {
+	if f.onSync != nil {
+		f.onSync()
+	}
 	f.syncBindings = append(f.syncBindings, binding)
 	if len(f.syncPages) == 0 {
 		return mcpclient.SyncPage{}, nil
@@ -136,6 +142,335 @@ func TestHandleIncomingAcceptsGatewayWelcomeAndGenericAck(t *testing.T) {
 	}
 }
 
+func TestConnectionNegotiatesResumeBeforeInventoryAndReplay(t *testing.T) {
+	resumeReceived := make(chan protocol.TransportResume, 1)
+	serverErrors := make(chan error, 1)
+	var resumeObserved atomic.Bool
+	var syncBeforeResume atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer connection.Close(websocket.StatusNormalClosure, "test complete")
+
+		var hello protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			serverErrors <- err
+			return
+		}
+		if hello.Type != protocol.MessageHello {
+			serverErrors <- fmt.Errorf("first Connector message = %s, want hello", hello.Type)
+			return
+		}
+		var helloPayload protocol.Hello
+		if err := json.Unmarshal(hello.Payload, &helloPayload); err != nil {
+			serverErrors <- err
+			return
+		}
+		if !slices.Contains(helloPayload.Capabilities, protocol.CapabilityTransportResumeV1) {
+			serverErrors <- fmt.Errorf("hello omitted transport resume capability")
+			return
+		}
+
+		welcome, err := protocol.NewEnvelope(
+			messageWelcome,
+			"device-1",
+			0,
+			map[string]any{"capabilities": []string{protocol.CapabilityTransportResumeV1}},
+		)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, welcome); err != nil {
+			serverErrors <- err
+			return
+		}
+		helloAck, err := protocol.NewEnvelope(
+			messageAck,
+			"device-1",
+			0,
+			map[string]any{
+				"mcp_bindings": []map[string]any{
+					{"binding_id": "binding-1", "binding_epoch": 7},
+				},
+			},
+		)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, helloAck); err != nil {
+			serverErrors <- err
+			return
+		}
+
+		var resumeEnvelope protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &resumeEnvelope); err != nil {
+			serverErrors <- err
+			return
+		}
+		if resumeEnvelope.Type != protocol.MessageResume {
+			serverErrors <- fmt.Errorf(
+				"message after welcome = %s, want resume",
+				resumeEnvelope.Type,
+			)
+			return
+		}
+		var resume protocol.TransportResume
+		if err := json.Unmarshal(resumeEnvelope.Payload, &resume); err != nil {
+			serverErrors <- err
+			return
+		}
+		resumeObserved.Store(true)
+
+		resumeAck, err := protocol.NewEnvelope(
+			protocol.MessageResumeAck,
+			"device-1",
+			0,
+			protocol.TransportResumeAck{
+				Accepted:             true,
+				ConnectionGeneration: 1,
+				GatewaySequence:      0,
+				EventAckThrough:      0,
+				AcceptedResultIDs:    []string{},
+				PendingCommandIDs:    []string{},
+			},
+		)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, resumeAck); err != nil {
+			serverErrors <- err
+			return
+		}
+
+		var inventory protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &inventory); err != nil {
+			serverErrors <- err
+			return
+		}
+		if inventory.Type != protocol.MessageInventorySnapshot {
+			serverErrors <- fmt.Errorf(
+				"message after resume.ack = %s, want inventory.snapshot",
+				inventory.Type,
+			)
+			return
+		}
+		resumeReceived <- resume
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	fileStore := store.NewFileStore(statePath)
+	processSupervisor := newTransportSupervisor(t, fileStore)
+	defer processSupervisor.Shutdown()
+	client, err := NewClient(
+		Config{
+			Credentials: store.Credentials{
+				DeviceID:   "device-1",
+				Token:      "device-token",
+				GatewayURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+			},
+			TaskTransport:     "mcp",
+			HeartbeatInterval: time.Hour,
+			InventoryInterval: time.Hour,
+		},
+		fileStore,
+		store.NewFileOutbox(statePath),
+		processSupervisor,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeMCP := &fakeArenaMCPClient{
+		onSync: func() {
+			if !resumeObserved.Load() {
+				syncBeforeResume.Store(true)
+			}
+		},
+	}
+	client.mcp = fakeMCP
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connectionResult := make(chan error, 1)
+	go func() {
+		connectionResult <- client.runConnection(ctx)
+	}()
+
+	select {
+	case resume := <-resumeReceived:
+		if resume.LastGatewaySequence != 0 || resume.EventAckThrough != 0 {
+			t.Fatalf("unexpected fresh resume cursors: %#v", resume)
+		}
+		if len(fakeMCP.syncBindings) != 1 ||
+			fakeMCP.syncBindings[0].BindingID != "binding-1" {
+			t.Fatalf("resume skipped MCP hello binding sync: %#v", fakeMCP.syncBindings)
+		}
+		if syncBeforeResume.Load() {
+			t.Fatal("MCP binding sync ran before transport resume")
+		}
+		cancel()
+	case err := <-serverErrors:
+		t.Fatal(err)
+	case err := <-connectionResult:
+		t.Fatalf("connection ended before resume negotiation: %v", err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for transport resume")
+	}
+}
+
+func TestResumeReconcilesGatewayAcceptedResultWithoutReplay(t *testing.T) {
+	resumeReceived := make(chan struct{}, 1)
+	serverErrors := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer connection.Close(websocket.StatusNormalClosure, "test complete")
+
+		var hello protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			serverErrors <- err
+			return
+		}
+		welcome, err := protocol.NewEnvelope(
+			messageWelcome,
+			"device-1",
+			0,
+			map[string]any{"capabilities": []string{protocol.CapabilityTransportResumeV1}},
+		)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, welcome); err != nil {
+			serverErrors <- err
+			return
+		}
+		helloAck, err := protocol.NewEnvelope(messageAck, "device-1", 0, map[string]any{})
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, helloAck); err != nil {
+			serverErrors <- err
+			return
+		}
+
+		var resumeEnvelope protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &resumeEnvelope); err != nil {
+			serverErrors <- err
+			return
+		}
+		var resume protocol.TransportResume
+		if err := json.Unmarshal(resumeEnvelope.Payload, &resume); err != nil {
+			serverErrors <- err
+			return
+		}
+		if !slices.Equal(resume.PendingResultIDs, []string{"result-accepted"}) {
+			serverErrors <- fmt.Errorf("unexpected pending results: %#v", resume.PendingResultIDs)
+			return
+		}
+		resumeAck, err := protocol.NewEnvelope(
+			protocol.MessageResumeAck,
+			"device-1",
+			0,
+			protocol.TransportResumeAck{
+				Accepted:             true,
+				ConnectionGeneration: 1,
+				AcceptedResultIDs:    []string{"result-accepted"},
+				PendingCommandIDs:    []string{},
+			},
+		)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, resumeAck); err != nil {
+			serverErrors <- err
+			return
+		}
+
+		var inventory protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &inventory); err != nil {
+			serverErrors <- err
+			return
+		}
+		if inventory.Type != protocol.MessageInventorySnapshot {
+			serverErrors <- fmt.Errorf("message after resume.ack = %s, want inventory.snapshot", inventory.Type)
+			return
+		}
+		resumeReceived <- struct{}{}
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	fileStore := store.NewFileStore(statePath)
+	result := protocol.AgentTaskResultEnvelope{
+		BindingID:    "binding-1",
+		BindingEpoch: 1,
+		Result: protocol.AgentTaskResult{
+			SchemaVersion: "arena.agent-result.v1",
+			ResultID:      "result-accepted",
+			TaskID:        "task-accepted",
+			Status:        "succeeded",
+			Action:        json.RawMessage(`{"action":"pass"}`),
+		},
+	}
+	if err := fileStore.SaveAgentTaskResult(result); err != nil {
+		t.Fatal(err)
+	}
+	processSupervisor := newTransportSupervisor(t, fileStore)
+	defer processSupervisor.Shutdown()
+	client, err := NewClient(
+		Config{
+			Credentials: store.Credentials{
+				DeviceID:   "device-1",
+				Token:      "device-token",
+				GatewayURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+			},
+			HeartbeatInterval: time.Hour,
+			InventoryInterval: time.Hour,
+		},
+		fileStore,
+		store.NewFileOutbox(statePath),
+		processSupervisor,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() { _ = client.runConnection(ctx) }()
+	select {
+	case <-resumeReceived:
+		pending, loadErr := fileStore.AgentTaskResults()
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if len(pending) != 0 {
+			t.Fatalf("Gateway-accepted result remains in durable outbox: %#v", pending)
+		}
+		cancel()
+	case err := <-serverErrors:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for result reconciliation")
+	}
+}
+
 func TestMCPHelloSnapshotAndGatewaySequenceGapTriggerBoundedSync(t *testing.T) {
 	deadline := time.Now().Add(time.Minute).UTC()
 	fakeMCP := &fakeArenaMCPClient{
@@ -163,6 +498,7 @@ func TestMCPHelloSnapshotAndGatewaySequenceGapTriggerBoundedSync(t *testing.T) {
 		mcp:         fakeMCP,
 		mcpBindings: make(map[string]mcpclient.BindingRef),
 		logger:      log.New(&logs, "", 0),
+		state:       store.NewFileStore(filepath.Join(t.TempDir(), "state.json")),
 	}
 	helloAck := protocol.Envelope{
 		ProtocolVersion: protocol.Version,
@@ -210,6 +546,43 @@ func TestMCPHelloSnapshotAndGatewaySequenceGapTriggerBoundedSync(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "sequence gap") {
 		t.Fatalf("sequence gap recovery was not logged: %s", logs.String())
+	}
+}
+
+func TestWSSGatewaySequenceGapFailsWithoutAdvancingDurableCursor(t *testing.T) {
+	fileStore := store.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	if err := fileStore.SaveGatewaySequence(4); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{
+		config: Config{
+			Credentials:   store.Credentials{DeviceID: "device-1"},
+			TaskTransport: "wss",
+		},
+		state:           fileStore,
+		gatewaySequence: 4,
+	}
+
+	err := client.handleIncoming(
+		context.Background(),
+		nil,
+		protocol.Envelope{
+			ProtocolVersion: protocol.Version,
+			Type:            messageAck,
+			DeviceID:        "device-1",
+			Sequence:        6,
+			Payload:         json.RawMessage(`{}`),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "Gateway sequence gap") {
+		t.Fatalf("WSS sequence gap error = %v", err)
+	}
+	sequence, loadErr := fileStore.GatewaySequence()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if sequence != 4 {
+		t.Fatalf("durable Gateway sequence = %d, want 4", sequence)
 	}
 }
 
@@ -269,6 +642,23 @@ func TestConnectionReplaysDurableAgentTaskResultAndClearsItAfterAck(t *testing.T
 			if err := wsjson.Read(request.Context(), connection, &envelope); err != nil {
 				serverErrors <- err
 				return
+			}
+			if envelope.Type == protocol.MessageHello {
+				welcome, welcomeErr := protocol.NewEnvelope(
+					messageWelcome,
+					"device-1",
+					0,
+					map[string]any{},
+				)
+				if welcomeErr != nil {
+					serverErrors <- welcomeErr
+					return
+				}
+				if writeErr := wsjson.Write(request.Context(), connection, welcome); writeErr != nil {
+					serverErrors <- writeErr
+					return
+				}
+				continue
 			}
 			if envelope.Type != protocol.MessageAgentTaskResult {
 				continue
@@ -467,12 +857,24 @@ func TestRunStopsWhenGatewayReplacesConnection(t *testing.T) {
 			return
 		}
 		defer connection.Close(websocket.StatusNormalClosure, "test complete")
-		for received := 0; received < 2; received++ {
-			var envelope protocol.Envelope
-			if err := wsjson.Read(request.Context(), connection, &envelope); err != nil {
-				serverErrors <- err
-				return
-			}
+		var hello protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			serverErrors <- err
+			return
+		}
+		welcome, err := protocol.NewEnvelope(messageWelcome, "device-1", 0, map[string]any{})
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, welcome); err != nil {
+			serverErrors <- err
+			return
+		}
+		var inventory protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &inventory); err != nil {
+			serverErrors <- err
+			return
 		}
 		if err := connection.Close(websocket.StatusCode(4409), "replaced by a newer connection"); err != nil {
 			serverErrors <- err
@@ -538,12 +940,24 @@ func TestRunStopsWhenDeviceIsRevoked(t *testing.T) {
 			return
 		}
 		defer connection.Close(websocket.StatusNormalClosure, "test complete")
-		for received := 0; received < 2; received++ {
-			var envelope protocol.Envelope
-			if err := wsjson.Read(request.Context(), connection, &envelope); err != nil {
-				serverErrors <- err
-				return
-			}
+		var hello protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &hello); err != nil {
+			serverErrors <- err
+			return
+		}
+		welcome, err := protocol.NewEnvelope(messageWelcome, "device-1", 0, map[string]any{})
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		if err := wsjson.Write(request.Context(), connection, welcome); err != nil {
+			serverErrors <- err
+			return
+		}
+		var inventory protocol.Envelope
+		if err := wsjson.Read(request.Context(), connection, &inventory); err != nil {
+			serverErrors <- err
+			return
 		}
 		if err := connection.Close(websocket.StatusCode(4403), "device revoked"); err != nil {
 			serverErrors <- err
@@ -1056,6 +1470,23 @@ func TestRunRecoversAndReplaysInterruptedReceipt(t *testing.T) {
 			if err := wsjson.Read(request.Context(), connection, &envelope); err != nil {
 				serverErrors <- err
 				return
+			}
+			if envelope.Type == protocol.MessageHello {
+				welcome, welcomeErr := protocol.NewEnvelope(
+					messageWelcome,
+					"device-1",
+					0,
+					map[string]any{},
+				)
+				if welcomeErr != nil {
+					serverErrors <- welcomeErr
+					return
+				}
+				if writeErr := wsjson.Write(request.Context(), connection, welcome); writeErr != nil {
+					serverErrors <- writeErr
+					return
+				}
+				continue
 			}
 			if envelope.Type != protocol.MessageCommandAck {
 				continue
