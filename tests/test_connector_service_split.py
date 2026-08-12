@@ -74,8 +74,9 @@ def test_production_splits_single_writer_control_from_multi_worker_wss():
     assert "compose up -d --force-recreate caddy" in deploy
     release = (ROOT / "deploy/scripts/release.sh").read_text(encoding="utf-8")
     assert "Connector WSS worker count does not match deploy/.env." in release
-    assert "docker top \"${connector_wss_id}\" -eo args" in release
-    assert "/multiprocessing.spawn/" in release
+    assert "docker top \"${connector_wss_id}\" -eo pid,args" in release
+    assert "grep -c '[m]ultiprocessing.spawn'" in release
+    assert "actual_connector_wss_workers=1" in release
     assert "sh -n" in workflow
     assert "COPY --chown=adx:adx db_pool_config.py ./db_pool_config.py" in dockerfile
     assert "COPY --chown=adx:adx arena_mcp ./arena_mcp" in dockerfile
